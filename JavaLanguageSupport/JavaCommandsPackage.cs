@@ -28,6 +28,7 @@ namespace JavaLanguageSupport
         private const int BuildId = 0x0100;
         private const int RunId = 0x0101;
         private const int TestId = 0x0102;
+        private const int StatusId = 0x0103;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
@@ -43,6 +44,24 @@ namespace JavaLanguageSupport
                 new CommandID(CommandSet, RunId)));
             service.AddCommand(new MenuCommand((s, e) => Start(JavaAction.Test),
                 new CommandID(CommandSet, TestId)));
+            service.AddCommand(new MenuCommand((s, e) => ShowIntelliSenseStatus(),
+                new CommandID(CommandSet, StatusId)));
+        }
+
+        private void ShowIntelliSenseStatus()
+        {
+            JoinableTaskFactory.RunAsync(async delegate
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
+                var output = await GetServiceAsync(typeof(SVsOutputWindow)) as IVsOutputWindow;
+                if (output == null) return;
+                Guid paneId = OutputPaneId;
+                ErrorHandler.ThrowOnFailure(output.CreatePane(ref paneId, "Java Build / Run / Test", 1, 1));
+                IVsOutputWindowPane pane;
+                ErrorHandler.ThrowOnFailure(output.GetPane(ref paneId, out pane));
+                pane.Activate();
+                pane.OutputStringThreadSafe(JavaLanguageStatus.GetReport() + Environment.NewLine);
+            }).FileAndForget("JavaLanguageSupport/Status");
         }
 
         private void Start(JavaAction action)

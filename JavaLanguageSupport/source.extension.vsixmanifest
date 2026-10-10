@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="JavaLanguageSupportVS.62f999ac-37c6-490c-b56a-d92bfa05a5c1" Version="0.4.0" Language="it-IT" Publisher="JavaLanguageSupport Community" />
+    <Identity Id="JavaLanguageSupportVS.62f999ac-37c6-490c-b56a-d92bfa05a5c1" Version="0.6.0" Language="it-IT" Publisher="JavaLanguageSupport Community" />
     <DisplayName>Java Language Support for Visual Studio 2026 (prototype)</DisplayName>
     <Description xml:space="preserve">Editor Java con JDT LS e comandi Java Build/Run/Test per Maven, Gradle e file singoli. Debugger Java F5 non ancora implementato.</Description>
     <Preview>true</Preview>

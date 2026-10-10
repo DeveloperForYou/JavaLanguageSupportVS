@@ -1,0 +1,17 @@
+{
+  "java.completion.enabled": true,
+  "java.completion.guessMethodArguments": "auto",
+  "java.autobuild.enabled": true,
+  "java.format.enabled": true,
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "java.trace.server": "Off",
+  "java.completion.importOrder": [
+    "java",
+    "javax",
+    "org",
+    "com"
+  ],
+  "java.import.maven.enabled": true,
+  "java.import.gradle.enabled": true,
+  "java.maven.downloadSources": true
+}

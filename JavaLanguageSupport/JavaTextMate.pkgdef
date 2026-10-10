@@ -1,2 +1,14 @@
 [$RootKey$\TextMate\Repositories]
 "JavaLanguageSupportVS"="$PackageFolder$\Grammars"
+
+// LSP / TextMate usano lo stesso file di configurazione dell'editor Java.
+[$RootKey$\TextMate\LanguageConfiguration\GrammarMapping]
+"source.java"="$PackageFolder$\java-intellisense-language-configuration.json"
+
+[$RootKey$\TextMate\LanguageConfiguration\ContentTypeMapping]
+"java"="$PackageFolder$\java-intellisense-language-configuration.json"
+
+// Impostazioni LSP predefinite, sovrascrivibili da .vs/VSWorkspaceSettings.json
+// quando la cartella viene aperta in Visual Studio.
+[$RootKey$\OpenFolder\Settings\VSWorkspaceSettings\JavaLanguageSupportVS]
+@="$PackageFolder$\JavaLanguageSettings.json"

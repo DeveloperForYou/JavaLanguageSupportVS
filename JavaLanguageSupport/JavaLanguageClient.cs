@@ -13,26 +13,78 @@ using Microsoft.VisualStudio.Utilities;
 namespace JavaLanguageSupport
 {
     /// <summary>
-    /// Client LSP per Eclipse JDT LS. Java e il language server sono installazioni
-    /// ESTERNE al VSIX (JAVA_HOME e JDTLS_HOME).
+    /// Integra Eclipse JDT LS nell'editor di Visual Studio (NON VS Code).
+    /// Visual Studio gestisce initialize/didOpen/didChange/completion/hover/diagnostics.
+    /// Il client fornisce lo stream JSON-RPC senza scriverci mai messaggi propri.
     /// </summary>
     [Export(typeof(ILanguageClient))]
     [ContentType("java")]
-    public sealed class JavaLanguageClient : ILanguageClient
+    public sealed class JavaLanguageClient : ILanguageClient, ILanguageClientCustomMessage2
     {
         private Process serverProcess;
 
         public string Name => "Java Language Support (JDT LS)";
-        public IEnumerable<string> ConfigurationSections => null;
-        public object InitializationOptions => null;
-        public IEnumerable<string> FilesToWatch => null;
         public bool ShowNotificationOnInitializeFailed => true;
+
+        // Con Visual Studio Open Folder, le opzioni di workspace si possono
+        // personalizzare in .vs/VSWorkspaceSettings.json (vedi README).
+        public IEnumerable<string> ConfigurationSections => new[] { "java" };
+        public IEnumerable<string> FilesToWatch => new[]
+        {
+            "**/*.java", "**/pom.xml", "**/build.gradle", "**/build.gradle.kts",
+            "**/settings.gradle", "**/settings.gradle.kts", "**/.classpath", "**/.project"
+        };
+
+        // JDT LS legge settings.java nell'initialize. Il formato e' annidato,
+        // distinto dai nomi con punti usati in VSWorkspaceSettings.json.
+        public object InitializationOptions => new
+        {
+            settings = new
+            {
+                java = new
+                {
+                    completion = new
+                    {
+                        enabled = true,
+                        // JDT LS richiede un valore stringa: "auto", non il booleano true.
+                        guessMethodArguments = "auto",
+                        importOrder = new[] { "java", "javax", "org", "com" },
+                        favoriteStaticMembers = new[] {
+                            "org.junit.Assert.*", "org.junit.jupiter.api.Assertions.*"
+                        }
+                    },
+                    // Maven/Gradle vengono importati per risolvere i simboli
+                    // presenti nelle dipendenze del progetto.
+                    import = new
+                    {
+                        maven = new { enabled = true },
+                        gradle = new { enabled = true }
+                    },
+                    maven = new { downloadSources = true },
+                    autobuild = new { enabled = true },
+                    format = new { enabled = true },
+                    configuration = new { updateBuildConfiguration = "automatic" }
+                }
+            }
+        };
+
+        // La middle layer e' solo osservativa: non modifica messaggi LSP.
+        // I contatori nella voce Strumenti > Java: Stato IntelliSense
+        // permettono di capire se hover/completamenti/codeAction arrivano a JDT LS.
+        public object MiddleLayer => JavaLspDiagnosticsMiddleLayer.Instance;
+        public object CustomMessageTarget => null;
+        public Task AttachForCustomMessageAsync(StreamJsonRpc.JsonRpc rpc)
+        {
+            JavaLspRpc.Attach(rpc);
+            return Task.CompletedTask;
+        }
 
         public event AsyncEventHandler<EventArgs> StartAsync;
         public event AsyncEventHandler<EventArgs> StopAsync;
 
         public async Task OnLoadedAsync()
         {
+            // Il server si attiva quando Visual Studio apre un file .java.
             var start = StartAsync;
             if (start != null)
                 await start.InvokeAsync(this, EventArgs.Empty);
@@ -40,22 +92,31 @@ namespace JavaLanguageSupport
 
         public async Task StopServerAsync()
         {
+            // Visual Studio esegue prima shutdown/exit via LSP.
             var stop = StopAsync;
             if (stop != null)
                 await stop.InvokeAsync(this, EventArgs.Empty);
+            JavaLspRpc.Detach();
+            JavaLanguageStatus.Stopped();
         }
 
-        public Task OnServerInitializedAsync() => Task.CompletedTask;
+        public Task OnServerInitializedAsync()
+        {
+            JavaLanguageStatus.Initialized();
+            return Task.CompletedTask;
+        }
 
         public Task<InitializationFailureContext> OnServerInitializeFailedAsync(
             ILanguageClientInitializationInfo initializationState)
         {
-            var exception = initializationState.InitializationException;
+            var exception = initializationState == null ? null : initializationState.InitializationException;
+            var error = exception == null ? "Verificare il log del server." : exception.ToString();
+            JavaLanguageStatus.Failed(error);
             return Task.FromResult(new InitializationFailureContext
             {
-                FailureMessage = "Impossibile avviare Java Language Server. " +
-                    "Verifica JAVA_HOME (JDK 21+), JDTLS_HOME e i file in JDTLS_HOME. " +
-                    (exception == null ? string.Empty : exception.Message)
+                FailureMessage = "Impossibile inizializzare Java Language Server. " +
+                    "Verifica JAVA_HOME (JDK 21+), JDTLS_HOME e Strumenti > Java: Stato IntelliSense. " +
+                    (exception == null ? "" : exception.Message)
             });
         }
 
@@ -63,26 +124,36 @@ namespace JavaLanguageSupport
         {
             await Task.Yield();
             cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return StartJdtLs(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                JavaLanguageStatus.Failed(ex.ToString());
+                throw;
+            }
+        }
 
+        private Connection StartJdtLs(CancellationToken cancellationToken)
+        {
             string jdtlsHome = Environment.GetEnvironmentVariable("JDTLS_HOME");
             if (string.IsNullOrWhiteSpace(jdtlsHome))
                 throw new InvalidOperationException(
-                    "Variabile JDTLS_HOME non impostata. Deve indicare la cartella estratta di eclipse.jdt.ls.");
+                    "JDTLS_HOME non impostata. Deve indicare la cartella estratta di eclipse.jdt.ls.");
 
             jdtlsHome = Path.GetFullPath(jdtlsHome.Trim().Trim('"'));
             string pluginsFolder = Path.Combine(jdtlsHome, "plugins");
             string configFolder = Path.Combine(jdtlsHome, "config_win");
             if (!Directory.Exists(pluginsFolder) || !Directory.Exists(configFolder))
                 throw new DirectoryNotFoundException(
-                    "JDTLS_HOME deve contenere le cartelle plugins e config_win: " + jdtlsHome);
+                    "JDTLS_HOME deve contenere plugins e config_win: " + jdtlsHome);
 
-            string launcher = Directory.GetFiles(
-                pluginsFolder, "org.eclipse.equinox.launcher_*.jar")
+            string launcher = Directory.GetFiles(pluginsFolder, "org.eclipse.equinox.launcher_*.jar")
                 .OrderByDescending(p => p, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
             if (launcher == null)
-                throw new FileNotFoundException(
-                    "Launcher Equinox non trovato in " + pluginsFolder);
+                throw new FileNotFoundException("Launcher Equinox non trovato in " + pluginsFolder);
 
             string java = "java.exe";
             string javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
@@ -93,12 +164,13 @@ namespace JavaLanguageSupport
                     throw new FileNotFoundException("java.exe non trovato in JAVA_HOME: " + java);
             }
 
-            // Impedisce che due processi Visual Studio usino contemporaneamente
-            // lo stesso workspace interno di JDT LS.
+            // Workspace interno isolato: piu' istanze di Visual Studio non
+            // devono condividere contemporaneamente la stessa cartella -data.
             string dataFolder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "JavaLanguageSupportVS", "jdtls", Process.GetCurrentProcess().Id.ToString());
             Directory.CreateDirectory(dataFolder);
+            JavaLanguageStatus.Starting(java, launcher, dataFolder);
 
             string args =
                 "-Declipse.application=org.eclipse.jdt.ls.core.id1 " +
@@ -124,33 +196,31 @@ namespace JavaLanguageSupport
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-
-            // Nessuna variabile CLIENT_PORT: JDT LS comunica su stdin/stdout.
+            // Se le variabili sono definite da un'altra applicazione,
+            // JDT LS passerebbe a TCP e ignorerebbe stdin/stdout.
             info.EnvironmentVariables.Remove("CLIENT_PORT");
             info.EnvironmentVariables.Remove("CLIENT_HOST");
 
-            var process = new Process { StartInfo = info };
-            process.ErrorDataReceived += (sender, e) =>
+            var process = new Process { StartInfo = info, EnableRaisingEvents = true };
+            process.ErrorDataReceived += (sender, e) => JavaLanguageStatus.LogStderr(e.Data);
+            process.Exited += (sender, e) =>
             {
-                if (!string.IsNullOrEmpty(e.Data))
-                    Trace.WriteLine("[JDT LS] " + e.Data);
+                try { JavaLanguageStatus.Exited(process.ExitCode); }
+                catch (InvalidOperationException) { }
             };
 
             cancellationToken.ThrowIfCancellationRequested();
             if (!process.Start())
-                throw new InvalidOperationException("Avvio del processo JDT LS non riuscito.");
-
+            {
+                process.Dispose();
+                throw new InvalidOperationException("Avvio di JDT LS non riuscito.");
+            }
             serverProcess = process;
+            JavaLanguageStatus.Started(process.Id);
             process.BeginErrorReadLine();
-            return new Connection(
-                process.StandardOutput.BaseStream,
-                process.StandardInput.BaseStream);
+            return new Connection(process.StandardOutput.BaseStream, process.StandardInput.BaseStream);
         }
 
-        private static string Quote(string argument)
-        {
-            // I percorsi generati qui non terminano in backslash.
-            return "\"" + argument.Replace("\"", "\\\"") + "\"";
-        }
+        private static string Quote(string argument) => "\"" + argument.Replace("\"", "\\\"") + "\"";
     }
 }
