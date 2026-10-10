@@ -39,6 +39,16 @@ namespace JavaLanguageSupport
         // distinto dai nomi con punti usati in VSWorkspaceSettings.json.
         public object InitializationOptions => new
         {
+            // JDT LS esclude le librerie JDK e i JAR da workspace/symbol
+            // quando il client non annuncia classFileContentsSupport.
+            // Il nostro selettore import usa tale ricerca per mostrare
+            // *tutte* le classi omonime, incluse quelle della JRE.
+            // L'apertura di URI jdt:// (navigazione ai .class) richiedera'
+            // un ulteriore handler nell'editor: non e' implementata qui.
+            extendedClientCapabilities = new
+            {
+                classFileContentsSupport = true
+            },
             settings = new
             {
                 java = new

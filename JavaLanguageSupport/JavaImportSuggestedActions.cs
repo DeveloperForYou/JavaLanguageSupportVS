@@ -148,11 +148,22 @@ namespace JavaLanguageSupport
             lock (sync)
                 if (cacheKey == key && cachedActions != null) return cachedActions;
 
-            var position = JavaLspRpc.Position(snapshot, offset);
+            // La richiesta codeAction deve coprire l'intero nome del tipo,
+            // non un range vuoto sulla posizione del cursore.
+            string importName;
+            int identifierEnd;
+            if (!TryGetUnqualifiedIdentifier(snapshot, offset, out importName, out identifierEnd))
+                return empty;
             var parameters = new
             {
                 textDocument = new { uri },
-                range = new { start = position, end = position },
+                range = new
+                {
+                    start = JavaLspRpc.Position(snapshot, identifierEnd - importName.Length),
+                    end = JavaLspRpc.Position(snapshot, identifierEnd)
+                },
+                // Non inventare diagnostiche: il fallback affidabile e'
+                // workspace/symbol (con classFileContentsSupport abilitato).
                 context = new { diagnostics = new object[0], triggerKind = 1 }
             };
             JavaLanguageStatus.LspRequest("java/importChoices");
@@ -166,11 +177,28 @@ namespace JavaLanguageSupport
 
             // Import con modifica già calcolata. Le azioni command-only vengono tracciate
             // dalla diagnostica ma non eseguite automaticamente (evita effetti collaterali).
-            var candidates = array.OfType<JObject>()
-                .Where(a => ((string)a["title"] ?? "").IndexOf("import", StringComparison.OrdinalIgnoreCase) >= 0)
-                .Select(NormalizeImport)
-                .Where(a => a != null)
-                .Take(20).ToList();
+            var candidates = new List<JObject>();
+            // Nelle versioni recenti JDT LS puo' inviare una CodeAction
+            // con data, ma senza edit, che va risolta con codeAction/resolve.
+            // Risolviamo soltanto le azioni di import associate al simbolo
+            // sotto il cursore; non inseriamo correzioni di altri simboli.
+            foreach (var action in array.OfType<JObject>().Take(100))
+            {
+                if (!IsRelevantImport(action, importName)) continue;
+                JObject resolved = action;
+                if (action["edit"] == null && action["data"] != null)
+                {
+                    try
+                    {
+                        resolved = await JavaLspRpc.RequestAsync("codeAction/resolve",
+                            action.DeepClone(), token).ConfigureAwait(false) as JObject ?? action;
+                    }
+                    catch (OperationCanceledException) { throw; }
+                }
+                JObject normalized = NormalizeImport(resolved);
+                if (normalized != null) candidates.Add(normalized);
+                if (candidates.Count >= 40) break;
+            }
             // Cerca anche le classi con lo stesso nome nel classpath JDT LS.
             // Ogni FQN diventa un'azione separata: la scelta resta all'utente.
             await AddImportChoicesAsync(candidates, snapshot, offset, uri, token)
@@ -224,6 +252,11 @@ namespace JavaLanguageSupport
 
             var found = new HashSet<string>(StringComparer.Ordinal);
             var symbols = symbolsResponse as JArray;
+            // Diagnosticabile tramite Strumenti > Java: Stato IntelliSense.
+            // Se =0 anche per List/Date dopo questa patch, verificare che
+            // initialize invii extendedClientCapabilities e JDT sia indicizzato.
+            JavaLanguageStatus.LspResponse("java/importWorkspaceSymbols",
+                symbols == null ? 0 : symbols.Count, false, false);
             if (symbols != null)
             {
                 foreach (var symbol in symbols.OfType<JObject>())
@@ -235,7 +268,8 @@ namespace JavaLanguageSupport
                     if (!string.Equals((string)symbol["name"], simpleName,
                         StringComparison.Ordinal)) continue;
                     string container = (string)symbol["containerName"];
-                    string qualified = container + "." + simpleName;
+                    if (string.IsNullOrWhiteSpace(container)) continue;
+                    string qualified = container.Trim() + "." + simpleName;
                     if (IsJavaQualifiedName(qualified)) found.Add(qualified);
                 }
             }
@@ -252,12 +286,18 @@ namespace JavaLanguageSupport
                 {
                     int kind = (int?)item["kind"] ?? -1;
                     if (kind != 7 && kind != 8 && kind != 13 && kind != 15 && kind != 22) continue;
-                    if (!string.Equals((string)item["label"], simpleName,
-                        StringComparison.Ordinal)) continue;
+                    // I completamenti Java possono avere label come List<E>
+                    // oppure List - java.util: non serve un confronto esatto.
+                    string label = (string)item["label"] ?? "";
+                    if (label != simpleName &&
+                        !label.StartsWith(simpleName + "<", StringComparison.Ordinal) &&
+                        !label.StartsWith(simpleName + " ", StringComparison.Ordinal))
+                        continue;
                     AddCompletionQualifiedNames(found, item, simpleName);
                 }
             }
 
+            JavaLanguageStatus.LspResponse("java/importQualifiedTypes", found.Count, false, false);
             foreach (string qualifiedName in found.OrderBy(s => s, StringComparer.Ordinal))
             {
                 if (token.IsCancellationRequested) return;
@@ -275,6 +315,15 @@ namespace JavaLanguageSupport
                     ["edit"] = CreateImportEdit(snapshot, uri, qualifiedName)
                 });
             }
+        }
+
+        // Evita di applicare import per un altro identificatore presente
+        // sulla stessa riga. Non si assumono package speciali per List/Date.
+        private static bool IsRelevantImport(JObject action, string simpleName)
+        {
+            string title = (string)action["title"] ?? "";
+            return title.IndexOf("import", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                Regex.IsMatch(title, @"(?<![\w$])" + Regex.Escape(simpleName) + @"(?![\w$])");
         }
 
         private static void AddCompletionQualifiedNames(HashSet<string> names,
