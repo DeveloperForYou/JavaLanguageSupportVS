@@ -39,7 +39,7 @@
     </VSCTCompile>
     <None Include="source.extension.vsixmanifest" />
     <Content Include="JavaTextMate.pkgdef">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
     <Content Include="JavaLanguageSettings.json">
@@ -47,11 +47,11 @@
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
     <Content Include="java-language-configuration.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
     <Content Include="java-intellisense-language-configuration.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
     <Content Include="Grammars\java.tmLanguage.json">
