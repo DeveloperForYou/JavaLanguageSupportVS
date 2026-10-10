@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+  <Commands package="guidJavaToolsPackage">
+    <Groups>
+      <Group guid="guidJavaToolsCmdSet" id="JavaToolsGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+      </Group>
+    </Groups>
+    <Buttons>
+      <Button guid="guidJavaToolsCmdSet" id="cmdBuild" priority="0x0100" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <Strings><ButtonText>Java: Compila progetto</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdRun" priority="0x0200" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <Strings><ButtonText>Java: Esegui progetto</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdTest" priority="0x0300" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <Strings><ButtonText>Java: Esegui test</ButtonText></Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+  <Symbols>
+    <GuidSymbol name="guidJavaToolsPackage" value="{75323116-62F6-483F-A9DD-F2A167762E41}" />
+    <GuidSymbol name="guidJavaToolsCmdSet" value="{A21A445E-8D9B-4296-9906-A829608EE59C}">
+      <IDSymbol name="JavaToolsGroup" value="0x1020" />
+      <IDSymbol name="cmdBuild" value="0x0100" />
+      <IDSymbol name="cmdRun" value="0x0101" />
+      <IDSymbol name="cmdTest" value="0x0102" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

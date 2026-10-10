@@ -1,0 +1,10 @@
+.vs/
+**/bin/
+**/obj/
+.vscode/
+*.user
+*.suo
+**/.java-vs/
+**/target/
+**/build/
+.gradle/

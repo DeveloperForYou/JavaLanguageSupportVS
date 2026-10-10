@@ -1,0 +1,76 @@
+{
+  "name": "Java (Visual Studio)",
+  "scopeName": "source.java",
+  "fileTypes": [
+    "java"
+  ],
+  "patterns": [
+    {
+      "name": "comment.line.double-slash.java",
+      "match": "//.*$"
+    },
+    {
+      "name": "comment.block.java",
+      "begin": "/\\*",
+      "end": "\\*/"
+    },
+    {
+      "name": "string.quoted.double.java",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.java",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "string.quoted.single.java",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.java",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "storage.modifier.annotation.java",
+      "match": "@[A-Za-z_$][\\w$]*"
+    },
+    {
+      "name": "keyword.control.java",
+      "match": "\\b(?:if|else|for|while|do|switch|case|default|break|continue|return|try|catch|finally|throw|throws|assert|yield|new|instanceof|synchronized)\\b"
+    },
+    {
+      "name": "keyword.declaration.java",
+      "match": "\\b(?:package|import|class|interface|enum|record|extends|implements|permits|sealed|non-sealed|module|requires|exports|opens|uses|provides|with)\\b"
+    },
+    {
+      "name": "storage.modifier.java",
+      "match": "\\b(?:public|private|protected|static|final|abstract|native|strictfp|transient|volatile|default)\\b"
+    },
+    {
+      "name": "storage.type.primitive.java",
+      "match": "\\b(?:boolean|byte|short|int|long|char|float|double|void|var)\\b"
+    },
+    {
+      "name": "constant.language.java",
+      "match": "\\b(?:true|false|null|this|super)\\b"
+    },
+    {
+      "name": "constant.numeric.java",
+      "match": "\\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|(?:\\d[\\d_]*\\.?[\\d_]*|\\.\\d+)(?:[eE][+-]?\\d[\\d_]*)?)[fFdDlL]?\\b"
+    },
+    {
+      "name": "entity.name.function.java",
+      "match": "\\b([A-Za-z_$][\\w$]*)\\s*(?=\\()"
+    },
+    {
+      "name": "entity.name.type.java",
+      "match": "\\b[A-Z][A-Za-z0-9_$]*\\b"
+    }
+  ]
+}
