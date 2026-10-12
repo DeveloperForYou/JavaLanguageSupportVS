@@ -3,7 +3,7 @@
 public class VerificaIntelliSense {
     public static void main(String[] args) {
         // 1. Chiusura parentesi: digita solo '(' e '{' in una riga vuota.
-
+        
         // 2. Javadoc: passa il mouse su "concatena" o usa il Quick Info.
         System.out.println(Documentazione.concatena("JDT ", "LS"));
 
