@@ -90,7 +90,7 @@ JavaLanguageSupportVS/
     │   ├── Braces/
     │   │   ├── JavaAutoPairCommandHandler.cs
     │   │   ├── JavaBraceCompletionProvider.cs
-    │   │   └── JavaEditorBraceOptions.cs         # se presente
+    │   │   └── JavaEditorBraceOptions.cs         
     │   └── Javadoc/
     │       ├── JavaQuickInfoProvider.cs
     │       ├── JavaJavadocCommandHandler.cs
@@ -109,7 +109,7 @@ JavaLanguageSupportVS/
     ├── Configuration/
     │   ├── JavaTextMate.pkgdef
     │   ├── JavaLanguageSettings.json
-    │   └── java-*-language-configuration.json  # configurazione attiva
+    │   └── java-*-language-configuration.json  
     ├── Grammars/
     │   └── java.tmLanguage.json
     ├── JavaLanguageSupport.csproj
@@ -130,32 +130,6 @@ JavaLanguageSupportVS/
 | `Grammars` | Grammatica TextMate per Java |
 
 **Nota tecnica:** `JavaLanguageSupport.csproj` e `source.extension.vsixmanifest` restano nella cartella principale del progetto. Il refactoring sposta i file senza rinominare namespace o classi C#; i percorsi relativi negli asset VSIX devono rimanere coerenti con la nuova struttura.
-
-## Migrazione dalla vecchia struttura
-
-Se stai partendo da un checkout con tutti i sorgenti nella directory `JavaLanguageSupport/`, puoi utilizzare lo script fornito nell'archivio di refactoring (`Refactor-JavaLanguageSupport.py`). Prima **salva le modifiche con un commit** e crea un branch dedicato.
-
-```powershell
-git switch -c refactor/project-layout
-
-# Anteprima, senza modifiche
-python "C:\Percorso\Refactor-JavaLanguageSupport.py" --repo .
-
-# Esegui la migrazione
-python "C:\Percorso\Refactor-JavaLanguageSupport.py" --repo . --apply
-
-git add -A
-git diff --cached --stat
-git diff --cached --check
-```
-
-Lo script esegue `git mv` per i file riconosciuti e aggiorna i riferimenti nel `.csproj`, nel manifest e nel `.pkgdef`; **non esegue commit o push** e non elimina automaticamente file non classificati. Per controllare il pacchetto VSIX dopo la compilazione:
-
-```powershell
-python "C:\Percorso\Validate-JavaLanguageSupport-VSIX.py" "C:\Percorso\JavaLanguageSupport.vsix"
-```
-
-Sia la compilazione sia l'attivazione dei provider dell'editor devono essere verificate in Visual Studio 2026: il solo controllo dei file nel VSIX non prova che una funzionalità venga richiamata.
 
 ## Diagnostica e problemi comuni
 
