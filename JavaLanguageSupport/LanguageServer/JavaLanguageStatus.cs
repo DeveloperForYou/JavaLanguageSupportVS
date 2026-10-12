@@ -5,7 +5,7 @@ using System.Text;
 using Newtonsoft.Json.Linq;
 using System.Linq;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.LanguageServer
 {
     /// <summary>
     /// Stato dell'istanza LSP visibile dal comando Strumenti > Java: Stato IntelliSense.

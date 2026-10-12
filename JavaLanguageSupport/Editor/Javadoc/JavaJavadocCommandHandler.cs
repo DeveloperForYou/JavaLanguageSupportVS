@@ -10,7 +10,7 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Editor.Commanding.Commands;
 using Microsoft.VisualStudio.Utilities;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Editor.Javadoc
 {
     /// <summary>
     /// Handles Enter inside Java block comments. At '/**|' produces a Javadoc

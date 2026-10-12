@@ -8,7 +8,7 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Editor.Javadoc
 {
     /// <summary>
     /// WPF-key fallback for Enter when the VS editor command chain does not

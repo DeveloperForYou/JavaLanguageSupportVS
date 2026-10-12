@@ -3,7 +3,7 @@ using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Editor.Braces
 {
     /// <summary>
     /// Mantiene abilitato il completamento nativo delle parentesi soltanto

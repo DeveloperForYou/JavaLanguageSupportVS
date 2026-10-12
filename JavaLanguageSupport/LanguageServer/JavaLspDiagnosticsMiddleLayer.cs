@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.LanguageServer.Client;
 using Newtonsoft.Json.Linq;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.LanguageServer
 {
     /// <summary>
     /// Telemetria in memoria, senza acquisire codice sorgente o documentazione.

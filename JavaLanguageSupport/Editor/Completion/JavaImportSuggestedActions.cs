@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using JavaLanguageSupport.LanguageServer;
 using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Text;
@@ -12,7 +13,7 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
 using Newtonsoft.Json.Linq;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Editor.Completion
 {
     // Light bulb nativa per import proposti da JDT LS.
     // Solo WorkspaceEdit locali e direttamente applicabili: niente comandi non verificati.

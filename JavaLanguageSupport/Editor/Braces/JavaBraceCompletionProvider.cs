@@ -2,7 +2,7 @@ using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Text.BraceCompletion;
 using Microsoft.VisualStudio.Utilities;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Editor.Braces
 {
     /// <summary>
     /// Registra il completamento automatico dei delimitatori nell'editor

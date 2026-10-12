@@ -6,7 +6,7 @@ using Microsoft.VisualStudio.Text;
 using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.LanguageServer
 {
     // Canale già posseduto da Visual Studio: nessun secondo client LSP e nessun altro processo Java.
     // Il client standard continua a gestire didOpen/didChange/didClose.

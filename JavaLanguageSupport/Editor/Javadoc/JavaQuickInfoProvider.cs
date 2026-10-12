@@ -3,12 +3,13 @@ using System.ComponentModel.Composition;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using JavaLanguageSupport.LanguageServer;
 using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Utilities;
 using Newtonsoft.Json.Linq;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Editor.Javadoc
 {
     // Fallback nativo per Quick Info. Non sostituisce le altre funzioni LSP dell'IDE.
     [Export(typeof(IAsyncQuickInfoSourceProvider))]

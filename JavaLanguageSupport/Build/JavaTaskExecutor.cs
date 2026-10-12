@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Build
 {
     /// <summary>
     /// Compila/esegue Java, Maven e Gradle senza avviare una shell arbitraria.

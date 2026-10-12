@@ -5,13 +5,15 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using EnvDTE;
+using JavaLanguageSupport.Build;
+using JavaLanguageSupport.LanguageServer;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
 using Task = System.Threading.Tasks.Task;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Commands
 {
     /// <summary>
     /// Comandi Java in Strumenti. Il debugger Visual Studio NON viene sostituito:

@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Text.RegularExpressions;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Build
 {
     internal enum JavaAction { Build, Run, Test }
     internal enum JavaProjectKind { SingleFile, Maven, Gradle }

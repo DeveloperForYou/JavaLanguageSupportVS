@@ -10,7 +10,7 @@ using Microsoft.VisualStudio.LanguageServer.Client;
 using Microsoft.VisualStudio.Threading;
 using Microsoft.VisualStudio.Utilities;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.LanguageServer
 {
     /// <summary>
     /// Integra Eclipse JDT LS nell'editor di Visual Studio (NON VS Code).

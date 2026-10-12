@@ -2,7 +2,7 @@ using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.LanguageServer.Client;
 using Microsoft.VisualStudio.Utilities;
 
-namespace JavaLanguageSupport
+namespace JavaLanguageSupport.Editor
 {
     /// <summary>Associa l'estensione .java al client LSP Java.</summary>
     public static class JavaContentType

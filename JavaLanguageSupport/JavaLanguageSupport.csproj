@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>7.3</LangVersion>
@@ -33,20 +33,20 @@
     <Reference Include="System.Design" />
   </ItemGroup>
   <ItemGroup>
-    <VSCTCompile Include="Commands.vsct">
+    <VSCTCompile Include="Commands\Commands.vsct">
       <!-- Deve coincidere con [ProvideMenuResource("Menus.ctmenu", 1)]. -->
       <ResourceName>Menus.ctmenu</ResourceName>
     </VSCTCompile>
     <None Include="source.extension.vsixmanifest" />
-    <Content Include="JavaTextMate.pkgdef">
+    <Content Include="Configuration\JavaTextMate.pkgdef">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
-    <Content Include="JavaLanguageSettings.json">
+    <Content Include="Configuration\JavaLanguageSettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
-    <Content Include="java-intellisense-language-configuration.json">
+    <Content Include="Configuration\java-intellisense-language-configuration.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
