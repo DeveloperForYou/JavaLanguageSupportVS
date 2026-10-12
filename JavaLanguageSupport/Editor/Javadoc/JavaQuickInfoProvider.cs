@@ -9,14 +9,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using JavaLanguageSupport.LanguageServer;
 using Microsoft.VisualStudio.Language.Intellisense;
-using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Language.StandardClassification;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Adornments;
 using Microsoft.VisualStudio.Utilities;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media;
 using Newtonsoft.Json.Linq;
 
 namespace JavaLanguageSupport.Editor.Javadoc
@@ -28,25 +24,20 @@ namespace JavaLanguageSupport.Editor.Javadoc
     internal sealed class JavaQuickInfoProvider : IAsyncQuickInfoSourceProvider
     {
         [Import] internal ITextDocumentFactoryService DocumentFactory = null;
-        // L'assenza dell'export non deve impedire a MEF di caricare il provider Quick Info.
-        [Import(AllowDefault = true)] internal IViewElementFactoryService ViewElementFactory = null;
 
         public IAsyncQuickInfoSource TryCreateQuickInfoSource(ITextBuffer textBuffer)
-            => new JavaQuickInfoSource(textBuffer, DocumentFactory, ViewElementFactory);
+            => new JavaQuickInfoSource(textBuffer, DocumentFactory);
     }
 
     internal sealed class JavaQuickInfoSource : IAsyncQuickInfoSource
     {
         private readonly ITextBuffer buffer;
         private readonly ITextDocumentFactoryService documents;
-        private readonly IViewElementFactoryService viewElements;
 
-        internal JavaQuickInfoSource(ITextBuffer buffer, ITextDocumentFactoryService documents,
-            IViewElementFactoryService viewElements)
+        internal JavaQuickInfoSource(ITextBuffer buffer, ITextDocumentFactoryService documents)
         {
             this.buffer = buffer;
             this.documents = documents;
-            this.viewElements = viewElements;
         }
 
         public async Task<QuickInfoItem> GetQuickInfoItemAsync(
@@ -89,71 +80,12 @@ namespace JavaLanguageSupport.Editor.Javadoc
             var span = snapshot.CreateTrackingSpan(
                 new Span(start, end - start), SpanTrackingMode.EdgeInclusive);
 
-            // Se il renderer WPF non e' disponibile, manteniamo il tooltip nativo gia' funzionante.
-            var fallback = new QuickInfoItem(span, content);
-            if (IsSimpleMode())
-            {
-                LogUi("Modalita semplice attiva: ClassifiedTextElement senza ScrollViewer.");
-                return fallback;
-            }
-
-            try
-            {
-                if (viewElements == null)
-                {
-                    LogUi("IViewElementFactoryService non disponibile in MEF: fallback nativo.");
-                    return fallback;
-                }
-
-                // GetQuickInfoItemAsync gira su un thread in background; WPF richiede il thread UI.
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-
-                UIElement formattedText = viewElements.CreateViewElement<UIElement>(
-                    session.TextView, content);
-                if (formattedText == null)
-                {
-                    LogUi("CreateViewElement ha restituito null: fallback nativo.");
-                    return fallback;
-                }
-
-                double maxWidth = Math.Min(740d, Math.Max(280d, SystemParameters.WorkArea.Width * 0.70));
-                double maxHeight = Math.Min(470d, Math.Max(180d, SystemParameters.WorkArea.Height * 0.62));
-
-                var textBlock = formattedText as TextBlock;
-                if (textBlock != null)
-                {
-                    textBlock.TextWrapping = TextWrapping.WrapWithOverflow;
-                    textBlock.MaxWidth = maxWidth - 32d;
-                }
-
-                var scrollViewer = new JavaQuickInfoScrollViewer
-                {
-                    Content = formattedText,
-                    MaxWidth = maxWidth,
-                    MaxHeight = maxHeight,
-                    MinWidth = Math.Min(300d, maxWidth),
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    HorizontalContentAlignment = HorizontalAlignment.Left,
-                    VerticalContentAlignment = VerticalAlignment.Top,
-                    CanContentScroll = false,
-                    Background = Brushes.Transparent,
-                    Padding = new Thickness(8d)
-                };
-                LogUi("ScrollViewer creato correttamente.");
-                return new QuickInfoItem(span, scrollViewer);
-            }
-            catch (OperationCanceledException)
-            {
-                // Il cursore si e' spostato o la sessione Quick Info e' terminata.
-                throw;
-            }
-            catch (Exception ex)
-            {
-                LogUi("Errore renderer Quick Info WPF: " + ex);
-                return fallback;
-            }
+            // Il rendering WPF e' differito alla factory MEF, sul thread UI.
+            // Non istanziare controlli WPF da GetQuickInfoItemAsync (thread in background).
+            if (IsSimpleMode()) return new QuickInfoItem(span, content);
+            string markdown = JavaHoverLspMarkdown.Read(hover);
+            if (string.IsNullOrWhiteSpace(markdown)) return new QuickInfoItem(span, content);
+            return new QuickInfoItem(span, new JavaHoverWpfContent(markdown));
         }
 
         // Creare questo file vuoto per ripristinare immediatamente il popup senza scrollbar:
@@ -169,30 +101,10 @@ namespace JavaLanguageSupport.Editor.Javadoc
             catch { return false; }
         }
 
-        private static void LogUi(string message)
-        {
-            try
-            {
-                string dir = Path.Combine(Environment.GetFolderPath(
-                    Environment.SpecialFolder.LocalApplicationData), "JavaLanguageSupportVS", "logs");
-                Directory.CreateDirectory(dir);
-                File.AppendAllText(Path.Combine(dir, "quickinfo-ui.log"),
-                    DateTimeOffset.Now.ToString("o") + " | " + message + Environment.NewLine);
-            }
-            catch { /* La diagnostica non deve bloccare il tooltip. */ }
-        }
-
         private static bool IsIdentifier(char c)
             => char.IsLetterOrDigit(c) || c == '_' || c == '$';
 
         public void Dispose() { }
-    }
-
-    // Mantiene interattivo il Quick Info mentre si usa mouse, rotellina o scrollbar.
-    internal sealed class JavaQuickInfoScrollViewer : ScrollViewer, IInteractiveQuickInfoContent
-    {
-        public bool IsMouseOverAggregated => IsMouseOver;
-        public bool KeepQuickInfoOpen => IsMouseOver || IsKeyboardFocusWithin;
     }
 
     internal static class JavaHoverFormatter
