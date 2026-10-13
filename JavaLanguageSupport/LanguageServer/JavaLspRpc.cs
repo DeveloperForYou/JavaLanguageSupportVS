@@ -38,6 +38,10 @@ namespace JavaLanguageSupport.LanguageServer
             catch (Exception ex)
             {
                 JavaLanguageStatus.LspFailure(method, ex.GetType().Name + ": " + ex.Message);
+                // Per la rinomina l'errore deve arrivare fino alla UI: non
+                // trasformarlo in WorkspaceEdit nullo nascondendo la causa.
+                if (string.Equals(method, "textDocument/rename", StringComparison.Ordinal))
+                    throw;
                 return null;
             }
         }
