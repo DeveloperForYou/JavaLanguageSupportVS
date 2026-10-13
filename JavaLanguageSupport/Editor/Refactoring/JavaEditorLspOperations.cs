@@ -1,0 +1,330 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using JavaLanguageSupport.LanguageServer;
+using JavaLanguageSupport.Editor.Navigation;
+using Microsoft.VisualStudio.ComponentModelHost;
+using Microsoft.VisualStudio.Editor;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.PlatformUI;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.TextManager.Interop;
+using Newtonsoft.Json.Linq;
+using Task = System.Threading.Tasks.Task;
+
+namespace JavaLanguageSupport.Editor.Refactoring
+{
+    internal enum JavaEditorOperation
+    {
+        FormatDocument,
+        FormatSelection,
+        OrganizeImports,
+        RenameSymbol,
+        CodeActions,
+        GoToDefinition,
+        GoToDocumentSymbol,
+        GoToWorkspaceSymbol
+    }
+
+    /// <summary>
+    /// Operazioni LSP Java attivate esplicitamente dal menu Strumenti.
+    /// NON scrive file arbitrari sul disco. Gli WorkspaceEdit multi-file vengono
+    /// rifiutati integralmente, non applicati in modo parziale.
+    /// </summary>
+    internal static class JavaEditorLspOperations
+    {
+        internal static async Task ExecuteAsync(JavaEditorOperation operation,
+            IVsTextManager manager, IComponentModel model, Action<string> log, CancellationToken token)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+            var adapters = model == null ? null : model.GetService<IVsEditorAdaptersFactoryService>();
+            var documents = model == null ? null : model.GetService<ITextDocumentFactoryService>();
+            IVsTextView active;
+            if (!JavaLspRpc.Connected || manager == null || adapters == null || documents == null ||
+                manager.GetActiveView(1, null, out active) < 0 || active == null)
+            {
+                log("Apri un documento Java e attendi l'inizializzazione di JDT LS.");
+                return;
+            }
+            var view = adapters.GetWpfTextView(active);
+            if (view == null || !view.TextBuffer.ContentType.IsOfType("java"))
+            {
+                log("Il file attivo non utilizza il Content Type Java.");
+                return;
+            }
+            var buffer = view.TextBuffer;
+            ITextDocument document;
+            if (!documents.TryGetTextDocument(buffer, out document))
+            {
+                log("Non e' stato possibile individuare il documento Java.");
+                return;
+            }
+            string uri = JavaLspRpc.FileUri(document);
+            if (string.IsNullOrEmpty(uri)) return;
+            var snapshot = buffer.CurrentSnapshot;
+            int caret = Math.Min(view.Caret.Position.BufferPosition.Position, snapshot.Length);
+            var selected = view.Selection.IsEmpty ?
+                new SnapshotSpan(snapshot, caret, 0) : view.Selection.SelectedSpans[0];
+            if (selected.Snapshot != snapshot || selected.Snapshot.TextBuffer != buffer)
+            {
+                log("Selezione multipla o buffer di proiezione non supportato.");
+                return;
+            }
+            if (operation == JavaEditorOperation.GoToDefinition ||
+                operation == JavaEditorOperation.GoToDocumentSymbol ||
+                operation == JavaEditorOperation.GoToWorkspaceSymbol)
+            {
+                await JavaNavigation.ExecuteAsync(operation, uri, snapshot, caret, log, token);
+                return;
+            }
+            object args;
+            string method;
+            switch (operation)
+            {
+                case JavaEditorOperation.FormatDocument:
+                    method = "textDocument/formatting";
+                    args = new { textDocument = new { uri },
+                        options = new { tabSize = 4, insertSpaces = true } };
+                    break;
+                case JavaEditorOperation.FormatSelection:
+                    if (selected.IsEmpty) { log("Seleziona il codice Java da formattare."); return; }
+                    method = "textDocument/rangeFormatting";
+                    args = new { textDocument = new { uri },
+                        range = new { start = JavaLspRpc.Position(snapshot, selected.Start.Position),
+                            end = JavaLspRpc.Position(snapshot, selected.End.Position) },
+                        options = new { tabSize = 4, insertSpaces = true } };
+                    break;
+                case JavaEditorOperation.OrganizeImports:
+                case JavaEditorOperation.CodeActions:
+                    method = "textDocument/codeAction";
+                    var codeActionRange = new
+                    {
+                        start = JavaLspRpc.Position(snapshot,
+                            operation == JavaEditorOperation.OrganizeImports ? 0 : selected.Start.Position),
+                        end = JavaLspRpc.Position(snapshot,
+                            operation == JavaEditorOperation.OrganizeImports ? snapshot.Length :
+                            Math.Max(selected.End.Position, caret))
+                    };
+                    if (operation == JavaEditorOperation.OrganizeImports)
+                        args = new { textDocument = new { uri }, range = codeActionRange,
+                            context = new { diagnostics = new object[0],
+                                only = new[] { "source.organizeImports" } } };
+                    else
+                        args = new { textDocument = new { uri }, range = codeActionRange,
+                            context = new { diagnostics = new object[0] } };
+                    break;
+                case JavaEditorOperation.RenameSymbol:
+                    var name = JavaEditorDialogs.AskText("Rinomina simbolo Java", "Nuovo nome del simbolo:");
+                    if (name == null) return;
+                    if (!ValidJavaIdentifier(name)) { log("Nome Java non valido: " + name); return; }
+                    method = "textDocument/rename";
+                    args = new { textDocument = new { uri },
+                        position = JavaLspRpc.Position(snapshot, caret), newName = name };
+                    break;
+                default: return;
+            }
+            log("Java LSP: " + method);
+            JToken response = await JavaLspRpc.RequestAsync(method, args, token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            if (response == null || response.Type == JTokenType.Null)
+            {
+                log("JDT LS non ha restituito modifiche.");
+                return;
+            }
+            if (method == "textDocument/codeAction")
+            {
+                var options = response as JArray;
+                if (options == null || options.Count == 0) { log("Nessuna azione disponibile."); return; }
+                JObject choice;
+                if (operation == JavaEditorOperation.OrganizeImports)
+                    choice = options.OfType<JObject>().FirstOrDefault(IsOrganizeImports);
+                else
+                {
+                    var candidates = options.OfType<JObject>().ToList();
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+                    choice = JavaEditorDialogs.Choose(candidates);
+                }
+                if (choice == null) { log("Nessuna azione selezionata."); return; }
+                if (choice["edit"] == null && choice["data"] != null)
+                {
+                    response = await JavaLspRpc.RequestAsync("codeAction/resolve",
+                        choice.DeepClone(), token).ConfigureAwait(false);
+                    choice = response as JObject ?? choice;
+                }
+                response = choice["edit"];
+                if (response == null)
+                {
+                    var command = choice["command"];
+                    string commandName = (string)(command is JObject ? command["command"] : command);
+                    if (commandName == "java.apply.workspaceEdit")
+                    {
+                        var values = (command is JObject ? command["arguments"] : choice["arguments"]) as JArray;
+                        response = values == null || values.Count == 0 ? null : values[0];
+                    }
+                }
+                if (response == null) { log("Azione senza WorkspaceEdit applicabile: " +
+                    (string)choice["title"]); return; }
+            }
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+            try
+            {
+                if (buffer.CurrentSnapshot.Version.VersionNumber != snapshot.Version.VersionNumber)
+                    throw new InvalidOperationException("Il file e' cambiato durante la richiesta. Riprova.");
+                ApplySingleDocumentEdit(buffer, snapshot, uri, response, log);
+            }
+            catch (Exception ex)
+            {
+                JavaLanguageStatus.LspFailure("Java editor/applyEdit", ex.Message);
+                log("Modifiche NON applicate: " + ex.Message);
+            }
+        }
+
+        private static bool IsOrganizeImports(JObject action)
+        {
+            string kind = (string)action["kind"] ?? "";
+            return kind == "source.organizeImports" || kind.StartsWith("source.organizeImports.",
+                StringComparison.Ordinal) ||
+                ((string)action["title"] ?? "").IndexOf("organize import",
+                    StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool ValidJavaIdentifier(string text)
+        {
+            if (string.IsNullOrEmpty(text) || !(char.IsLetter(text[0]) || text[0] == '_' || text[0] == '$'))
+                return false;
+            return text.Skip(1).All(c => char.IsLetterOrDigit(c) || c == '_' || c == '$');
+        }
+
+        private static void ApplySingleDocumentEdit(ITextBuffer buffer, ITextSnapshot snapshot,
+            string uri, JToken response, Action<string> log)
+        {
+            var edits = new List<JObject>();
+            if (response is JArray)
+                edits.AddRange(((JArray)response).OfType<JObject>());
+            else if (response is JObject)
+            {
+                var edit = (JObject)response;
+                var changes = edit["changes"] as JObject;
+                if (changes != null)
+                    foreach (var p in changes.Properties())
+                    {
+                        if (!JavaLspRpc.SameUri(uri, p.Name))
+                            throw new NotSupportedException("WorkspaceEdit multi-file: operazione annullata.");
+                        var array = p.Value as JArray;
+                        if (array == null) throw new InvalidOperationException("WorkspaceEdit non valido.");
+                        edits.AddRange(array.OfType<JObject>());
+                    }
+                var docs = edit["documentChanges"] as JArray;
+                if (docs != null)
+                    foreach (var c in docs.OfType<JObject>())
+                    {
+                        if (c["textDocument"] == null ||
+                            !JavaLspRpc.SameUri(uri, (string)c.SelectToken("textDocument.uri")))
+                            throw new NotSupportedException("Rinomina/creazione file o WorkspaceEdit multi-file: annullata.");
+                        var array = c["edits"] as JArray;
+                        if (array == null) throw new InvalidOperationException("documentChanges non valido.");
+                        edits.AddRange(array.OfType<JObject>());
+                    }
+            }
+            if (edits.Count == 0) { log("JDT LS non ha proposto modifiche."); return; }
+            var replacements = edits.Select(e => new
+            {
+                start = LspOffset(snapshot, e["range"]?["start"]),
+                end = LspOffset(snapshot, e["range"]?["end"]),
+                text = (string)e["newText"] ?? ""
+            }).OrderByDescending(e => e.start).ToArray();
+            int previous = snapshot.Length + 1;
+            foreach (var r in replacements)
+            {
+                if (r.end < r.start || r.end > previous)
+                    throw new InvalidOperationException("Intervalli LSP sovrapposti o invertiti.");
+                previous = r.start;
+            }
+            using (var edit = buffer.CreateEdit())
+            {
+                foreach (var r in replacements) edit.Replace(r.start, r.end - r.start, r.text);
+                edit.Apply();
+            }
+            log("Applicate " + replacements.Length + " modifiche Java.");
+        }
+
+        private static int LspOffset(ITextSnapshot snapshot, JToken point)
+        {
+            if (point == null) throw new InvalidOperationException("Range LSP mancante.");
+            int line = (int)point["line"];
+            int col = (int)point["character"];
+            if (line < 0 || line >= snapshot.LineCount) throw new ArgumentOutOfRangeException("line");
+            var textLine = snapshot.GetLineFromLineNumber(line);
+            if (col < 0 || col > textLine.Length) throw new ArgumentOutOfRangeException("character");
+            return textLine.Start.Position + col;
+        }
+    }
+
+    internal static class JavaEditorDialogs
+    {
+        internal static string AskText(string title, string prompt)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var input = new TextBox { MinWidth = 320, Margin = new Thickness(0, 10, 0, 14) };
+            input.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
+            input.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            var win = CreateWindow(title, new StackPanel
+            {
+                Children = { new TextBlock { Text = prompt }, input }
+            }, out Button ok);
+            ok.Click += (s, e) => { win.DialogResult = true; win.Close(); };
+            win.Loaded += (s, e) => input.Focus();
+            return win.ShowModal() == true ? input.Text.Trim() : null;
+        }
+
+        internal static JObject Choose(List<JObject> actions)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var box = new ListBox { MinWidth = 470, Height = 250,
+                DisplayMemberPath = "Title" };
+            var entries = actions.Select(a => new JavaActionChoice
+            {
+                Title = (string)a["title"] ?? "Azione Java", Action = a
+            }).ToList();
+            box.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
+            box.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            box.ItemsSource = entries;
+            if (entries.Count > 0) box.SelectedIndex = 0;
+            var win = CreateWindow("Java: azioni e refactoring", box, out Button ok);
+            ok.Click += (s, e) => { win.DialogResult = true; win.Close(); };
+            return win.ShowModal() == true ? (box.SelectedItem as JavaActionChoice)?.Action : null;
+        }
+
+        private sealed class JavaActionChoice
+        {
+            public string Title { get; set; }
+            public JObject Action { get; set; }
+        }
+
+        private static DialogWindow CreateWindow(string title, UIElement body, out Button ok)
+        {
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right };
+            ok = new Button { Content = "Applica", MinWidth = 90, Margin = new Thickness(5) };
+            var cancel = new Button { Content = "Annulla", MinWidth = 90, Margin = new Thickness(5),
+                IsCancel = true };
+            buttons.Children.Add(ok);
+            buttons.Children.Add(cancel);
+            var layout = new StackPanel { Margin = new Thickness(16) };
+            layout.Children.Add(body);
+            layout.Children.Add(buttons);
+            var win = new DialogWindow { Title = title, Content = layout, Width = 580,
+                SizeToContent = SizeToContent.Height, MaxHeight = 450,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                ResizeMode = ResizeMode.CanResize, ShowInTaskbar = false };
+            win.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.DialogBrushKey);
+            win.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.DialogTextBrushKey);
+            return win;
+        }
+    }
+}

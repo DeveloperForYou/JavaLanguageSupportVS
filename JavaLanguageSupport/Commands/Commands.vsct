@@ -7,6 +7,9 @@
       <Group guid="guidJavaToolsCmdSet" id="JavaToolsGroup" priority="0x0600">
         <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
       </Group>
+      <Group guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" priority="0x0600">
+    <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_CODEWIN" />
+  </Group>
     </Groups>
     <Buttons>
       <Button guid="guidJavaToolsCmdSet" id="cmdBuild" priority="0x0100" type="Button">
@@ -25,16 +28,60 @@
         <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
         <Strings><ButtonText>Java: Stato IntelliSense</ButtonText></Strings>
       </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdFormat" priority="0x0500" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <Strings><ButtonText>Java: Formatta documento</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdFormatSelection" priority="0x0600" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <Strings><ButtonText>Java: Formatta selezione</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdOrganizeImports" priority="0x0700" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <Strings><ButtonText>Java: Organizza import</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdRename" priority="0x0800" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <Strings><ButtonText>Java: Rinomina simbolo (file corrente)</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdCodeActions" priority="0x0900" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <Strings><ButtonText>Java: Azioni e refactoring</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdGoToDefinition" priority="0x0a00" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Vai alla definizione (JDK incluso)</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdDocumentSymbols" priority="0x0b00" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Simboli nel file</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdWorkspaceSymbols" priority="0x0c00" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Cerca simbolo nel progetto</ButtonText></Strings>
+      </Button>
     </Buttons>
   </Commands>
   <Symbols>
     <GuidSymbol name="guidJavaToolsPackage" value="{75323116-62F6-483F-A9DD-F2A167762E41}" />
     <GuidSymbol name="guidJavaToolsCmdSet" value="{A21A445E-8D9B-4296-9906-A829608EE59C}">
+      <IDSymbol name="JavaEditorContextGroup" value="0x1021" />
       <IDSymbol name="JavaToolsGroup" value="0x1020" />
       <IDSymbol name="cmdBuild" value="0x0100" />
       <IDSymbol name="cmdRun" value="0x0101" />
       <IDSymbol name="cmdTest" value="0x0102" />
       <IDSymbol name="cmdStatus" value="0x0103" />
+      <IDSymbol name="cmdFormat" value="0x0110" />
+      <IDSymbol name="cmdFormatSelection" value="0x0111" />
+      <IDSymbol name="cmdOrganizeImports" value="0x0112" />
+      <IDSymbol name="cmdRename" value="0x0113" />
+      <IDSymbol name="cmdCodeActions" value="0x0114" />
+      <IDSymbol name="cmdGoToDefinition" value="0x0115" />
+      <IDSymbol name="cmdDocumentSymbols" value="0x0116" />
+      <IDSymbol name="cmdWorkspaceSymbols" value="0x0117" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

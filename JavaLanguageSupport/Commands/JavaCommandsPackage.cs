@@ -6,8 +6,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using EnvDTE;
 using JavaLanguageSupport.Build;
+using JavaLanguageSupport.Editor.Refactoring;
+using JavaLanguageSupport.Editor.Navigation;
 using JavaLanguageSupport.LanguageServer;
 using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.ComponentModelHost;
+using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
@@ -31,6 +35,14 @@ namespace JavaLanguageSupport.Commands
         private const int RunId = 0x0101;
         private const int TestId = 0x0102;
         private const int StatusId = 0x0103;
+        private const int FormatId = 0x0110;
+        private const int FormatSelectionId = 0x0111;
+        private const int OrganizeImportsId = 0x0112;
+        private const int RenameId = 0x0113;
+        private const int CodeActionsId = 0x0114;
+        private const int WorkspaceSymbolsId = 0x0117;
+        private const int DocumentSymbolsId = 0x0116;
+        private const int GoToDefinitionId = 0x0115;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
@@ -48,8 +60,61 @@ namespace JavaLanguageSupport.Commands
                 new CommandID(CommandSet, TestId)));
             service.AddCommand(new MenuCommand((s, e) => ShowIntelliSenseStatus(),
                 new CommandID(CommandSet, StatusId)));
+            service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.FormatDocument),
+                new CommandID(CommandSet, FormatId)));
+            service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.FormatSelection),
+                new CommandID(CommandSet, FormatSelectionId)));
+            service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.OrganizeImports),
+                new CommandID(CommandSet, OrganizeImportsId)));
+            service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.RenameSymbol),
+                new CommandID(CommandSet, RenameId)));
+            service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.CodeActions),
+                new CommandID(CommandSet, CodeActionsId)));
+            AddJavaContextCommand(service, WorkspaceSymbolsId, JavaEditorOperation.GoToWorkspaceSymbol);
+            AddJavaContextCommand(service, DocumentSymbolsId, JavaEditorOperation.GoToDocumentSymbol);
+            AddJavaContextCommand(service, GoToDefinitionId, JavaEditorOperation.GoToDefinition);
         }
 
+        // Solo nell'editor Java e soltanto quando il click destro è su un simbolo.
+        private void AddJavaContextCommand(OleMenuCommandService service, int commandId,
+            JavaEditorOperation operation)
+        {
+            var menu = new OleMenuCommand((s, e) => StartEditor(operation),
+                new CommandID(CommandSet, commandId));
+            menu.BeforeQueryStatus += (s, e) =>
+            {
+                bool visible = JavaCtrlClickNavigation.HasRecentContextSymbol;
+                menu.Visible = visible;
+                menu.Enabled = visible && JavaLspRpc.Connected;
+            };
+            service.AddCommand(menu);
+        }
+
+        private void StartEditor(JavaEditorOperation operation)
+        {
+            JoinableTaskFactory.RunAsync(async delegate
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
+                var output = await GetServiceAsync(typeof(SVsOutputWindow)) as IVsOutputWindow;
+                if (output == null) return;
+                Guid paneId = OutputPaneId;
+                ErrorHandler.ThrowOnFailure(output.CreatePane(ref paneId, "Java Build / Run / Test", 1, 1));
+                IVsOutputWindowPane pane;
+                ErrorHandler.ThrowOnFailure(output.GetPane(ref paneId, out pane));
+                pane.Activate();
+                Action<string> log = message => pane.OutputStringThreadSafe(message + Environment.NewLine);
+                try
+                {
+                    var manager = await GetServiceAsync(typeof(SVsTextManager)) as IVsTextManager;
+                    var model = await GetServiceAsync(typeof(SComponentModel)) as IComponentModel;
+                    if (operation == JavaEditorOperation.GoToDefinition)
+                        JavaCtrlClickNavigation.PrepareContextCaret(manager, model);
+                    await JavaEditorLspOperations.ExecuteAsync(operation, manager, model,
+                        log, CancellationToken.None);
+                }
+                catch (Exception ex) { log("Java editor: " + ex.Message); }
+            }).FileAndForget("JavaLanguageSupport/JavaEditor");
+        }
         private void ShowIntelliSenseStatus()
         {
             JoinableTaskFactory.RunAsync(async delegate

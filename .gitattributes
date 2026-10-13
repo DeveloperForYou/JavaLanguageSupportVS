@@ -1,0 +1,7 @@
+*.cs text eol=crlf
+*.csproj text eol=crlf
+*.vsct text eol=crlf
+*.vsixmanifest text eol=crlf
+*.json text eol=crlf
+*.pkgdef text eol=crlf
+*.ps1 text eol=crlf

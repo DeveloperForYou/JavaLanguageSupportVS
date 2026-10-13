@@ -26,7 +26,17 @@ namespace JavaLanguageSupport.LanguageServer
                 || methodName == "textDocument/hover"
                 || methodName == "textDocument/completion"
                 || methodName == "completionItem/resolve"
-                || methodName == "textDocument/codeAction";
+                || methodName == "textDocument/codeAction"
+                || methodName == "textDocument/signatureHelp"
+                || methodName == "textDocument/formatting"
+                || methodName == "textDocument/rangeFormatting"
+                || methodName == "textDocument/rename"
+                || methodName == "textDocument/definition"
+                || methodName == "textDocument/references"
+                || methodName == "textDocument/documentSymbol"
+                || methodName == "textDocument/semanticTokens/full"
+                || methodName == "textDocument/codeLens"
+                || methodName == "textDocument/inlayHint";
         }
 
         private static async Task TryPrefetchCompletionDetailsAsync(JToken response)
@@ -37,9 +47,9 @@ namespace JavaLanguageSupport.LanguageServer
             var candidates = array.OfType<JObject>()
                 .Where(item => item["data"] != null &&
                     (item["documentation"] == null || item["additionalTextEdits"] == null))
-                .Take(8).ToArray();
+                .Take(2).ToArray();
             if (candidates.Length == 0) return;
-            using (var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(450)))
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(120)))
             {
                 try
                 {
