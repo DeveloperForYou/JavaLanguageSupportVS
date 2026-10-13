@@ -3,7 +3,6 @@ using System.ComponentModel.Design;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
-using System.Threading.Tasks;
 using EnvDTE;
 using JavaLanguageSupport.Build;
 using JavaLanguageSupport.Editor.Refactoring;
@@ -15,6 +14,7 @@ using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
+using Microsoft.VisualStudio.Editor;
 using Task = System.Threading.Tasks.Task;
 
 namespace JavaLanguageSupport.Commands
@@ -66,8 +66,7 @@ namespace JavaLanguageSupport.Commands
                 new CommandID(CommandSet, FormatSelectionId)));
             service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.OrganizeImports),
                 new CommandID(CommandSet, OrganizeImportsId)));
-            service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.RenameSymbol),
-                new CommandID(CommandSet, RenameId)));
+            AddJavaContextCommand(service, RenameId, JavaEditorOperation.RenameSymbol);
             service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.CodeActions),
                 new CommandID(CommandSet, CodeActionsId)));
             AddJavaContextCommand(service, WorkspaceSymbolsId, JavaEditorOperation.GoToWorkspaceSymbol);
@@ -76,6 +75,27 @@ namespace JavaLanguageSupport.Commands
         }
 
         // Solo nell'editor Java e soltanto quando il click destro è su un simbolo.
+        // Visible whenever a Java editor is active. Do not depend on a recent
+        // mouse click: command status is often queried before PreviewMouseRightButtonDown.
+        private bool IsActiveJavaEditor()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                var manager = GetService(typeof(SVsTextManager)) as IVsTextManager;
+                var model = GetService(typeof(SComponentModel)) as IComponentModel;
+                if (manager == null || model == null) return false;
+                var adapters = model.GetService<IVsEditorAdaptersFactoryService>();
+                IVsTextView view;
+                if (adapters == null || manager.GetActiveView(1, null, out view) < 0 || view == null)
+                    return false;
+                var textView = adapters.GetWpfTextView(view);
+                return textView != null && !textView.IsClosed &&
+                    textView.TextBuffer.ContentType.IsOfType("java");
+            }
+            catch (Exception) { return false; }
+        }
+
         private void AddJavaContextCommand(OleMenuCommandService service, int commandId,
             JavaEditorOperation operation)
         {
@@ -83,7 +103,7 @@ namespace JavaLanguageSupport.Commands
                 new CommandID(CommandSet, commandId));
             menu.BeforeQueryStatus += (s, e) =>
             {
-                bool visible = JavaCtrlClickNavigation.HasRecentContextSymbol;
+                bool visible = IsActiveJavaEditor();
                 menu.Visible = visible;
                 menu.Enabled = visible && JavaLspRpc.Connected;
             };
@@ -101,7 +121,7 @@ namespace JavaLanguageSupport.Commands
                 ErrorHandler.ThrowOnFailure(output.CreatePane(ref paneId, "Java Build / Run / Test", 1, 1));
                 IVsOutputWindowPane pane;
                 ErrorHandler.ThrowOnFailure(output.GetPane(ref paneId, out pane));
-                pane.Activate();
+                if (operation != JavaEditorOperation.RenameSymbol) pane.Activate();
                 Action<string> log = message => pane.OutputStringThreadSafe(message + Environment.NewLine);
                 try
                 {
@@ -109,7 +129,12 @@ namespace JavaLanguageSupport.Commands
                     var model = await GetServiceAsync(typeof(SComponentModel)) as IComponentModel;
                     if (operation == JavaEditorOperation.GoToDefinition)
                         JavaCtrlClickNavigation.PrepareContextCaret(manager, model);
-                    await JavaEditorLspOperations.ExecuteAsync(operation, manager, model,
+                    if (operation == JavaEditorOperation.RenameSymbol)
+                    {
+                        JavaCtrlClickNavigation.PrepareContextCaret(manager, model);
+                        JavaInlineRename.Show(manager, model, log);
+                    }
+                    else await JavaEditorLspOperations.ExecuteAsync(operation, manager, model,
                         log, CancellationToken.None);
                 }
                 catch (Exception ex) { log("Java editor: " + ex.Message); }

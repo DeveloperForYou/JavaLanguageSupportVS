@@ -59,7 +59,6 @@ namespace JavaLanguageSupport.Editor.Navigation
             {
                 IWpfTextView view;
                 return contextView != null &&
-                    (DateTime.UtcNow - contextTimestampUtc).TotalSeconds < 12 &&
                     contextView.TryGetTarget(out view) && view != null && !view.IsClosed &&
                     contextOffset >= 0 && contextOffset < view.TextBuffer.CurrentSnapshot.Length &&
                     view.TextBuffer.ContentType.IsOfType("java") &&

@@ -41,8 +41,9 @@
         <Strings><ButtonText>Java: Organizza import</ButtonText></Strings>
       </Button>
       <Button guid="guidJavaToolsCmdSet" id="cmdRename" priority="0x0800" type="Button">
-        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
-        <Strings><ButtonText>Java: Rinomina simbolo (file corrente)</ButtonText></Strings>
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Rinomina simbolo nel progetto</ButtonText></Strings>
       </Button>
       <Button guid="guidJavaToolsCmdSet" id="cmdCodeActions" priority="0x0900" type="Button">
         <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
