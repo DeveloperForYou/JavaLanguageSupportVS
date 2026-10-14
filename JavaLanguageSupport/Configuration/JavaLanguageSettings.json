@@ -13,5 +13,8 @@
   ],
   "java.import.maven.enabled": true,
   "java.import.gradle.enabled": true,
-  "java.maven.downloadSources": true
+  "java.maven.downloadSources": true,
+  "java.referencesCodeLens.enabled": true,
+  "java.implementationCodeLens": "all",
+  "java.inlayHints.parameterNames.enabled": "all"
 }

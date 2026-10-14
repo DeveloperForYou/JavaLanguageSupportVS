@@ -72,6 +72,10 @@ namespace JavaLanguageSupport.LanguageServer
                     },
                     maven = new { downloadSources = true },
                     autobuild = new { enabled = true },
+                    // Explicit JDT LS preferences: lenses and parameter hints.
+                    referencesCodeLens = new { enabled = true },
+                    implementationCodeLens = "all",
+                    inlayHints = new { parameterNames = new { enabled = "all" } },
                     format = new { enabled = true },
                     configuration = new { updateBuildConfiguration = "automatic" }
                 }
@@ -107,6 +111,7 @@ namespace JavaLanguageSupport.LanguageServer
             if (stop != null)
                 await stop.InvokeAsync(this, EventArgs.Empty);
             JavaLspRpc.Detach();
+            JavaSemanticLegend.Reset();
             JavaWorkspaceActivity.Stopped();
             JavaLanguageStatus.Stopped();
         }
@@ -183,6 +188,7 @@ namespace JavaLanguageSupport.LanguageServer
                 "JavaLanguageSupportVS", "jdtls", Process.GetCurrentProcess().Id.ToString());
             Directory.CreateDirectory(dataFolder);
             JavaLanguageStatus.Starting(java, launcher, dataFolder);
+            JavaSemanticLegend.Reset();
             JavaWorkspaceActivity.Starting();
 
             string args =

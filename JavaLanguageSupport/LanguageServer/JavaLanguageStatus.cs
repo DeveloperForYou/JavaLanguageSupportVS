@@ -198,11 +198,14 @@ namespace JavaLanguageSupport.LanguageServer
                 result.AppendLine("La sola colorazione non conferma che LSP sia connesso.");
                 result.AppendLine("RPC per Quick Info e import: " + (JavaLspRpc.Connected ? "collegato" : "non collegato"));
                 result.AppendLine("Attivita' workspace JDT LS: " + JavaWorkspaceActivity.Summary);
+                result.AppendLine("Semantic Tokens JDT LS: " + (JavaSemanticLegend.Available ? "legend negoziata" : "non annunciati / server in avvio"));
                 result.AppendLine("--- Capabilities negoziate LSP ---");
                 result.AppendLine(initializationSummary);
                 result.AppendLine("--- Richieste LSP osservate (da apertura ultimo server) ---");
                 foreach (string method in new[] { "textDocument/completion", "completionItem/resolve",
                     "textDocument/hover", "textDocument/codeAction", "workspace/executeCommand",
+                    "textDocument/semanticTokens/full", "textDocument/inlayHint",
+                    "textDocument/codeLens", "codeLens/resolve",
                     "Java import/applyEdit" })
                 {
                     int count;

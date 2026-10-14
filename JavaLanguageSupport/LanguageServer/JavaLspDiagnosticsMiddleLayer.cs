@@ -103,6 +103,7 @@ namespace JavaLanguageSupport.LanguageServer
                 if (methodName == "initialize")
                 {
                     JavaLanguageStatus.LspInitialize(methodParam, response);
+                    JavaSemanticLegend.ReadInitialize(response);
                     return response;
                 }
 
