@@ -9,6 +9,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Interop;
@@ -409,6 +411,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 .Distinct(StringComparer.OrdinalIgnoreCase).Count();
             internal string Origin;
             internal string Root;
+            internal string OldName, NewName;
         }
         private static readonly StringComparer PathCompare = StringComparer.OrdinalIgnoreCase;
 
@@ -468,7 +471,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
             if (!originAddress.IsFile) throw new InvalidOperationException("Il file originale non e' locale.");
             string origin = Path.GetFullPath(originAddress.LocalPath);
             var plan = new RenamePlan { Origin = origin,
-                Root = JavaWorkspace.Detect(origin).RootFolder };
+                Root = JavaWorkspace.Detect(origin).RootFolder,
+                OldName = oldName, NewName = newName };
             var groups = new Dictionary<string, List<JToken>>(PathCompare);
             var requestedMoves = new List<FileRename>();
             // Legge prima tutti i renameFile, poi i TextDocumentEdit, indipendentemente
@@ -639,42 +643,381 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }
         }
 
+        // Modello della finestra di anteprima. Le caselle sono legate a modifiche
+        // reali del WorkspaceEdit: deselezionare una voce la esclude da Apply.
+        private sealed class PreviewEntry
+        {
+            internal PreviewEntry Parent;
+            internal Target Target;
+            internal Edit Change;
+            internal FileRename Move;
+            internal CheckBox Check;
+            internal TreeViewItem Item;
+            internal readonly List<PreviewEntry> Children = new List<PreviewEntry>();
+        }
+
+        private static PreviewEntry AddPreviewEntry(ItemsControl container, PreviewEntry parent,
+            string title, string icon, Target target, Edit change, FileRename move,
+            string tooltip = null)
+        {
+            var entry = new PreviewEntry { Parent = parent, Target = target,
+                Change = change, Move = move };
+            // La CheckBox occupa soltanto il suo quadratino. Il testo e l'icona
+            // sono FRATELLI della checkbox: un click sul nodo seleziona la riga
+            // e aggiorna l'anteprima, senza cambiarne lo stato incluso/escluso.
+            var caption = new StackPanel { Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center };
+            entry.Check = new CheckBox { IsChecked = true, Width = 18, Height = 18,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0),
+                ToolTip = "Includi/escludi: " + (tooltip ?? title) };
+            var symbol = new TextBlock { Text = icon, MinWidth = 19,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = true };
+            symbol.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            var text = new TextBlock { Text = title, TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center };
+            text.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            caption.Children.Add(entry.Check);
+            caption.Children.Add(symbol);
+            caption.Children.Add(text);
+
+            // Il template WPF/VS cambia il colore di selezione quando TreeView
+            // perde il focus (anche solo cliccando sul riquadro del codice).
+            // Una superficie opaca dello STESSO tema dietro alle etichette
+            // impedisce che il testo chiaro finisca su un fondo chiaro.
+            // Il bordo sinistro segnala il nodo selezionato anche senza focus.
+            var header = new Border { Child = caption,
+                BorderThickness = new Thickness(3, 0, 0, 0),
+                Padding = new Thickness(2, 1, 4, 1),
+                HorizontalAlignment = HorizontalAlignment.Stretch };
+            header.SetResourceReference(Border.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            var headerStyle = new Style(typeof(Border));
+            headerStyle.Setters.Add(new Setter(Border.BorderBrushProperty,
+                Brushes.Transparent));
+            var selectedStyle = new DataTrigger {
+                Binding = new Binding("IsSelected") {
+                    RelativeSource = new RelativeSource(
+                        RelativeSourceMode.FindAncestor, typeof(TreeViewItem), 1)
+                },
+                Value = true
+            };
+            selectedStyle.Setters.Add(new Setter(Border.BorderBrushProperty,
+                SystemColors.HighlightBrush));
+            headerStyle.Triggers.Add(selectedStyle);
+            header.Style = headerStyle;
+
+            entry.Item = new TreeViewItem { Header = header, Tag = entry,
+                IsExpanded = true, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                ToolTip = tooltip ?? title };
+            container.Items.Add(entry.Item);
+            if (parent != null) parent.Children.Add(entry);
+            return entry;
+        }
+
+        private static void SetPreviewChildren(PreviewEntry entry, bool selected)
+        {
+            entry.Check.IsChecked = selected;
+            foreach (var child in entry.Children) SetPreviewChildren(child, selected);
+        }
+
+        private static void RefreshPreviewParents(PreviewEntry entry)
+        {
+            while (entry != null) {
+                if (entry.Children.Count > 0) {
+                    if (entry.Children.All(x => x.Check.IsChecked == true))
+                        entry.Check.IsChecked = true;
+                    else if (entry.Children.All(x => x.Check.IsChecked == false))
+                        entry.Check.IsChecked = false;
+                    else entry.Check.IsChecked = null;
+                }
+                entry = entry.Parent;
+            }
+        }
+
+        private static PreviewEntry FirstPreviewLeaf(PreviewEntry entry)
+        {
+            if (entry.Change != null || entry.Move != null) return entry;
+            foreach (var child in entry.Children) {
+                var found = FirstPreviewLeaf(child);
+                if (found != null) return found;
+            }
+            return null;
+        }
+
+        private static string PreviewLineText(Target target, Edit change)
+        {
+            int lineNumber = target.Original.GetLineFromPosition(
+                Math.Min(change.Start, Math.Max(0, target.Original.Length - 1))).LineNumber;
+            var line = target.Original.GetLineFromLineNumber(lineNumber);
+            string code = line.GetText();
+            int start = change.Start - line.Start.Position;
+            int end = change.End - line.Start.Position;
+            if (start >= 0 && end >= start && end <= code.Length)
+                code = code.Substring(0, start) + change.NewText + code.Substring(end);
+            code = code.Trim();
+            return code.Length > 115 ? code.Substring(0, 112) + "..." : code;
+        }
+
+        private static readonly Regex PreviewTokens = new Regex(
+            @"//.*|""(?:\\.|[^""\\])*""|'(?:\\.|[^'\\])*'|\b(?:abstract|assert|boolean|break|byte|case|catch|char|class|const|continue|default|do|double|else|enum|extends|final|finally|float|for|if|implements|import|instanceof|int|interface|long|native|new|package|private|protected|public|record|return|short|static|strictfp|super|switch|synchronized|this|throw|throws|transient|try|var|void|volatile|while|true|false|null)\b|\b\d+(?:\.\d+)?\b|\b[A-Z][A-Za-z0-9_]*\b",
+            RegexOptions.Compiled);
+
+        private static void AddColoredRun(Paragraph paragraph, string source,
+            int from, int to, Brush foreground, Brush highlight, int changedFrom, int changedTo)
+        {
+            int p = from;
+            while (p < to) {
+                bool changed = p >= changedFrom && p < changedTo;
+                int end = to;
+                if (p < changedFrom) end = Math.Min(end, changedFrom);
+                else if (changed) end = Math.Min(end, changedTo);
+                var run = new Run(source.Substring(p, end - p)) { Foreground = foreground };
+                if (changed) {
+                    run.Background = highlight;
+                    run.FontWeight = FontWeights.SemiBold;
+                }
+                paragraph.Inlines.Add(run);
+                p = end;
+            }
+        }
+
+        private static void AddJavaPreviewLine(FlowDocument document, string code,
+            int changedFrom, int changedTo, bool dark)
+        {
+            var paragraph = new Paragraph { Margin = new Thickness(0),
+                LineHeight = 19, FontFamily = new FontFamily("Consolas"), FontSize = 12.5 };
+            Brush standard = dark ? Brushes.Gainsboro : Brushes.Black;
+            Brush keyword = new SolidColorBrush(dark ? Color.FromRgb(86, 156, 214) : Color.FromRgb(0, 0, 205));
+            Brush type = new SolidColorBrush(dark ? Color.FromRgb(78, 201, 176) : Color.FromRgb(25, 100, 120));
+            Brush comment = new SolidColorBrush(dark ? Color.FromRgb(106, 153, 85) : Color.FromRgb(0, 128, 0));
+            Brush literal = new SolidColorBrush(dark ? Color.FromRgb(206, 145, 120) : Color.FromRgb(160, 55, 25));
+            Brush number = new SolidColorBrush(dark ? Color.FromRgb(181, 206, 168) : Color.FromRgb(15, 95, 50));
+            Brush highlight = new SolidColorBrush(dark ? Color.FromRgb(56, 79, 105) : Color.FromRgb(195, 220, 249));
+            int cursor = 0;
+            foreach (Match token in PreviewTokens.Matches(code)) {
+                if (token.Index > cursor)
+                    AddColoredRun(paragraph, code, cursor, token.Index,
+                        standard, highlight, changedFrom, changedTo);
+                string value = token.Value;
+                Brush color = value.StartsWith("//", StringComparison.Ordinal) ? comment :
+                    value[0] == '"' || value[0] == '\'' ? literal :
+                    char.IsDigit(value[0]) ? number :
+                    char.IsUpper(value[0]) ? type : keyword;
+                AddColoredRun(paragraph, code, token.Index, token.Index + token.Length,
+                    color, highlight, changedFrom, changedTo);
+                cursor = token.Index + token.Length;
+            }
+            if (cursor < code.Length)
+                AddColoredRun(paragraph, code, cursor, code.Length,
+                    standard, highlight, changedFrom, changedTo);
+            if (code.Length == 0) paragraph.Inlines.Add(new Run(" "));
+            document.Blocks.Add(paragraph);
+        }
+
+        private static void RenderPreviewCode(RichTextBox viewer, PreviewEntry selected)
+        {
+            var document = new FlowDocument { PagePadding = new Thickness(10, 7, 10, 7),
+                FontFamily = new FontFamily("Consolas"), FontSize = 12.5,
+                Foreground = viewer.Foreground };
+            var background = viewer.Background as SolidColorBrush;
+            bool dark = background != null &&
+                (background.Color.R * 299 + background.Color.G * 587 +
+                 background.Color.B * 114) < 128000;
+            var leaf = FirstPreviewLeaf(selected);
+            if (leaf == null) {
+                document.Blocks.Add(new Paragraph(new Run("Nessuna modifica da visualizzare.")));
+            } else if (leaf.Move != null) {
+                document.Blocks.Add(new Paragraph(new Run("Rinomina file .java:")));
+                document.Blocks.Add(new Paragraph(new Run(leaf.Move.From)));
+                document.Blocks.Add(new Paragraph(new Run("↓")));
+                document.Blocks.Add(new Paragraph(new Run(leaf.Move.To)));
+            } else if (leaf.Target != null && leaf.Change != null) {
+                var target = leaf.Target;
+                var change = leaf.Change;
+                var current = target.Original.GetLineFromPosition(
+                    Math.Min(change.Start, Math.Max(0, target.Original.Length - 1)));
+                int startLine = Math.Max(0, current.LineNumber - 5);
+                int endLine = Math.Min(target.Original.LineCount - 1, current.LineNumber + 6);
+                for (int i = startLine; i <= endLine; ++i) {
+                    var line = target.Original.GetLineFromLineNumber(i);
+                    string code = line.GetText();
+                    int changedFrom = -1, changedTo = -1;
+                    if (i == current.LineNumber) {
+                        int from = change.Start - line.Start.Position;
+                        int to = change.End - line.Start.Position;
+                        if (from >= 0 && to >= from && to <= code.Length &&
+                            change.NewText.IndexOfAny(new[] { '\r', '\n' }) == -1) {
+                            code = code.Substring(0, from) + change.NewText + code.Substring(to);
+                            changedFrom = from;
+                            changedTo = from + change.NewText.Length;
+                        }
+                    }
+                    AddJavaPreviewLine(document, code, changedFrom, changedTo, dark);
+                }
+            }
+            viewer.Document = document;
+            viewer.ScrollToHome();
+        }
+
+        // WPF non offre un flag per nascondere SOLO "Riduci a icona" lasciando
+        // ridimensionamento e chiusura. Eliminiamo WS_MINIMIZEBOX dall'HWND
+        // della sola finestra di anteprima dopo SourceInitialized.
+        private const int PreviewGwlStyle = -16;
+        private const int PreviewWsMinimizeBox = 0x00020000;
+        private const uint PreviewSwpNoSize = 0x0001;
+        private const uint PreviewSwpNoMove = 0x0002;
+        private const uint PreviewSwpNoZOrder = 0x0004;
+        private const uint PreviewSwpFrameChanged = 0x0020;
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
+        private static extern int PreviewGetWindowLong(IntPtr hwnd, int index);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongW", SetLastError = true)]
+        private static extern int PreviewSetWindowLong(IntPtr hwnd, int index, int style);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowPos", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool PreviewSetWindowPos(IntPtr hwnd, IntPtr after,
+            int x, int y, int width, int height, uint flags);
+
+        private static void RemovePreviewMinimizeButton(WpfWindow window)
+        {
+            IntPtr hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            int style = PreviewGetWindowLong(hwnd, PreviewGwlStyle);
+            if ((style & PreviewWsMinimizeBox) == 0) return;
+            PreviewSetWindowLong(hwnd, PreviewGwlStyle, style & ~PreviewWsMinimizeBox);
+            PreviewSetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                PreviewSwpNoMove | PreviewSwpNoSize | PreviewSwpNoZOrder |
+                PreviewSwpFrameChanged);
+        }
+
         internal static bool ShowPreview(WpfWindow owner, RenamePlan plan)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var text = new StringBuilder();
-            text.AppendLine("RINOMINA - ANTEPRIMA (nessuna modifica applicata)").AppendLine();
-            foreach (var move in plan.moves)
-                text.AppendLine("FILE: " + move.From + " -> " + move.To);
-            foreach (var target in plan.targets) {
-                text.AppendLine().AppendLine(target.Path + " (" + target.Edits.Count + " modifiche)");
-                foreach (var edit in target.Edits.Take(60)) {
-                    int line = target.Before.Take(edit.Start).Count(x => x == '\n') + 1;
-                    text.AppendLine("  riga " + line + " [" + edit.Category + "]  " +
-                        Brief(edit.OldText) + " -> " + Brief(edit.NewText));
-                }
-                if (target.Edits.Count > 60) text.AppendLine("  … altre modifiche non visualizzate");
+            var tree = new TreeView { BorderThickness = new Thickness(0),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            tree.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            tree.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            ScrollViewer.SetHorizontalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
+            ScrollViewer.SetVerticalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
+            var rootLabel = plan.OldName;
+            var declaring = plan.targets.FirstOrDefault(x =>
+                Path.GetFileNameWithoutExtension(x.Path) == plan.OldName);
+            if (declaring != null) {
+                var package = Regex.Match(declaring.Before,
+                    @"(?m)^\s*package\s+([\w.]+)\s*;");
+                if (package.Success) rootLabel = package.Groups[1].Value + "." + rootLabel;
             }
-            var viewer = new TextBox { Text = text.ToString(), IsReadOnly = true,
-                FontFamily = new FontFamily("Consolas"), TextWrapping = TextWrapping.NoWrap,
+            var root = AddPreviewEntry(tree, null, rootLabel, "◆", null, null, null);
+            var all = new List<PreviewEntry> { root };
+            foreach (var target in plan.targets.OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)) {
+                var file = AddPreviewEntry(root.Item, root, Path.GetFileName(target.Path),
+                    "▤", target, null, null, target.Path);
+                all.Add(file);
+                foreach (var edit in target.Edits.OrderBy(x => x.Start)) {
+                    int line = target.Original.GetLineFromPosition(
+                        Math.Min(edit.Start, Math.Max(0, target.Original.Length - 1))).LineNumber + 1;
+                    var change = AddPreviewEntry(file.Item, file,
+                        "Riga " + line + ": " + PreviewLineText(target, edit),
+                        "↳", target, edit, null, edit.Category + " - " + target.Path);
+                    all.Add(change);
+                }
+                foreach (var move in plan.moves.Where(x => PathCompare.Equals(x.From, target.Path))) {
+                    var rename = AddPreviewEntry(file.Item, file,
+                        "Rinomina file: " + Path.GetFileName(move.From) + " → " +
+                        Path.GetFileName(move.To), "↳", target, null, move);
+                    all.Add(rename);
+                }
+            }
+            // Stato intermedio impostato solo dal codice: il click dell'utente
+            // deve alternare inclusione/esclusione, non entrare in un terzo stato.
+
+            var viewer = new RichTextBox { IsReadOnly = true,
+                IsDocumentEnabled = false,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            viewer.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
-            viewer.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
-            var yes = new Button { Content = "Applica modifiche", MinWidth = 115, Margin = new Thickness(5), IsDefault = true };
-            var no = new Button { Content = "Torna alla rinomina", MinWidth = 120, Margin = new Thickness(5), IsCancel = true };
-            var commands = new StackPanel { Orientation = Orientation.Horizontal,
+            viewer.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            viewer.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+
+            var caption = new TextBlock {
+                Text = "Rinomina '" + plan.OldName + "' in '" + plan.NewName + "':",
+                Margin = new Thickness(0, 0, 0, 5)
+            };
+            caption.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            var previewLabel = new TextBlock { Text = "Anteprima modifiche codice:",
+                Margin = new Thickness(0, 6, 0, 5) };
+            previewLabel.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            var yes = new Button { Content = "Applica", MinWidth = 95, Margin = new Thickness(4),
+                IsDefault = true };
+            var no = new Button { Content = "Annulla", MinWidth = 95, Margin = new Thickness(4),
+                IsCancel = true };
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right };
-            commands.Children.Add(yes); commands.Children.Add(no);
-            var content = new DockPanel { Margin = new Thickness(9) };
-            DockPanel.SetDock(commands, Dock.Bottom);
-            content.Children.Add(commands); content.Children.Add(viewer);
-            var window = new WpfWindow { Title = "Anteprima rinomina Java",
-                Width = 820, Height = 520, MinWidth = 500, MinHeight = 250,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = content,
-                ShowInTaskbar = false };
-            // La finestra di rinomina e' gia' chiusa. Associa l'anteprima all'IDE
-            // anche quando la finestra principale non e' una Window WPF.
+            buttons.Children.Add(yes);
+            buttons.Children.Add(no);
+            var upper = new Border { BorderThickness = new Thickness(1), Child = tree };
+            upper.SetResourceReference(Border.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            var lower = new Border { BorderThickness = new Thickness(1), Child = viewer };
+            lower.SetResourceReference(Border.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            // L'etichetta fa parte del pannello INFERIORE, non e' una riga
+            // adiacente al GridSplitter: trascinando il separatore non puo'
+            // essere collassata o scomparire.
+            var lowerPanel = new Grid { MinHeight = 140 };
+            lowerPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            lowerPanel.RowDefinitions.Add(new RowDefinition {
+                Height = new GridLength(1, GridUnitType.Star), MinHeight = 95 });
+            Grid.SetRow(previewLabel, 0);
+            Grid.SetRow(lower, 1);
+            lowerPanel.Children.Add(previewLabel);
+            lowerPanel.Children.Add(lower);
+
+            var splitter = new GridSplitter { Height = 6,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                ResizeDirection = GridResizeDirection.Rows,
+                ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+                ShowsPreview = true };
+            splitter.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            var content = new Grid { Margin = new Thickness(9) };
+            content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            content.RowDefinitions.Add(new RowDefinition {
+                Height = new GridLength(2, GridUnitType.Star), MinHeight = 95 });
+            content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(6) });
+            content.RowDefinitions.Add(new RowDefinition {
+                Height = new GridLength(1, GridUnitType.Star), MinHeight = 140 });
+            content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(caption, 0);
+            Grid.SetRow(upper, 1);
+            Grid.SetRow(splitter, 2);
+            Grid.SetRow(lowerPanel, 3);
+            Grid.SetRow(buttons, 4);
+            content.Children.Add(caption);
+            content.Children.Add(upper);
+            content.Children.Add(splitter);
+            content.Children.Add(lowerPanel);
+            content.Children.Add(buttons);
+
+            var window = new WpfWindow { Title = "Anteprima modifiche - Rinomina",
+                Width = 850, Height = 610, MinWidth = 600, MinHeight = 405,
+                ResizeMode = ResizeMode.CanResize,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Content = content, ShowInTaskbar = false };
+            window.SourceInitialized += (sender, args) => RemovePreviewMinimizeButton(window);
             if (owner != null && owner.IsVisible) window.Owner = owner;
             else {
                 var shell = Package.GetGlobalService(typeof(SVsUIShell)) as IVsUIShell;
@@ -683,10 +1026,60 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     new WindowInteropHelper(window).Owner = hwnd;
                 else window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
             }
-            window.SetResourceReference(WpfWindow.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
-            yes.Click += (sender, args) => { window.DialogResult = true; };
+            window.SetResourceReference(WpfWindow.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+
+            bool changing = false;
+            Action updateCount = () => {
+                int selected = all.Count(x => x.Change != null && x.Check.IsChecked == true);
+                int moves = all.Count(x => x.Move != null && x.Check.IsChecked == true);
+                yes.IsEnabled = selected + moves > 0;
+                yes.ToolTip = selected + " modifiche al codice, " + moves + " rinomine file selezionate";
+            };
+            foreach (var entry in all) {
+                var item = entry;
+                item.Check.Checked += (s, e) => {
+                    if (changing) return;
+                    changing = true;
+                    try { SetPreviewChildren(item, true); RefreshPreviewParents(item.Parent); }
+                    finally { changing = false; }
+                    item.Item.IsSelected = true;
+                    updateCount();
+                };
+                item.Check.Unchecked += (s, e) => {
+                    if (changing) return;
+                    changing = true;
+                    try { SetPreviewChildren(item, false); RefreshPreviewParents(item.Parent); }
+                    finally { changing = false; }
+                    item.Item.IsSelected = true;
+                    updateCount();
+                };
+            }
+            tree.SelectedItemChanged += (sender, args) => {
+                var current = args.NewValue as TreeViewItem;
+                if (current != null && current.Tag is PreviewEntry)
+                    RenderPreviewCode(viewer, (PreviewEntry)current.Tag);
+            };
+            window.ContentRendered += (sender, args) => {
+                viewer.ApplyTemplate();
+                root.Item.IsSelected = true;
+            };
+            updateCount();
+            yes.Click += (sender, args) => { if (yes.IsEnabled) window.DialogResult = true; };
             no.Click += (sender, args) => { window.DialogResult = false; };
-            return window.ShowDialog() == true;
+            if (window.ShowDialog() != true) return false;
+
+            // Cambia il piano SOLTANTO dopo Applica. Un Annulla non modifica nulla.
+            var includedEdits = new HashSet<Edit>(all.Where(x => x.Change != null && x.Check.IsChecked == true)
+                .Select(x => x.Change));
+            var includedMoves = new HashSet<FileRename>(all.Where(x => x.Move != null && x.Check.IsChecked == true)
+                .Select(x => x.Move));
+            plan.moves.RemoveAll(x => !includedMoves.Contains(x));
+            foreach (var target in plan.targets)
+                target.Edits.RemoveAll(x => !includedEdits.Contains(x));
+            plan.targets.RemoveAll(x => x.Edits.Count == 0 &&
+                !plan.moves.Any(move => PathCompare.Equals(move.From, x.Path)));
+            return plan.EditCount > 0 || plan.RenameCount > 0;
         }
 
         private static string Brief(string text)
@@ -750,7 +1143,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     } catch (Exception rollback) { rollbackErrors.Add(rollback.Message); }
                 }
                 foreach (var target in applied.AsEnumerable().Reverse()) {
-                    try { target.Buffer.Replace(new Span(0, target.Buffer.CurrentSnapshot.Length), target.Before); }
+                    try { target.Buffer.Replace(new Microsoft.VisualStudio.Text.Span(0, target.Buffer.CurrentSnapshot.Length), target.Before); }
                     catch (Exception rollback) { rollbackErrors.Add(rollback.Message); }
                 }
                 if (rollbackErrors.Count != 0)
