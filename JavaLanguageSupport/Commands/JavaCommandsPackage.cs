@@ -43,6 +43,9 @@ namespace JavaLanguageSupport.Commands
         private const int WorkspaceSymbolsId = 0x0117;
         private const int DocumentSymbolsId = 0x0116;
         private const int GoToDefinitionId = 0x0115;
+        private const int FindReferencesId = 0x0118;
+        private const int GoToImplementationId = 0x0119;
+        private const int GoToTypeDefinitionId = 0x011A;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
@@ -72,6 +75,9 @@ namespace JavaLanguageSupport.Commands
             AddJavaContextCommand(service, WorkspaceSymbolsId, JavaEditorOperation.GoToWorkspaceSymbol);
             AddJavaContextCommand(service, DocumentSymbolsId, JavaEditorOperation.GoToDocumentSymbol);
             AddJavaContextCommand(service, GoToDefinitionId, JavaEditorOperation.GoToDefinition);
+            AddJavaContextCommand(service, FindReferencesId, JavaEditorOperation.FindReferences);
+            AddJavaContextCommand(service, GoToImplementationId, JavaEditorOperation.GoToImplementation);
+            AddJavaContextCommand(service, GoToTypeDefinitionId, JavaEditorOperation.GoToTypeDefinition);
         }
 
         // Solo nell'editor Java e soltanto quando il click destro è su un simbolo.
@@ -121,13 +127,17 @@ namespace JavaLanguageSupport.Commands
                 ErrorHandler.ThrowOnFailure(output.CreatePane(ref paneId, "Java Build / Run / Test", 1, 1));
                 IVsOutputWindowPane pane;
                 ErrorHandler.ThrowOnFailure(output.GetPane(ref paneId, out pane));
-                if (operation != JavaEditorOperation.RenameSymbol) pane.Activate();
+                // Keep editor focus: references/navigation must capture the Java caret.
+                // The log remains accessible from View > Output.
                 Action<string> log = message => pane.OutputStringThreadSafe(message + Environment.NewLine);
                 try
                 {
                     var manager = await GetServiceAsync(typeof(SVsTextManager)) as IVsTextManager;
                     var model = await GetServiceAsync(typeof(SComponentModel)) as IComponentModel;
-                    if (operation == JavaEditorOperation.GoToDefinition)
+                    if (operation == JavaEditorOperation.GoToDefinition ||
+                        operation == JavaEditorOperation.FindReferences ||
+                        operation == JavaEditorOperation.GoToImplementation ||
+                        operation == JavaEditorOperation.GoToTypeDefinition)
                         JavaCtrlClickNavigation.PrepareContextCaret(manager, model);
                     if (operation == JavaEditorOperation.RenameSymbol)
                     {

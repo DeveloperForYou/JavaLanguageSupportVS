@@ -21,7 +21,9 @@ namespace JavaLanguageSupport.LanguageServer
 
         public bool CanHandle(string methodName)
         {
-            return methodName == "initialize"
+            return methodName == "$/progress"
+                || methodName == "language/status"
+                || methodName == "initialize"
                 || methodName == "workspace/executeCommand"
                 || methodName == "textDocument/hover"
                 || methodName == "textDocument/completion"
@@ -76,6 +78,12 @@ namespace JavaLanguageSupport.LanguageServer
         public async Task HandleNotificationAsync(string methodName, JToken methodParam,
             Func<JToken, Task> sendNotification)
         {
+            // Observational only. Do not suppress or mutate server messages.
+            if (methodName == "$/progress" || methodName == "language/status")
+            {
+                try { JavaWorkspaceActivity.Observe(methodName, methodParam); }
+                catch (Exception) { /* A status signal must never break LSP. */ }
+            }
             await sendNotification(methodParam);
         }
 

@@ -197,6 +197,7 @@ namespace JavaLanguageSupport.LanguageServer
                 result.AppendLine("Aprire una CARTELLA Java con File > Apri > Cartella, poi un file .java.");
                 result.AppendLine("La sola colorazione non conferma che LSP sia connesso.");
                 result.AppendLine("RPC per Quick Info e import: " + (JavaLspRpc.Connected ? "collegato" : "non collegato"));
+                result.AppendLine("Attivita' workspace JDT LS: " + JavaWorkspaceActivity.Summary);
                 result.AppendLine("--- Capabilities negoziate LSP ---");
                 result.AppendLine(initializationSummary);
                 result.AppendLine("--- Richieste LSP osservate (da apertura ultimo server) ---");

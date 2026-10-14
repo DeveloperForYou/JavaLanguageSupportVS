@@ -27,6 +27,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
         RenameSymbol,
         CodeActions,
         GoToDefinition,
+        GoToImplementation,
+        GoToTypeDefinition,
+        FindReferences,
         GoToDocumentSymbol,
         GoToWorkspaceSymbol
     }
@@ -75,7 +78,14 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 log("Selezione multipla o buffer di proiezione non supportato.");
                 return;
             }
+            if (operation == JavaEditorOperation.FindReferences)
+            {
+                await JavaReferenceSearch.RunAsync(uri, snapshot, caret, log, token);
+                return;
+            }
             if (operation == JavaEditorOperation.GoToDefinition ||
+                operation == JavaEditorOperation.GoToImplementation ||
+                operation == JavaEditorOperation.GoToTypeDefinition ||
                 operation == JavaEditorOperation.GoToDocumentSymbol ||
                 operation == JavaEditorOperation.GoToWorkspaceSymbol)
             {

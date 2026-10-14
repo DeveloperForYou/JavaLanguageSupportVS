@@ -107,12 +107,14 @@ namespace JavaLanguageSupport.LanguageServer
             if (stop != null)
                 await stop.InvokeAsync(this, EventArgs.Empty);
             JavaLspRpc.Detach();
+            JavaWorkspaceActivity.Stopped();
             JavaLanguageStatus.Stopped();
         }
 
         public Task OnServerInitializedAsync()
         {
             JavaLanguageStatus.Initialized();
+            JavaWorkspaceActivity.Initialized();
             return Task.CompletedTask;
         }
 
@@ -181,6 +183,7 @@ namespace JavaLanguageSupport.LanguageServer
                 "JavaLanguageSupportVS", "jdtls", Process.GetCurrentProcess().Id.ToString());
             Directory.CreateDirectory(dataFolder);
             JavaLanguageStatus.Starting(java, launcher, dataFolder);
+            JavaWorkspaceActivity.Starting();
 
             string args =
                 "-Declipse.application=org.eclipse.jdt.ls.core.id1 " +

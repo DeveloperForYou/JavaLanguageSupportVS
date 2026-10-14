@@ -60,6 +60,7 @@ namespace JavaLanguageSupport.Editor.Navigation
                 IWpfTextView view;
                 return contextView != null &&
                     contextView.TryGetTarget(out view) && view != null && !view.IsClosed &&
+                    (DateTime.UtcNow - contextTimestampUtc) < TimeSpan.FromSeconds(8) &&
                     contextOffset >= 0 && contextOffset < view.TextBuffer.CurrentSnapshot.Length &&
                     view.TextBuffer.ContentType.IsOfType("java") &&
                     IsIdentifier(view.TextBuffer.CurrentSnapshot[contextOffset]);
@@ -87,6 +88,9 @@ namespace JavaLanguageSupport.Editor.Navigation
             var snapshot = clicked.TextBuffer.CurrentSnapshot;
             if (contextOffset >= 0 && contextOffset < snapshot.Length)
                 clicked.Caret.MoveTo(new SnapshotPoint(snapshot, contextOffset));
+            // A context position is one-shot. Future keyboard/navigation commands
+            // must use the CURRENT caret, not a previous right click.
+            ClearContext();
         }
 
         private static bool IsIdentifier(char c)

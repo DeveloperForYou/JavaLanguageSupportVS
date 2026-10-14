@@ -34,6 +34,41 @@ namespace JavaLanguageSupport.Editor.Navigation
                         token).ConfigureAwait(false);
                     ReadLocations(targets, result, "Definizione");
                     break;
+                case JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToImplementation:
+                case JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToTypeDefinition:
+                    string method = operation == JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToImplementation
+                        ? "textDocument/implementation" : "textDocument/typeDefinition";
+                    result = await JavaLspRpc.RequestAsync(method,
+                        new { textDocument = new { uri = documentUri }, position = JavaLspRpc.Position(snapshot, caret) },
+                        token).ConfigureAwait(false);
+                    if (operation == JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToImplementation &&
+                        (result == null || result.Type == JTokenType.Null ||
+                         (result is JArray && !((JArray)result).Any()))) {
+                        // Force symbol resolution and allow JDT LS's index to settle.
+                        // This call has no side effects on user files.
+                        await JavaLspRpc.RequestAsync("textDocument/definition",
+                            new { textDocument = new { uri = documentUri },
+                                position = JavaLspRpc.Position(snapshot, caret) },
+                            token).ConfigureAwait(false);
+                        // If JDT LS has reported active indexing, wait briefly
+                        // off the UI thread instead of treating the first empty
+                        // result as a definitive "no implementations".
+                        await JavaWorkspaceActivity.WaitIfBusyAsync(2500, token)
+                            .ConfigureAwait(false);
+                        int[] waits = JavaWorkspaceActivity.ImplementationRetryDelays();
+                        foreach (int wait in waits) {
+                            token.ThrowIfCancellationRequested();
+                            await Task.Delay(wait, token).ConfigureAwait(false);
+                            result = await JavaLspRpc.RequestAsync("textDocument/implementation",
+                                new { textDocument = new { uri = documentUri },
+                                    position = JavaLspRpc.Position(snapshot, caret) },
+                                token).ConfigureAwait(false);
+                            if (result != null && result.Type != JTokenType.Null &&
+                                (!(result is JArray) || ((JArray)result).Count > 0)) break;
+                        }
+                    }
+                    ReadLocations(targets, result, "Destinazione");
+                    break;
                 case JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToDocumentSymbol:
                     result = await JavaLspRpc.RequestAsync("textDocument/documentSymbol",
                         new { textDocument = new { uri = documentUri } }, token).ConfigureAwait(false);
@@ -56,7 +91,7 @@ namespace JavaLanguageSupport.Editor.Navigation
             token.ThrowIfCancellationRequested();
             if (targets.Count == 0)
             {
-                log("JDT LS: nessun simbolo o posizione restituiti. Controlla l'indicizzazione Java.");
+                log("JDT LS: nessuna destinazione. " + JavaWorkspaceActivity.Summary);
                 return;
             }
             JavaSymbolDestination chosen = targets[0];
@@ -93,7 +128,18 @@ namespace JavaLanguageSupport.Editor.Navigation
             }
             string uri = (string)token["targetUri"] ?? (string)token["uri"];
             var range = token["targetSelectionRange"] ?? token["targetRange"] ?? token["range"];
-            Add(destinations, label, uri, range);
+            // Location/LocationLink have no symbol name. Use the Java source
+            // filename as the class/implementation name (e.g. UpperFormatter).
+            // This also works when JDT LS returns multiple implementations.
+            string display = label;
+            Uri parsed;
+            if (Uri.TryCreate(uri, UriKind.Absolute, out parsed))
+            {
+                string basename = Path.GetFileNameWithoutExtension(
+                    parsed.IsFile ? parsed.LocalPath : parsed.AbsolutePath);
+                if (!string.IsNullOrWhiteSpace(basename)) display = basename;
+            }
+            Add(destinations, display, uri, range);
         }
         private static void ReadDocumentSymbol(List<JavaSymbolDestination> destinations,
             JToken symbol, string uri, int depth)
@@ -195,7 +241,18 @@ namespace JavaLanguageSupport.Editor.Navigation
         internal string Uri;
         internal int Line;
         internal int Column;
-        public string Title => Name + "  (" + (Line + 1) + ")";
+        public string Title
+        {
+            get
+            {
+                string file = "";
+                Uri location;
+                if (System.Uri.TryCreate(this.Uri, UriKind.Absolute, out location))
+                    file = Path.GetFileName(location.IsFile ? location.LocalPath : location.AbsolutePath);
+                return Name + "    —    " + (string.IsNullOrEmpty(file) ? "Java" : file) +
+                    ":" + (Line + 1);
+            }
+        }
     }
 
     internal static class JavaNavigationDialog
@@ -203,40 +260,82 @@ namespace JavaLanguageSupport.Editor.Navigation
         internal static JavaSymbolDestination Choose(List<JavaSymbolDestination> all)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var list = new ListBox { MinWidth = 560, Height = 310, DisplayMemberPath = "Title" };
-            var filter = new TextBox { MinWidth = 560, Margin = new Thickness(0, 0, 0, 8) };
-            list.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
-            list.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
-            filter.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
-            filter.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+
+            var description = new TextBlock {
+                Text = "Seleziona una destinazione (" + all.Count + "):",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 5)
+            };
+            JavaNavigationWindowStyle.ThemeText(description);
+
+            var filter = new TextBox { Margin = new Thickness(0, 0, 0, 8),
+                Padding = new Thickness(5, 3, 5, 3) };
+            JavaNavigationWindowStyle.ThemeControl(filter);
+            var list = new ListBox { MinHeight = 120 };
+            JavaNavigationWindowStyle.SetupList(list);
+
             Action refresh = () =>
             {
-                string s = filter.Text ?? "";
-                list.ItemsSource = all.Where(x => x.Name.IndexOf(s,
-                    StringComparison.OrdinalIgnoreCase) >= 0).Take(400).ToList();
+                string query = filter.Text ?? "";
+                list.Items.Clear();
+                foreach (JavaSymbolDestination destination in all.Where(x =>
+                    x.Title.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0).Take(400))
+                {
+                    var row = new ListBoxItem { Tag = destination, Padding = new Thickness(6, 4, 6, 4) };
+                    row.Content = JavaNavigationWindowStyle.ListHeader(destination.Title);
+                    list.Items.Add(row);
+                }
                 list.SelectedIndex = list.Items.Count > 0 ? 0 : -1;
             };
-            filter.TextChanged += (s, e) => refresh();
+            filter.TextChanged += (sender, e) => refresh();
             refresh();
+
             var ok = new Button { Content = "Apri", MinWidth = 90, IsDefault = true,
-                Margin = new Thickness(5) };
+                Margin = new Thickness(5, 0, 0, 0), Padding = new Thickness(8, 4, 8, 4) };
             var cancel = new Button { Content = "Annulla", MinWidth = 90,
-                IsCancel = true, Margin = new Thickness(5) };
-            var row = new StackPanel { Orientation = Orientation.Horizontal,
+                IsCancel = true, Margin = new Thickness(8, 0, 0, 0),
+                Padding = new Thickness(8, 4, 8, 4) };
+            JavaNavigationWindowStyle.ThemeControl(ok);
+            JavaNavigationWindowStyle.ThemeControl(cancel);
+            var actions = new StackPanel { Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right };
-            row.Children.Add(ok); row.Children.Add(cancel);
-            var layout = new StackPanel { Margin = new Thickness(16) };
-            layout.Children.Add(filter); layout.Children.Add(list); layout.Children.Add(row);
-            var dialog = new DialogWindow { Title = "Navigazione simboli Java", Content = layout,
-                Width = 640, Height = 460, WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                ShowInTaskbar = false };
-            dialog.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.DialogBrushKey);
-            dialog.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.DialogTextBrushKey);
-            ok.Click += (s, e) => { dialog.DialogResult = true; dialog.Close(); };
-            list.MouseDoubleClick += (s, e) => { if (list.SelectedItem != null)
-                { dialog.DialogResult = true; dialog.Close(); } };
-            dialog.Loaded += (s, e) => filter.Focus();
-            return dialog.ShowModal() == true ? list.SelectedItem as JavaSymbolDestination : null;
+            actions.Children.Add(ok);
+            actions.Children.Add(cancel);
+
+            var grid = new Grid { Margin = new Thickness(12) };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.Children.Add(description);
+            Grid.SetRow(filter, 1); grid.Children.Add(filter);
+            Grid.SetRow(list, 2); grid.Children.Add(list);
+            actions.Margin = new Thickness(0, 10, 0, 0);
+            Grid.SetRow(actions, 3); grid.Children.Add(actions);
+
+            var dialog = new System.Windows.Window {
+                Title = "Navigazione simboli Java", Content = grid,
+                Width = 810, Height = 520, MinWidth = 570, MinHeight = 330,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                ResizeMode = ResizeMode.CanResize, ShowInTaskbar = false
+            };
+            JavaNavigationWindowStyle.SetupWindow(dialog);
+            Func<JavaSymbolDestination> selected = () =>
+            {
+                var row = list.SelectedItem as ListBoxItem;
+                return row == null ? null : row.Tag as JavaSymbolDestination;
+            };
+            ok.Click += (sender, e) =>
+            {
+                if (selected() != null) dialog.DialogResult = true;
+            };
+            cancel.Click += (sender, e) => dialog.DialogResult = false;
+            list.MouseDoubleClick += (sender, e) =>
+            {
+                if (selected() != null) dialog.DialogResult = true;
+            };
+            dialog.Loaded += (sender, e) => filter.Focus();
+            return dialog.ShowDialog() == true ? selected() : null;
         }
     }
 }

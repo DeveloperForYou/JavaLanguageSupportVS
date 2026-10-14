@@ -261,13 +261,20 @@ namespace JavaLanguageSupport.Editor.Refactoring
                         } finally {
                             renameGate.Release();
                         }
+                        JToken definition = await JavaLspRpc.RequestAsync(
+                             "textDocument/definition",
+                             new { textDocument = new { uri },
+                                 position = JavaLspRpc.Position(snapshot, caret) },
+                             CancellationToken.None).ConfigureAwait(false);
+                         string typeDeclarationFile = JavaProjectRenameEdits.TypeFileFromDefinition(
+                             definition, oldName);
                         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                         if (view.IsClosed || view.TextBuffer.CurrentSnapshot.Version.VersionNumber !=
                             snapshot.Version.VersionNumber)
                             throw new InvalidOperationException("Il documento e' cambiato: ripeti la rinomina.");
                         var plan = JavaProjectRenameEdits.Prepare(edit, uri, oldName, newName,
                             includeComments.IsChecked == true, includeStrings.IsChecked == true,
-                            manager, model, document.TextBuffer);
+                            manager, model, document.TextBuffer, start, typeDeclarationFile);
                         // Il conteggio definitivo proviene dal WorkspaceEdit che
                         // verra' applicato, non dalla risposta di references.
                         if (plan.EditCount == 0 && plan.RenameCount == 0)
@@ -415,6 +422,91 @@ namespace JavaLanguageSupport.Editor.Refactoring
         }
         private static readonly StringComparer PathCompare = StringComparer.OrdinalIgnoreCase;
 
+        // Resolve file:// class declarations even when the rename starts at a
+        // reference in another source. Never infer this solely from a matching name.
+        internal static string TypeFileFromDefinition(JToken result, string oldName)
+        {
+            if (result == null || result.Type == JTokenType.Null) return null;
+            IEnumerable<JToken> destinations = result is JArray
+                ? (IEnumerable<JToken>)((JArray)result).Children()
+                : new JToken[] { result };
+            foreach (JToken destination in destinations) {
+                string address = (string)destination["targetUri"] ?? (string)destination["uri"];
+                Uri uri;
+                if (!Uri.TryCreate(address, UriKind.Absolute, out uri) || !uri.IsFile)
+                    continue;
+                string path = Path.GetFullPath(uri.LocalPath);
+                if (!PathCompare.Equals(Path.GetFileName(path), oldName + ".java") ||
+                    !File.Exists(path)) continue;
+                var point = (destination["targetSelectionRange"] ?? destination["range"] ??
+                    destination["targetRange"])?["start"];
+                if (point == null) continue;
+                try {
+                    string code = File.ReadAllText(path);
+                    int row = (int?)point["line"] ?? -1;
+                    int column = (int?)point["character"] ?? -1;
+                    if (row < 0 || column < 0) continue;
+                    int start = 0;
+                    for (int i = 0; i < row; i++) {
+                        int newline = code.IndexOf('\n', start);
+                        if (newline < 0) { start = -1; break; }
+                        start = newline + 1;
+                    }
+                    if (start < 0 || start + column > code.Length) continue;
+                    int declaration = FindTopLevelTypeName(code, oldName);
+                    if (declaration >= 0 && start + column >= declaration &&
+                        start + column < declaration + oldName.Length)
+                        return path;
+                } catch (IOException) { }
+                  catch (UnauthorizedAccessException) { }
+            }
+            return null;
+        }
+
+        // Only a top-level Java type declaration qualifies for a matching file
+        // rename. Avoid type-like text in comments or string literals.
+        private static int FindTopLevelTypeName(string source, string typeName)
+        {
+            string pattern = @"\b(?:class|interface|enum|record)\s+(?<id>" +
+                Regex.Escape(typeName) + @")\b";
+            foreach (Match match in Regex.Matches(source, pattern)) {
+                int pos = match.Groups["id"].Index;
+                if (IsInJavaCode(source, pos) && IsTypeDeclaration(source, pos))
+                    return pos;
+            }
+            return -1;
+        }
+
+        private static bool IsInJavaCode(string text, int stop)
+        {
+            int state = 0; // code, line comment, block comment, string, char, text block
+            for (int i = 0; i < stop; i++) {
+                char c = text[i];
+                char next = i + 1 < stop ? text[i + 1] : '\0';
+                if (state == 0) {
+                    if (c == '/' && next == '/') { state = 1; i++; }
+                    else if (c == '/' && next == '*') { state = 2; i++; }
+                    else if (c == '\"') {
+                        if (i + 2 < stop && text[i + 1] == '\"' && text[i + 2] == '\"') {
+                            state = 5; i += 2;
+                        } else state = 3;
+                    } else if (c == '\'') state = 4;
+                } else if (state == 1) {
+                    if (c == '\r' || c == '\n') state = 0;
+                } else if (state == 2) {
+                    if (c == '*' && next == '/') { state = 0; i++; }
+                } else if (state == 5) {
+                    if (c == '\"' && i + 2 < stop && text[i + 1] == '\"' && text[i + 2] == '\"') {
+                        state = 0; i += 2;
+                    }
+                } else {
+                    if (c == '\\') i++;
+                    else if ((state == 3 && c == '\"') || (state == 4 && c == '\'')) state = 0;
+                }
+            }
+            return state == 0;
+        }
+
         // Conta esattamente le TextEdit restituite dalla stessa richiesta usata per
         // applicare la rinomina, invece delle Location di references (non equivalenti).
         internal static string DescribeRename(JToken response)
@@ -462,7 +554,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
 
         internal static RenamePlan Prepare(JToken response, string originUri, string oldName,
             string newName, bool comments, bool strings, IVsTextManager manager,
-            IComponentModel model, ITextBuffer originBuffer)
+            IComponentModel model, ITextBuffer originBuffer, int originSymbolStart,
+            string definitionTypeFile)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (!(response is JObject edit))
@@ -501,6 +594,28 @@ namespace JavaLanguageSupport.Editor.Refactoring
             else if (edit["changes"] is JObject changes)
                 foreach (var item in changes.Properties())
                     Add(groups, LocalJavaPath(item.Name), item.Value as JArray);
+
+            // Confirmed semantic class rename: class/interface declaration in the
+            // original editor, or a matching definition returned by JDT LS.
+            // A random identifier whose spelling matches Foo must NEVER rename Foo.java.
+            string classFile = null;
+            if (PathCompare.Equals(Path.GetFileName(origin), oldName + ".java") &&
+                FindTopLevelTypeName(originBuffer.CurrentSnapshot.GetText(), oldName) == originSymbolStart)
+                classFile = origin;
+            else if (!string.IsNullOrWhiteSpace(definitionTypeFile) &&
+                     PathCompare.Equals(Path.GetFileName(definitionTypeFile), oldName + ".java"))
+                classFile = Path.GetFullPath(definitionTypeFile);
+            // Do not infer a move for a declaration outside this workspace
+            // (e.g. a JDK cache or an external Maven dependency).
+            if (classFile != null) {
+                string rootPrefix = Path.GetFullPath(plan.Root)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                    Path.DirectorySeparatorChar;
+                if (!classFile.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                    classFile = null;
+            }
+            if (classFile != null && !groups.ContainsKey(classFile))
+                groups.Add(classFile, new List<JToken>());
 
             // Anche una rinomina che contiene soltanto renameFile deve aprire il
             // sorgente per aggiornare il percorso del documento in Visual Studio.
@@ -562,6 +677,19 @@ namespace JavaLanguageSupport.Editor.Refactoring
                         OldText = snapshot.GetText(from, to - from),
                         NewText = (string)r["newText"] ?? "", Category = "JDT LS" });
                 }
+                // Some JDT LS responses omit the declaration edit (e.g. rename
+                // requested from a reference outside the class). Apply the missing
+                // declaration only when the class has been verified semantically.
+                if (classFile != null && PathCompare.Equals(path, classFile)) {
+                    int declaration = FindTopLevelTypeName(target.Before, oldName);
+                    if (declaration < 0)
+                        throw new InvalidOperationException("Dichiarazione del tipo non trovata: " + path);
+                    if (!target.Edits.Any(x => x.Start < declaration + oldName.Length &&
+                                               x.End > declaration))
+                        target.Edits.Add(new Edit { Start = declaration,
+                            End = declaration + oldName.Length, OldText = oldName,
+                            NewText = newName, Category = "Dichiarazione tipo Java" });
+                }
                 if (comments || strings)
                     foreach (var candidate in FindTextualMatches(target.Before, oldName, newName,
                         comments, strings))
@@ -590,6 +718,10 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     requestedMoves.Add(new FileRename { From = target.Path,
                         To = Path.Combine(Path.GetDirectoryName(target.Path), newName + ".java") });
             }
+            if (classFile != null &&
+                !requestedMoves.Any(x => PathCompare.Equals(x.From, classFile)))
+                requestedMoves.Add(new FileRename { From = classFile,
+                    To = Path.Combine(Path.GetDirectoryName(classFile), newName + ".java") });
             var uniqueMoves = new HashSet<string>(PathCompare);
             foreach (var move in requestedMoves) {
                 if (!uniqueMoves.Add(move.From))
@@ -1089,6 +1221,38 @@ namespace JavaLanguageSupport.Editor.Refactoring
             return text.Length > 70 ? text.Substring(0, 70) + "…" : text;
         }
 
+        private static void RefreshExplorerFiles(IEnumerable<FileRename> moves,
+            Action<string> log)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            // Best-effort UI notification: a failure must not roll back an
+            // already successful rename or introduce a new data-loss path.
+            try
+            {
+                var changes = Package.GetGlobalService(typeof(SVsFileChangeEx))
+                    as IVsFileChangeEx;
+                if (changes == null)
+                {
+                    if (log != null) log("Explorer: servizio di notifica file non disponibile.");
+                    return;
+                }
+                foreach (var move in moves)
+                {
+                    if (!File.Exists(move.To) || File.Exists(move.From))
+                        continue;
+                    changes.SyncFile(move.From);
+                    changes.SyncFile(move.To);
+                    if (log != null)
+                        log("Explorer: aggiornamento richiesto per " +
+                            Path.GetFileName(move.From) + " -> " + Path.GetFileName(move.To));
+                }
+            }
+            catch (Exception ex)
+            {
+                if (log != null) log("Explorer: refresh non riuscito: " + ex.Message);
+            }
+        }
+
         internal static int Apply(RenamePlan plan, Action<string> log)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -1126,6 +1290,11 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     if (!PathCompare.Equals(target.Document.FilePath, move.To))
                         target.Document.Rename(move.To);
                 }
+                // File.Move + RDT.RenameDocument update disk and the open
+                // buffer; Open Folder / Solution Explorer may still be displaying
+                // the old item from its file-change cache. Force the shell's file
+                // watchers to reconcile both old and new monikers immediately.
+                RefreshExplorerFiles(plan.moves, log);
                 return plan.targets.Count;
             } catch (Exception ex) {
                 var rollbackErrors = new List<string>();

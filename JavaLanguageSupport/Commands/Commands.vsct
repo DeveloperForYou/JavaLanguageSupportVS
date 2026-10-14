@@ -50,7 +50,7 @@
         <Strings><ButtonText>Java: Azioni e refactoring</ButtonText></Strings>
       </Button>
       <Button guid="guidJavaToolsCmdSet" id="cmdGoToDefinition" priority="0x0a00" type="Button">
-        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
         <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings><ButtonText>Java: Vai alla definizione (JDK incluso)</ButtonText></Strings>
       </Button>
@@ -63,6 +63,21 @@
         <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
         <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings><ButtonText>Java: Cerca simbolo nel progetto</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdFindReferences" priority="0x0d00" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Trova tutti i riferimenti</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdGoToImplementation" priority="0x0e00" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Vai all'implementazione</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdGoToTypeDefinition" priority="0x0f00" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Vai alla definizione del tipo</ButtonText></Strings>
       </Button>
     </Buttons>
   </Commands>
@@ -83,6 +98,9 @@
       <IDSymbol name="cmdGoToDefinition" value="0x0115" />
       <IDSymbol name="cmdDocumentSymbols" value="0x0116" />
       <IDSymbol name="cmdWorkspaceSymbols" value="0x0117" />
+      <IDSymbol name="cmdFindReferences" value="0x0118" />
+      <IDSymbol name="cmdGoToImplementation" value="0x0119" />
+      <IDSymbol name="cmdGoToTypeDefinition" value="0x011A" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>
