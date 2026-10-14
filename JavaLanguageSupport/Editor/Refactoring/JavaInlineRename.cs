@@ -88,6 +88,20 @@ namespace JavaLanguageSupport.Editor.Refactoring
             var includeStrings = new CheckBox { Content = "Includi stringhe", IsChecked = false,
                 Margin = new Thickness(0, 3, 0, 0),
                 ToolTip = "Sostituzione testuale del nome intero nelle stringhe .java del progetto; verificare l'anteprima." };
+            // I CheckBox standard possono usare un testo nero anche con tema VS scuro.
+            // Imposta il pennello del tema sia sul controllo sia sulla sua etichetta.
+            includeComments.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            includeStrings.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            var commentsLabel = new TextBlock { Text = "Includi commenti" };
+            var stringsLabel = new TextBlock { Text = "Includi stringhe" };
+            commentsLabel.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            stringsLabel.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            includeComments.Content = commentsLabel;
+            includeStrings.Content = stringsLabel;
             var hint = new TextBlock { Text = "INVIO per rinominare · MAIUSC+INVIO per l'anteprima · ESC per annullare",
                 Margin = new Thickness(0, 6, 0, 0), FontStyle = FontStyles.Italic,
                 FontSize = 11, TextWrapping = TextWrapping.Wrap };
@@ -292,13 +306,36 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     }
                 }).FileAndForget("JavaLanguageSupport/InlineRename");
             };
+            // Rileva MAIUSC anche quando il tasto modificatore non compare
+            // in Keyboard.Modifiers nel contesto modale di Visual Studio.
+            // Tratta Invio e Maiusc+Invio prima dei controlli WPF interni.
             window.PreviewKeyDown += (sender, e) => {
-                if (e.Key == Key.Escape) { e.Handled = true; cancel(); }
-                else if (e.Key == Key.Enter || e.Key == Key.Return) {
+                Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (key == Key.Escape) {
                     e.Handled = true;
-                    commit((Keyboard.Modifiers & ModifierKeys.Shift) != 0);
+                    cancel();
+                } else if (key == Key.Enter || key == Key.Return) {
+                    bool previewRequested =
+                        (e.KeyboardDevice != null &&
+                            (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0) ||
+                        (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ||
+                        Keyboard.IsKeyDown(Key.LeftShift) ||
+                        Keyboard.IsKeyDown(Key.RightShift);
+                    e.Handled = true;
+                    commit(previewRequested);
                 }
             };
+            // Scorciatoia WPF esplicita di riserva, valida anche se la TextBox
+            // consuma l'evento prima della normale gestione dei comandi.
+            var previewCommand = new RoutedCommand();
+            window.CommandBindings.Add(new CommandBinding(previewCommand, (sender, e) => {
+                e.Handled = true;
+                commit(true);
+            }));
+            input.InputBindings.Add(new KeyBinding(previewCommand,
+                new KeyGesture(Key.Return, ModifierKeys.Shift)));
+            window.InputBindings.Add(new KeyBinding(previewCommand,
+                new KeyGesture(Key.Return, ModifierKeys.Shift)));
             window.ContentRendered += (sender, args) => {
                 window.Activate();
                 FocusManager.SetFocusedElement(window, input);
@@ -632,10 +669,20 @@ namespace JavaLanguageSupport.Editor.Refactoring
             var content = new DockPanel { Margin = new Thickness(9) };
             DockPanel.SetDock(commands, Dock.Bottom);
             content.Children.Add(commands); content.Children.Add(viewer);
-            var window = new WpfWindow { Title = "Anteprima rinomina Java", Owner = owner,
+            var window = new WpfWindow { Title = "Anteprima rinomina Java",
                 Width = 820, Height = 520, MinWidth = 500, MinHeight = 250,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = content,
                 ShowInTaskbar = false };
+            // La finestra di rinomina e' gia' chiusa. Associa l'anteprima all'IDE
+            // anche quando la finestra principale non e' una Window WPF.
+            if (owner != null && owner.IsVisible) window.Owner = owner;
+            else {
+                var shell = Package.GetGlobalService(typeof(SVsUIShell)) as IVsUIShell;
+                IntPtr hwnd;
+                if (shell != null && shell.GetDialogOwnerHwnd(out hwnd) >= 0 && hwnd != IntPtr.Zero)
+                    new WindowInteropHelper(window).Owner = hwnd;
+                else window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            }
             window.SetResourceReference(WpfWindow.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
             yes.Click += (sender, args) => { window.DialogResult = true; };
             no.Click += (sender, args) => { window.DialogResult = false; };
