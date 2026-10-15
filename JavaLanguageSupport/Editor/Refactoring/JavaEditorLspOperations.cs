@@ -30,6 +30,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
         GoToImplementation,
         GoToTypeDefinition,
         FindReferences,
+        PeekDefinition,
+        CallHierarchy,
+        TypeHierarchy,
         GoToDocumentSymbol,
         GoToWorkspaceSymbol
     }
@@ -76,6 +79,13 @@ namespace JavaLanguageSupport.Editor.Refactoring
             if (selected.Snapshot != snapshot || selected.Snapshot.TextBuffer != buffer)
             {
                 log("Selezione multipla o buffer di proiezione non supportato.");
+                return;
+            }
+            if (operation == JavaEditorOperation.PeekDefinition ||
+                operation == JavaEditorOperation.CallHierarchy ||
+                operation == JavaEditorOperation.TypeHierarchy)
+            {
+                await JavaAdvancedNavigation.RunAsync(operation, uri, snapshot, caret, log, token);
                 return;
             }
             if (operation == JavaEditorOperation.FindReferences)
@@ -283,9 +293,12 @@ namespace JavaLanguageSupport.Editor.Refactoring
             var input = new TextBox { MinWidth = 320, Margin = new Thickness(0, 10, 0, 14) };
             input.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
             input.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            var promptLabel = new TextBlock { Text = prompt };
+            promptLabel.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
             var win = CreateWindow(title, new StackPanel
             {
-                Children = { new TextBlock { Text = prompt }, input }
+                Children = { promptLabel, input }
             }, out Button ok);
             ok.Click += (s, e) => { win.DialogResult = true; win.Close(); };
             win.Loaded += (s, e) => input.Focus();
@@ -303,6 +316,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }).ToList();
             box.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
             box.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            box.SetResourceReference(Control.BorderBrushProperty, EnvironmentColors.ToolWindowBorderBrushKey);
             box.ItemsSource = entries;
             if (entries.Count > 0) box.SelectedIndex = 0;
             var win = CreateWindow("Java: azioni e refactoring", box, out Button ok);
@@ -316,6 +330,24 @@ namespace JavaLanguageSupport.Editor.Refactoring
             public JObject Action { get; set; }
         }
 
+        // Match the Visual Studio tool-window palette rather than the Windows
+        // default DialogBrush (which stays light in some VS dark-theme setups).
+        private static void ThemeDialogButton(Button button)
+        {
+            button.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            button.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            button.SetResourceReference(Control.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+        }
+
+        // Windows 10/11: request a dark native title bar when Visual Studio uses
+        // a dark theme. Failure is harmless and does not affect WPF brushes.
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll", PreserveSig = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute,
+            ref int value, int size);
+
         private static DialogWindow CreateWindow(string title, UIElement body, out Button ok)
         {
             var buttons = new StackPanel { Orientation = Orientation.Horizontal,
@@ -323,17 +355,40 @@ namespace JavaLanguageSupport.Editor.Refactoring
             ok = new Button { Content = "Applica", MinWidth = 90, Margin = new Thickness(5) };
             var cancel = new Button { Content = "Annulla", MinWidth = 90, Margin = new Thickness(5),
                 IsCancel = true };
+            ThemeDialogButton(ok);
+            ThemeDialogButton(cancel);
             buttons.Children.Add(ok);
             buttons.Children.Add(cancel);
             var layout = new StackPanel { Margin = new Thickness(16) };
+            layout.SetResourceReference(Panel.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
             layout.Children.Add(body);
             layout.Children.Add(buttons);
             var win = new DialogWindow { Title = title, Content = layout, Width = 580,
                 SizeToContent = SizeToContent.Height, MaxHeight = 450,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
                 ResizeMode = ResizeMode.CanResize, ShowInTaskbar = false };
-            win.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.DialogBrushKey);
-            win.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.DialogTextBrushKey);
+            // DynamicResource references follow Visual Studio theme changes.
+            win.SetResourceReference(System.Windows.Window.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            win.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            win.SetResourceReference(Control.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            win.SourceInitialized += (sender, args) =>
+            {
+                try
+                {
+                    var background = VSColorTheme.GetThemedColor(
+                        EnvironmentColors.ToolWindowBackgroundColorKey);
+                    int luminance = background.R * 299 + background.G * 587 + background.B * 114;
+                    int dark = luminance < 128000 ? 1 : 0;
+                    IntPtr handle = new System.Windows.Interop.WindowInteropHelper(win).Handle;
+                    if (handle != IntPtr.Zero)
+                        DwmSetWindowAttribute(handle, 20, ref dark, sizeof(int));
+                }
+                catch (Exception) { /* Native title bar styling is optional. */ }
+            };
             return win;
         }
     }

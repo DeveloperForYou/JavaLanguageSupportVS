@@ -180,7 +180,7 @@ namespace JavaLanguageSupport.Editor.Navigation
                 Line = Math.Max(0, line), Column = Math.Max(0, column) });
         }
 
-        private static async Task<string> ResolvePathAsync(string address, Action<string> log,
+        internal static async Task<string> ResolvePathAsync(string address, Action<string> log,
             CancellationToken token)
         {
             Uri uri;

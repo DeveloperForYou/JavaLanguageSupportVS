@@ -42,10 +42,10 @@ namespace JavaLanguageSupport.Commands
         private const int CodeActionsId = 0x0114;
         private const int WorkspaceSymbolsId = 0x0117;
         private const int DocumentSymbolsId = 0x0116;
-        private const int GoToDefinitionId = 0x0115;
-        private const int FindReferencesId = 0x0118;
-        private const int GoToImplementationId = 0x0119;
         private const int GoToTypeDefinitionId = 0x011A;
+        private const int PeekDefinitionId = 0x011B;
+        private const int CallHierarchyId = 0x011C;
+        private const int TypeHierarchyId = 0x011D;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
@@ -74,10 +74,10 @@ namespace JavaLanguageSupport.Commands
                 new CommandID(CommandSet, CodeActionsId)));
             AddJavaContextCommand(service, WorkspaceSymbolsId, JavaEditorOperation.GoToWorkspaceSymbol);
             AddJavaContextCommand(service, DocumentSymbolsId, JavaEditorOperation.GoToDocumentSymbol);
-            AddJavaContextCommand(service, GoToDefinitionId, JavaEditorOperation.GoToDefinition);
-            AddJavaContextCommand(service, FindReferencesId, JavaEditorOperation.FindReferences);
-            AddJavaContextCommand(service, GoToImplementationId, JavaEditorOperation.GoToImplementation);
             AddJavaContextCommand(service, GoToTypeDefinitionId, JavaEditorOperation.GoToTypeDefinition);
+            AddJavaContextCommand(service, PeekDefinitionId, JavaEditorOperation.PeekDefinition);
+            AddJavaContextCommand(service, CallHierarchyId, JavaEditorOperation.CallHierarchy);
+            AddJavaContextCommand(service, TypeHierarchyId, JavaEditorOperation.TypeHierarchy);
         }
 
         // Solo nell'editor Java e soltanto quando il click destro è su un simbolo.
@@ -137,7 +137,10 @@ namespace JavaLanguageSupport.Commands
                     if (operation == JavaEditorOperation.GoToDefinition ||
                         operation == JavaEditorOperation.FindReferences ||
                         operation == JavaEditorOperation.GoToImplementation ||
-                        operation == JavaEditorOperation.GoToTypeDefinition)
+                        operation == JavaEditorOperation.GoToTypeDefinition ||
+                        operation == JavaEditorOperation.PeekDefinition ||
+                        operation == JavaEditorOperation.CallHierarchy ||
+                        operation == JavaEditorOperation.TypeHierarchy)
                         JavaCtrlClickNavigation.PrepareContextCaret(manager, model);
                     if (operation == JavaEditorOperation.RenameSymbol)
                     {

@@ -49,11 +49,6 @@
         <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
         <Strings><ButtonText>Java: Azioni e refactoring</ButtonText></Strings>
       </Button>
-      <Button guid="guidJavaToolsCmdSet" id="cmdGoToDefinition" priority="0x0a00" type="Button">
-        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
-        <CommandFlag>DynamicVisibility</CommandFlag>
-        <Strings><ButtonText>Java: Vai alla definizione (JDK incluso)</ButtonText></Strings>
-      </Button>
       <Button guid="guidJavaToolsCmdSet" id="cmdDocumentSymbols" priority="0x0b00" type="Button">
         <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
         <CommandFlag>DynamicVisibility</CommandFlag>
@@ -64,20 +59,25 @@
         <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings><ButtonText>Java: Cerca simbolo nel progetto</ButtonText></Strings>
       </Button>
-      <Button guid="guidJavaToolsCmdSet" id="cmdFindReferences" priority="0x0d00" type="Button">
-        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
-        <CommandFlag>DynamicVisibility</CommandFlag>
-        <Strings><ButtonText>Java: Trova tutti i riferimenti</ButtonText></Strings>
-      </Button>
-      <Button guid="guidJavaToolsCmdSet" id="cmdGoToImplementation" priority="0x0e00" type="Button">
-        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
-        <CommandFlag>DynamicVisibility</CommandFlag>
-        <Strings><ButtonText>Java: Vai all'implementazione</ButtonText></Strings>
-      </Button>
       <Button guid="guidJavaToolsCmdSet" id="cmdGoToTypeDefinition" priority="0x0f00" type="Button">
         <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
         <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings><ButtonText>Java: Vai alla definizione del tipo</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdPeekDefinition" priority="0x1000" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Anteprima definizione</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdCallHierarchy" priority="0x1100" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Gerarchia chiamate</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdTypeHierarchy" priority="0x1200" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Gerarchia tipi</ButtonText></Strings>
       </Button>
     </Buttons>
   </Commands>
@@ -95,12 +95,12 @@
       <IDSymbol name="cmdOrganizeImports" value="0x0112" />
       <IDSymbol name="cmdRename" value="0x0113" />
       <IDSymbol name="cmdCodeActions" value="0x0114" />
-      <IDSymbol name="cmdGoToDefinition" value="0x0115" />
       <IDSymbol name="cmdDocumentSymbols" value="0x0116" />
       <IDSymbol name="cmdWorkspaceSymbols" value="0x0117" />
-      <IDSymbol name="cmdFindReferences" value="0x0118" />
-      <IDSymbol name="cmdGoToImplementation" value="0x0119" />
       <IDSymbol name="cmdGoToTypeDefinition" value="0x011A" />
+      <IDSymbol name="cmdPeekDefinition" value="0x011B" />
+      <IDSymbol name="cmdCallHierarchy" value="0x011C" />
+      <IDSymbol name="cmdTypeHierarchy" value="0x011D" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>
