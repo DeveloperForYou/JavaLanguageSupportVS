@@ -44,42 +44,72 @@ namespace JavaLanguageSupport.Editor.Intelligence
         }
 
         protected override string MethodName => "textDocument/semanticTokens/full";
-        protected override bool Allowed => base.Allowed && JavaSemanticLegend.Available &&
-            FeatureEnabled("disable-semantic-tags.flag");
+        // Even if JDT LS does not advertise semanticTokens, Java identifiers
+        // should retain useful, readable colors via the lexical fallback.
+        protected override bool Allowed => FeatureEnabled("disable-semantic-tags.flag");
 
         protected override async Task<List<ITagSpan<IClassificationTag>>> FetchAsync(
             string uri, ITextSnapshot snapshot, int start, int end, CancellationToken token)
         {
             var tags = new List<ITagSpan<IClassificationTag>>();
             if (snapshot.Length > 1024 * 1024 || classifications == null) return tags;
-            JToken response = await JavaLspRpc.RequestAsync(MethodName,
-                new { textDocument = new { uri } }, token);
-            var data = response == null ? null : response["data"] as JArray;
-            if (data == null) return tags;
-
-            int line = 0, col = 0;
-            int count = Math.Min(data.Count / 5, 25000);
-            for (int i = 0; i < count; i++)
+            var semanticPositions = new HashSet<int>();
+            if (JavaLspRpc.Connected && JavaSemanticLegend.Available)
             {
-                int j = i * 5;
-                int lineDelta = (int)data[j];
-                int charDelta = (int)data[j + 1];
-                int length = (int)data[j + 2];
-                int typeIndex = (int)data[j + 3];
-                if (lineDelta < 0 || charDelta < 0 || length < 1) continue;
-                line += lineDelta;
-                col = lineDelta == 0 ? col + charDelta : charDelta;
-                if (line < 0 || line >= snapshot.LineCount) continue;
-                var textLine = snapshot.GetLineFromLineNumber(line);
-                if (col < 0 || col + length > textLine.Length) continue;
-                var kind = ClassificationFor(JavaSemanticLegend.TokenType(typeIndex));
-                if (kind == null) continue;
-                IClassificationType type = classifications.GetClassificationType(kind);
-                if (type == null) continue;
-                var span = new SnapshotSpan(snapshot, textLine.Start.Position + col, length);
-                tags.Add(new TagSpan<IClassificationTag>(span, new ClassificationTag(type)));
+                JToken response = await JavaLspRpc.RequestAsync(MethodName,
+                    new { textDocument = new { uri } }, token);
+                var data = response == null ? null : response["data"] as JArray;
+                if (data != null)
+                {
+                    int line = 0, col = 0;
+                    int count = Math.Min(data.Count / 5, 25000);
+                    for (int i = 0; i < count; i++)
+                    {
+                        int j = i * 5;
+                        int lineDelta = (int)data[j];
+                        int charDelta = (int)data[j + 1];
+                        int length = (int)data[j + 2];
+                        int typeIndex = (int)data[j + 3];
+                        if (lineDelta < 0 || charDelta < 0 || length < 1) continue;
+                        line += lineDelta;
+                        col = lineDelta == 0 ? col + charDelta : charDelta;
+                        if (line < 0 || line >= snapshot.LineCount) continue;
+                        var textLine = snapshot.GetLineFromLineNumber(line);
+                        if (col < 0 || col + length > textLine.Length) continue;
+                        string kind = ClassificationFor(JavaSemanticLegend.TokenType(typeIndex));
+                        if (kind == null) continue;
+                        // Package/import directives are handled by the lexical
+                        // scanner: JDT LS may label all segments as generic types,
+                        // hiding distinctions such as java.util.List.
+                        if (IsPackageOrImportLine(textLine)) continue;
+                        IClassificationType type = classifications.GetClassificationType(kind);
+                        if (type == null) continue;
+                        int offset = textLine.Start.Position + col;
+                        semanticPositions.Add(offset);
+                        var span = new SnapshotSpan(snapshot, offset, length);
+                        tags.Add(new TagSpan<IClassificationTag>(span, new ClassificationTag(type)));
+                    }
+                }
             }
+            // Semantic data can be incomplete or entirely unsupported by JDT LS.
+            // Fill uncovered identifiers without asking the server to reindex.
+            token.ThrowIfCancellationRequested();
+            tags.AddRange(JavaLexicalSemanticFallback.Scan(snapshot, classifications,
+                semanticPositions));
             return tags;
+        }
+
+        private static bool IsPackageOrImportLine(ITextSnapshotLine line)
+        {
+            string text = line.GetText().TrimStart();
+            return DirectivePrefix(text, "package") || DirectivePrefix(text, "import");
+        }
+
+        private static bool DirectivePrefix(string text, string keyword)
+        {
+            return text.Length > keyword.Length &&
+                text.StartsWith(keyword, StringComparison.Ordinal) &&
+                char.IsWhiteSpace(text[keyword.Length]);
         }
 
         private static string ClassificationFor(string tokenType)
@@ -91,10 +121,12 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 case "enum":
                 case "type":
                 case "typeParameter":
-                case "namespace":
-                case "annotation":
                 case "record":
                     return JavaSemanticClassificationNames.Type;
+                case "annotation":
+                    return JavaSemanticClassificationNames.Annotation;
+                case "namespace":
+                    return JavaSemanticClassificationNames.Namespace;
                 case "method":
                 case "annotationMember":
                 case "function":
@@ -104,11 +136,12 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 case "modifier":
                     return PredefinedClassificationTypeNames.Keyword;
                 case "parameter":
+                    return JavaSemanticClassificationNames.Parameter;
                 case "variable":
                 case "property":
                 case "enumMember":
                 case "recordComponent":
-                    return PredefinedClassificationTypeNames.Identifier;
+                    return JavaSemanticClassificationNames.Variable;
                 default:
                     return null;
             }
