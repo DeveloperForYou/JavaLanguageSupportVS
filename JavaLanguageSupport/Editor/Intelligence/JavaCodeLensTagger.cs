@@ -66,8 +66,9 @@ namespace JavaLanguageSupport.Editor.Intelligence
             if (snapshot.LineCount > 10000) return result;
             JToken response = await JavaLspRpc.RequestAsync(MethodName,
                 new { textDocument = new { uri } }, token);
-            var items = response as JArray;
-            if (items == null) return result;
+            // A null CodeLens response is allowed by LSP. The interface
+            // fallback must still execute when native lenses are unavailable.
+            var items = response as JArray ?? new JArray();
 
             var lines = new Dictionary<int, List<Link>>();
             int count = 0;
@@ -100,6 +101,12 @@ namespace JavaLanguageSupport.Editor.Intelligence
                     Offset = safeOffset, Uri = uri, Snapshot = snapshot });
             }
 
+            // JDT LS does not always return CodeLens commands on interface
+            // declarations, even when implementationCodeLens is enabled.
+            // Complete only the missing categories using semantic LSP queries.
+            // The existing CodeLens (when present) remains authoritative.
+            await AddMissingInterfaceLensesAsync(uri, snapshot, lines, token);
+
             foreach (var group in lines.OrderBy(x => x.Key))
             {
                 var links = group.Value.Take(4).ToList();
@@ -120,6 +127,104 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 result.Add(new TagSpan<InterLineAdornmentTag>(span, tag));
             }
             return result;
+        }
+
+        // This is deliberately limited to top-level interfaces. We ask JDT LS
+        // for the identifier range, not a regex-based guess about Java syntax.
+        // A short per-document limit bounds the extra indexing/search work.
+        private static async Task AddMissingInterfaceLensesAsync(
+            string uri, ITextSnapshot snapshot, Dictionary<int, List<Link>> lines,
+            CancellationToken token)
+        {
+            JArray symbols = await JavaLspRpc.RequestAsync("textDocument/documentSymbol",
+                new { textDocument = new { uri } }, token) as JArray;
+            if (symbols == null) return;
+
+            int checkedInterfaces = 0;
+            foreach (JObject symbol in symbols.OfType<JObject>())
+            {
+                token.ThrowIfCancellationRequested();
+                // LSP SymbolKind.Interface = 11. Method declarations are left to
+                // native JDT CodeLens; the fallback targets interface headings.
+                if ((int?)symbol["kind"] != 11) continue;
+                if (++checkedInterfaces > 12) break;
+
+                // DocumentSymbol.selectionRange denotes the identifier. A
+                // SymbolInformation location is supported as a fallback.
+                JToken position = symbol.SelectToken("selectionRange.start") ??
+                    symbol.SelectToken("location.range.start") ??
+                    symbol.SelectToken("range.start");
+                if (position == null) continue;
+                int line = (int?)position["line"] ?? -1;
+                int column = (int?)position["character"] ?? -1;
+                if (line < 0 || line >= snapshot.LineCount) continue;
+                ITextSnapshotLine row = snapshot.GetLineFromLineNumber(line);
+                if (column < 0 || column > row.Length) continue;
+
+                List<Link> existing;
+                if (!lines.TryGetValue(line, out existing))
+                    lines[line] = existing = new List<Link>();
+                bool needReferences = !existing.Any(x => x.Kind == "references");
+                bool needImplementations = !existing.Any(x => x.Kind == "implementations");
+                if (!needReferences && !needImplementations) continue;
+
+                int offset = row.Start.Position + column;
+                var requestPosition = new { line, character = column };
+                // Send independent searches together; only the LSP server does
+                // symbol resolution, and this code never scans the filesystem.
+                Task<JToken> referencesTask = needReferences
+                    ? JavaLspRpc.RequestAsync("textDocument/references",
+                        new { textDocument = new { uri }, position = requestPosition,
+                              context = new { includeDeclaration = false } }, token)
+                    : Task.FromResult<JToken>(null);
+                Task<JToken> implementationsTask = needImplementations
+                    ? JavaLspRpc.RequestAsync("textDocument/implementation",
+                        new { textDocument = new { uri }, position = requestPosition }, token)
+                    : Task.FromResult<JToken>(null);
+                await Task.WhenAll(referencesTask, implementationsTask);
+                if (needReferences)
+                {
+                    int? count = CountLocations(referencesTask.Result);
+                    if (count.HasValue)
+                        existing.Add(new Link {
+                            Title = count.Value + (count.Value == 1 ? " riferimento" : " riferimenti"),
+                            Kind = "references", Offset = offset,
+                            Uri = uri, Snapshot = snapshot });
+                }
+                if (needImplementations)
+                {
+                    int? count = CountLocations(implementationsTask.Result);
+                    if (count.HasValue)
+                        existing.Add(new Link {
+                            Title = count.Value + (count.Value == 1 ? " implementazione" : " implementazioni"),
+                            Kind = "implementations", Offset = offset,
+                            Uri = uri, Snapshot = snapshot });
+                }
+            }
+        }
+
+        private static int? CountLocations(JToken response)
+        {
+            if (response == null || response.Type == JTokenType.Null) return null;
+            JArray array = response as JArray;
+            if (array == null)
+                return response is JObject ? (int?)1 : null;
+            // Location and LocationLink can both appear. Ignore duplicate
+            // locations, for example when the server reports one target twice.
+            var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (JObject location in array.OfType<JObject>())
+            {
+                string uri = (string)location["uri"] ?? (string)location["targetUri"];
+                JToken start = location.SelectToken("range.start") ??
+                    location.SelectToken("targetSelectionRange.start") ??
+                    location.SelectToken("targetRange.start");
+                if (string.IsNullOrEmpty(uri) || start == null) continue;
+                int line = (int?)start["line"] ?? -1;
+                int col = (int?)start["character"] ?? -1;
+                if (line >= 0 && col >= 0)
+                    unique.Add(uri + "|" + line + "|" + col);
+            }
+            return unique.Count;
         }
 
         private static string ActionKind(string title, string command)
