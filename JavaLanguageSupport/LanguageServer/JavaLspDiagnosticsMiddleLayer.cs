@@ -38,7 +38,8 @@ namespace JavaLanguageSupport.LanguageServer
                 || methodName == "textDocument/documentSymbol"
                 || methodName == "textDocument/semanticTokens/full"
                 || methodName == "textDocument/codeLens"
-                || methodName == "textDocument/inlayHint";
+                || methodName == "textDocument/inlayHint"
+                || methodName == "textDocument/publishDiagnostics";
         }
 
         private static async Task TryPrefetchCompletionDetailsAsync(JToken response)
@@ -84,6 +85,13 @@ namespace JavaLanguageSupport.LanguageServer
                 try { JavaWorkspaceActivity.Observe(methodName, methodParam); }
                 catch (Exception) { /* A status signal must never break LSP. */ }
             }
+            // Diagnostic observation is read-only: VS must receive the
+            // original publishDiagnostics notification unchanged.
+            if (methodName == "textDocument/publishDiagnostics")
+            {
+                try { JavaDiagnosticsMonitor.Observe(methodParam); }
+                catch (Exception) { /* Telemetry must not break diagnostics. */ }
+            }
             await sendNotification(methodParam);
         }
 
@@ -97,7 +105,39 @@ namespace JavaLanguageSupport.LanguageServer
                 JavaLanguageStatus.LspExecuteCommand(methodParam);
             try
             {
-                JToken response = await sendRequest(methodParam);
+                // The native VS Quick Actions handler may send an empty LSP
+                // CodeActionContext.diagnostics. JDT LS requires the concrete
+                // unresolved-type diagnostic to propose missing imports.
+                JToken request = methodParam;
+                if (methodName == "textDocument/codeAction")
+                {
+                    try
+                    {
+                        JObject original = methodParam as JObject;
+                        JObject context = original == null ? null : original["context"] as JObject;
+                        JArray provided = context == null ? null : context["diagnostics"] as JArray;
+                        JToken at = original == null ? null : original.SelectToken("range.start");
+                        string uri = original == null ? null :
+                            (string)original.SelectToken("textDocument.uri");
+                        if (context != null && (provided == null || provided.Count == 0) && at != null)
+                        {
+                            var diagnostics = JavaDiagnosticsMonitor.ForPosition(uri,
+                                (int?)at["line"] ?? -1, (int?)at["character"] ?? -1);
+                            if (diagnostics.Count != 0)
+                            {
+                                request = original.DeepClone();
+                                ((JObject)((JObject)request)["context"])["diagnostics"] = diagnostics;
+                            }
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // Never prevent native VS quick fixes if diagnostic
+                        // enrichment cannot be performed.
+                        request = methodParam;
+                    }
+                }
+                JToken response = await sendRequest(request);
                 // Le capabilities determinano se Visual Studio PUO' richiedere hover/resolve.
                 // Non modifichiamo nessun messaggio LSP.
                 if (methodName == "initialize")

@@ -149,6 +149,24 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 default: return;
             }
             log("Java LSP: " + method);
+            // Enrich custom Java quick actions with the actual JDT LS diagnostics.
+            // Leave Organize Imports unchanged and preserve other request fields.
+            if (operation == JavaEditorOperation.CodeActions)
+            {
+                var errorLine = snapshot.GetLineFromPosition(caret);
+                JArray currentProblems = JavaDiagnosticsMonitor.ForPosition(uri,
+                    errorLine.LineNumber, caret - errorLine.Start.Position);
+                if (currentProblems.Count > 0)
+                {
+                    JObject request = JObject.FromObject(args);
+                    JObject context = request["context"] as JObject;
+                    if (context != null)
+                    {
+                        context["diagnostics"] = currentProblems;
+                        args = request;
+                    }
+                }
+            }
             JToken response = await JavaLspRpc.RequestAsync(method, args, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             if (response == null || response.Type == JTokenType.Null)
@@ -202,6 +220,56 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 JavaLanguageStatus.LspFailure("Java editor/applyEdit", ex.Message);
                 log("Modifiche NON applicate: " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Apply an explicitly selected native LightBulb action through the same
+        /// single-document WorkspaceEdit path used by the Java action dialog.
+        /// No partial multi-file edits; nothing runs until the user selects it.
+        /// </summary>
+        internal static async Task ApplySuggestedCodeActionAsync(JObject original,
+            ITextBuffer buffer, ITextSnapshot snapshot, string uri,
+            Action<string> log, CancellationToken token)
+        {
+            if (original == null || buffer == null || snapshot == null)
+                throw new InvalidOperationException("Azione Java senza documento.");
+            var choice = (JObject)original.DeepClone();
+            if (choice["edit"] == null && choice["data"] != null)
+            {
+                JToken resolved = await JavaLspRpc.RequestAsync("codeAction/resolve",
+                    choice.DeepClone(), token).ConfigureAwait(false);
+                if (resolved is JObject) choice = (JObject)resolved;
+            }
+            JToken edit = choice["edit"];
+            if (edit == null || edit.Type == JTokenType.Null)
+            {
+                var command = choice["command"];
+                string commandName = (string)(command is JObject ? command["command"] : command);
+                if (commandName == "java.apply.workspaceEdit")
+                {
+                    JArray args = (command is JObject ? command["arguments"] : choice["arguments"])
+                        as JArray;
+                    edit = args == null || args.Count == 0 ? null : args[0];
+                }
+                else if (!string.IsNullOrWhiteSpace(commandName))
+                {
+                    // Command-only JDT actions are explicitly invoked by the user.
+                    // JDT LS handles supported commands; this path does not guess
+                    // or construct arbitrary edits on the client.
+                    var arguments = (command is JObject ? command["arguments"] :
+                        choice["arguments"]) as JArray;
+                    await JavaLspRpc.RequestAsync("workspace/executeCommand",
+                        new { command = commandName, arguments = arguments ?? new JArray() },
+                        token).ConfigureAwait(false);
+                    return;
+                }
+            }
+            if (edit == null || edit.Type == JTokenType.Null)
+                throw new InvalidOperationException("L'azione selezionata non contiene modifiche applicabili.");
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+            if (!ReferenceEquals(buffer.CurrentSnapshot, snapshot))
+                throw new InvalidOperationException("Il file Java e' cambiato. Richiama Ctrl + . e riprova.");
+            ApplySingleDocumentEdit(buffer, snapshot, uri, edit, log);
         }
 
         private static bool IsOrganizeImports(JObject action)

@@ -52,6 +52,39 @@ namespace JavaLanguageSupport.Editor.Intelligence
         protected virtual bool Allowed => JavaLspRpc.Connected;
         protected virtual bool NeedsVisibleRange => false;
 
+        // CodeLens needs slower refresh than colors/inlay hints: updating its
+        // inter-line adornments on every keystroke moves the editor vertically.
+        protected virtual int RefreshDelayMilliseconds => 500;
+        protected virtual bool PreserveAdornmentsOnEdit => false;
+        protected virtual bool RefreshOnWorkspaceIdle => true;
+        protected bool HasPublishedTags => current.Count != 0;
+
+        // Only classification taggers opt in. Inlay Hints and CodeLens must
+        // continue discarding stale adornments immediately after an edit.
+        protected virtual List<ITagSpan<TTag>> BuildImmediateTags(ITextSnapshot snapshot)
+        {
+            return null;
+        }
+
+        // Called only by providers that publish lexical tags (the Java semantic
+        // tagger) after their derived fields have been initialized. This avoids
+        // showing plain white identifiers when JDT LS is still preparing data.
+        protected void PublishInitialTags()
+        {
+            if (disposed || View.IsClosed) return;
+            try
+            {
+                var snapshot = View.TextBuffer.CurrentSnapshot;
+                List<ITagSpan<TTag>> tags = BuildImmediateTags(snapshot);
+                if (tags != null) Publish(snapshot, tags);
+            }
+            catch (Exception ex)
+            {
+                JavaLanguageStatus.LspFailure("Java editor/initialColors",
+                    ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
         protected bool FeatureEnabled(string disableFlag)
         {
             string path = Path.Combine(Environment.GetFolderPath(
@@ -60,7 +93,10 @@ namespace JavaLanguageSupport.Editor.Intelligence
         }
 
         private void OnLegendChanged(object sender, EventArgs e) { InvalidateOnDispatcher(); }
-        private void OnIndexIdle(object sender, EventArgs e) { InvalidateOnDispatcher(); }
+        private void OnIndexIdle(object sender, EventArgs e)
+        {
+            if (RefreshOnWorkspaceIdle) InvalidateOnDispatcher();
+        }
         private void OnLayout(object sender, TextViewLayoutChangedEventArgs e)
         {
             if (!NeedsVisibleRange) return;
@@ -93,11 +129,43 @@ namespace JavaLanguageSupport.Editor.Intelligence
         private void Schedule()
         {
             if (disposed || View.IsClosed) return;
-            // Remove stale adornments immediately when a buffer snapshot changes.
-            if (!ReferenceEquals(taggedSnapshot, View.TextBuffer.CurrentSnapshot))
-                Publish(View.TextBuffer.CurrentSnapshot, new List<ITagSpan<TTag>>());
+            // Color classification must not disappear during the LSP debounce.
+            // A semantic tagger can publish inexpensive local lexical tags at
+            // once. Other taggers still clear obsolete UI adornments as before.
+            ITextSnapshot nextSnapshot = View.TextBuffer.CurrentSnapshot;
+            if (!ReferenceEquals(taggedSnapshot, nextSnapshot))
+            {
+                List<ITagSpan<TTag>> immediate = null;
+                if (PreserveAdornmentsOnEdit && current.Count != 0)
+                {
+                    try
+                    {
+                        immediate = new List<ITagSpan<TTag>>(current.Count);
+                        foreach (ITagSpan<TTag> old in current)
+                        {
+                            // Track the declaration's location across versions,
+                            // preserving the same InterLineAdornmentTag and row.
+                            SnapshotSpan translated = old.Span.TranslateTo(nextSnapshot,
+                                SpanTrackingMode.EdgeExclusive);
+                            immediate.Add(new TagSpan<TTag>(translated, old.Tag));
+                        }
+                    }
+                    catch (ArgumentException) { immediate = null; }
+                }
+                if (immediate == null)
+                {
+                    try { immediate = BuildImmediateTags(nextSnapshot); }
+                    catch (Exception ex)
+                    {
+                        JavaLanguageStatus.LspFailure("Java editor/immediateTags",
+                            ex.GetType().Name + ": " + ex.Message);
+                    }
+                }
+                Publish(nextSnapshot, immediate ?? new List<ITagSpan<TTag>>());
+            }
             ++requestGeneration;
             if (active != null) active.Cancel();
+            timer.Interval = TimeSpan.FromMilliseconds(RefreshDelayMilliseconds);
             timer.Stop();
             timer.Start();
         }

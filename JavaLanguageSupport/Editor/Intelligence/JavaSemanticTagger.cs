@@ -41,6 +41,14 @@ namespace JavaLanguageSupport.Editor.Intelligence
             IClassificationTypeRegistryService registry) : base(view, documents)
         {
             classifications = registry;
+            // Base-class initialization schedules the LSP request, but that can
+            // take several seconds. Publish local Java colors on first opening.
+            PublishInitialTags();
+            if (classifications != null && classifications.GetClassificationType(
+                JavaSemanticClassificationNames.Method) == null)
+                System.Diagnostics.Trace.WriteLine(
+                    "[Java Semantic] ATTENZIONE: classificazione dei metodi non registrata. " +
+                    "Controllare MEF e JavaSemanticClassifications.cs.");
         }
 
         protected override string MethodName => "textDocument/semanticTokens/full";
@@ -48,11 +56,35 @@ namespace JavaLanguageSupport.Editor.Intelligence
         // should retain useful, readable colors via the lexical fallback.
         protected override bool Allowed => FeatureEnabled("disable-semantic-tags.flag");
 
+        // Refresh syntax colors on the editing thread without waiting
+        // for JDT LS. The full semantic response later replaces this provisional
+        // classification and remains authoritative for type/method resolution.
+        protected override List<ITagSpan<IClassificationTag>> BuildImmediateTags(
+            ITextSnapshot snapshot)
+        {
+            if (!Allowed || classifications == null) return null;
+            return JavaLexicalSemanticFallback.Scan(snapshot, classifications, null);
+        }
+
         protected override async Task<List<ITagSpan<IClassificationTag>>> FetchAsync(
             string uri, ITextSnapshot snapshot, int start, int end, CancellationToken token)
         {
             var tags = new List<ITagSpan<IClassificationTag>>();
             if (snapshot.Length > 1024 * 1024 || classifications == null) return tags;
+
+            // Start with complete local colorization; server tokens are a
+            // refinement, not a reason to discard local method-call colors.
+            List<ITagSpan<IClassificationTag>> lexical =
+                JavaLexicalSemanticFallback.Scan(snapshot, classifications, null);
+            var lexicalMethodStarts = new HashSet<int>();
+            foreach (ITagSpan<IClassificationTag> candidate in lexical)
+            {
+                if (candidate.Tag.ClassificationType != null &&
+                    string.Equals(candidate.Tag.ClassificationType.Classification,
+                        JavaSemanticClassificationNames.Method, StringComparison.Ordinal))
+                    lexicalMethodStarts.Add(candidate.Span.Start.Position);
+            }
+
             var semanticPositions = new HashSet<int>();
             if (JavaLspRpc.Connected && JavaSemanticLegend.Available)
             {
@@ -85,17 +117,27 @@ namespace JavaLanguageSupport.Editor.Intelligence
                         IClassificationType type = classifications.GetClassificationType(kind);
                         if (type == null) continue;
                         int offset = textLine.Start.Position + col;
+                        // On partially broken source, JDT LS sometimes reports
+                        // a generic identifier for an actual invocation. The
+                        // lexical scanner sees the following '(' reliably, even
+                        // when it is on a different line: preserve method color.
+                        if (lexicalMethodStarts.Contains(offset) &&
+                            !string.Equals(kind, JavaSemanticClassificationNames.Method,
+                                StringComparison.Ordinal))
+                            continue;
                         semanticPositions.Add(offset);
                         var span = new SnapshotSpan(snapshot, offset, length);
                         tags.Add(new TagSpan<IClassificationTag>(span, new ClassificationTag(type)));
                     }
                 }
             }
-            // Semantic data can be incomplete or entirely unsupported by JDT LS.
-            // Fill uncovered identifiers without asking the server to reindex.
+            // Preserve lexical tags for every location not classified by JDT
+            // LS. In particular, a resolved token never erases an unrelated
+            // method or lambda on the same line.
             token.ThrowIfCancellationRequested();
-            tags.AddRange(JavaLexicalSemanticFallback.Scan(snapshot, classifications,
-                semanticPositions));
+            foreach (ITagSpan<IClassificationTag> candidate in lexical)
+                if (!semanticPositions.Contains(candidate.Span.Start.Position))
+                    tags.Add(candidate);
             return tags;
         }
 

@@ -29,6 +29,23 @@ namespace JavaLanguageSupport.Editor.Intelligence
             internal char Value;
         }
 
+        private sealed class OpenBracket
+        {
+            internal int Start;
+            internal char Value;
+            internal int Level;
+        }
+
+        private static readonly string[] RainbowNames =
+        {
+            JavaSemanticClassificationNames.Rainbow1,
+            JavaSemanticClassificationNames.Rainbow2,
+            JavaSemanticClassificationNames.Rainbow3,
+            JavaSemanticClassificationNames.Rainbow4,
+            JavaSemanticClassificationNames.Rainbow5,
+            JavaSemanticClassificationNames.Rainbow6
+        };
+
         private static readonly HashSet<string> Keywords = new HashSet<string>(StringComparer.Ordinal)
         {
             "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
@@ -102,15 +119,62 @@ namespace JavaLanguageSupport.Editor.Intelligence
             // A second list avoids treating punctuation as the "previous word":
             // the existing lexical method/type heuristics remain unchanged.
             // ReadWords excludes comments, strings, chars and text blocks.
+            // Compute the nesting levels once per document (linear time).
+            // Both ends of a correctly paired bracket receive the same color.
+            // Unmatched brackets keep the standard customizable bracket color.
+            Dictionary<int, int> matchedLevels = FindMatchedBracketLevels(symbols);
             foreach (Symbol symbol in symbols)
             {
                 if (result.Count >= 60000) break;
-                string classification = IsBracket(symbol.Value)
-                    ? JavaSemanticClassificationNames.Bracket
-                    : JavaSemanticClassificationNames.Separator;
+                string classification;
+                if (IsBracket(symbol.Value))
+                {
+                    int level;
+                    classification = matchedLevels.TryGetValue(symbol.Start, out level)
+                        ? RainbowNames[level]
+                        : JavaSemanticClassificationNames.Bracket;
+                }
+                else
+                    classification = JavaSemanticClassificationNames.Separator;
                 AddTag(result, snapshot, cached, registry, classification, symbol.Start, 1);
             }
             return result;
+        }
+
+        private static Dictionary<int, int> FindMatchedBracketLevels(List<Symbol> symbols)
+        {
+            // Scanner has already excluded strings, text blocks, char literals
+            // and both line/block comments. Mixed (), [] and {} share one stack.
+            var matches = new Dictionary<int, int>();
+            var openings = new Stack<OpenBracket>();
+            foreach (Symbol symbol in symbols)
+            {
+                char value = symbol.Value;
+                if (value == '(' || value == '[' || value == '{')
+                {
+                    openings.Push(new OpenBracket {
+                        Start = symbol.Start,
+                        Value = value,
+                        Level = openings.Count % JavaSemanticClassificationNames.RainbowLevels
+                    });
+                }
+                else if ((value == ')' || value == ']' || value == '}') &&
+                    openings.Count != 0 && AreMatchingBrackets(openings.Peek().Value, value))
+                {
+                    OpenBracket opening = openings.Pop();
+                    matches[opening.Start] = opening.Level;
+                    matches[symbol.Start] = opening.Level;
+                }
+                // Never guess a pair for mismatched closing brackets.
+            }
+            return matches;
+        }
+
+        private static bool AreMatchingBrackets(char opening, char closing)
+        {
+            return (opening == '(' && closing == ')') ||
+                (opening == '[' && closing == ']') ||
+                (opening == '{' && closing == '}');
         }
 
         private static void AddTag(List<ITagSpan<IClassificationTag>> tags,

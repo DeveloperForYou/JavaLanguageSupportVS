@@ -57,6 +57,13 @@ namespace JavaLanguageSupport.Editor.Intelligence
             : base(view, documents) { }
 
         protected override string MethodName => "textDocument/codeLens";
+        // Keep already rendered CodeLens rows stable while editing. Refresh
+        // counters only after the user has stopped typing for 10 seconds.
+        protected override bool PreserveAdornmentsOnEdit => true;
+        protected override int RefreshDelayMilliseconds => HasPublishedTags ? 10000 : 800;
+        // Progress notifications from JDT LS may come in bursts; do not use
+        // each one to re-query references and implementations during typing.
+        protected override bool RefreshOnWorkspaceIdle => !HasPublishedTags;
         protected override bool Allowed => base.Allowed && FeatureEnabled("disable-codelens.flag");
 
         protected override async Task<List<ITagSpan<InterLineAdornmentTag>>> FetchAsync(
@@ -268,17 +275,30 @@ namespace JavaLanguageSupport.Editor.Intelligence
 
         private void Navigate(Link link)
         {
-            if (View.IsClosed || !ReferenceEquals(link.Snapshot, View.TextBuffer.CurrentSnapshot))
-                return;
+            if (View.IsClosed) return;
+            ITextSnapshot currentSnapshot = View.TextBuffer.CurrentSnapshot;
+            int currentOffset = link.Offset;
+            if (!ReferenceEquals(link.Snapshot, currentSnapshot))
+            {
+                // CodeLens stays visible across source edits. Rebase the
+                // original symbol position when its link is clicked.
+                try
+                {
+                    currentOffset = new SnapshotPoint(link.Snapshot, link.Offset)
+                        .TranslateTo(currentSnapshot, PointTrackingMode.Positive).Position;
+                }
+                catch (ArgumentException) { return; }
+            }
+            if (currentOffset < 0 || currentOffset >= currentSnapshot.Length) return;
             ThreadHelper.JoinableTaskFactory.RunAsync(async delegate
             {
                 if (link.Kind == "references")
-                    await JavaReferenceSearch.RunAsync(link.Uri, link.Snapshot, link.Offset,
+                    await JavaReferenceSearch.RunAsync(link.Uri, currentSnapshot, currentOffset,
                         message => System.Diagnostics.Trace.WriteLine("Java CodeLens: " + message),
                         CancellationToken.None);
                 else if (link.Kind == "implementations")
                     await JavaNavigation.ExecuteAsync(JavaEditorOperation.GoToImplementation,
-                        link.Uri, link.Snapshot, link.Offset,
+                        link.Uri, currentSnapshot, currentOffset,
                         message => System.Diagnostics.Trace.WriteLine("Java CodeLens: " + message),
                         CancellationToken.None);
             }).FileAndForget("JavaLanguageSupport/CodeLensNavigate");
