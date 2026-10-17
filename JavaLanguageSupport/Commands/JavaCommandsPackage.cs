@@ -40,8 +40,6 @@ namespace JavaLanguageSupport.Commands
         private const int OrganizeImportsId = 0x0112;
         private const int RenameId = 0x0113;
         private const int CodeActionsId = 0x0114;
-        private const int WorkspaceSymbolsId = 0x0117;
-        private const int DocumentSymbolsId = 0x0116;
         private const int GoToTypeDefinitionId = 0x011A;
         private const int PeekDefinitionId = 0x011B;
         private const int CallHierarchyId = 0x011C;
@@ -80,8 +78,6 @@ namespace JavaLanguageSupport.Commands
             AddJavaContextCommand(service, RenameId, JavaEditorOperation.RenameSymbol);
             service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.CodeActions),
                 new CommandID(CommandSet, CodeActionsId)));
-            AddJavaContextCommand(service, WorkspaceSymbolsId, JavaEditorOperation.GoToWorkspaceSymbol);
-            AddJavaContextCommand(service, DocumentSymbolsId, JavaEditorOperation.GoToDocumentSymbol);
             AddJavaContextCommand(service, GoToTypeDefinitionId, JavaEditorOperation.GoToTypeDefinition);
             AddJavaContextCommand(service, PeekDefinitionId, JavaEditorOperation.PeekDefinition);
             AddJavaContextCommand(service, CallHierarchyId, JavaEditorOperation.CallHierarchy);
