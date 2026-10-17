@@ -25,7 +25,11 @@ namespace JavaLanguageSupport.Editor.Navigation
         {
             if (operation == JavaEditorOperation.PeekDefinition)
             {
-                await JavaPeekDefinition.RunAsync(uri, snapshot, caret, log, token);
+                // Use Visual Studio's own inline Peek host (Alt+F12). Keep the
+                // previous WPF preview if the native Peek service is unavailable.
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+                if (!JavaNativePeek.TryTrigger(snapshot, caret, log))
+                    await JavaPeekDefinition.RunAsync(uri, snapshot, caret, log, token);
                 return;
             }
             if (operation == JavaEditorOperation.CallHierarchy)
