@@ -27,6 +27,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
         private ITextSnapshot taggedSnapshot;
         private bool disposed;
         private int requestGeneration;
+        private bool forceRefreshAfterStructuralEdit;
         private int lastStart = -1, lastEnd = -1, lastVersion = -1;
 
         protected JavaLspTaggerBase(IWpfTextView view, ITextDocumentFactoryService documents)
@@ -57,6 +58,33 @@ namespace JavaLanguageSupport.Editor.Intelligence
         protected virtual int RefreshDelayMilliseconds => 500;
         protected virtual bool PreserveAdornmentsOnEdit => false;
         protected virtual bool RefreshOnWorkspaceIdle => true;
+        // Inter-line CodeLens must not be shifted across a structural rewrite:
+        // moving a method can make an old counter point to a different symbol.
+        protected virtual bool IsStructuralEdit(TextContentChangedEventArgs change) => false;
+        protected virtual int StructuralRefreshDelayMilliseconds => RefreshDelayMilliseconds;
+
+        // Let derived inter-line taggers invalidate a marker when the edit
+        // changes its original declaration line, not just on bulk rewrites.
+        protected bool ChangeTouchesPublishedTagLine(TextContentChangedEventArgs change)
+        {
+            if (change == null || current.Count == 0) return false;
+            foreach (ITagSpan<TTag> tag in current)
+            {
+                SnapshotSpan anchor;
+                try
+                {
+                    anchor = ReferenceEquals(tag.Span.Snapshot, change.Before) ? tag.Span :
+                        tag.Span.TranslateTo(change.Before, SpanTrackingMode.EdgeExclusive);
+                }
+                catch (ArgumentException) { return true; }
+                var line = anchor.Start.GetContainingLine();
+                foreach (ITextChange edit in change.Changes)
+                    if (edit.OldPosition <= line.End.Position &&
+                        edit.OldPosition + edit.OldLength >= line.Start.Position)
+                        return true;
+            }
+            return false;
+        }
         protected bool HasPublishedTags => current.Count != 0;
 
         // Only classification taggers opt in. Inlay Hints and CodeLens must
@@ -108,6 +136,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
 
         private void OnChanged(object sender, TextContentChangedEventArgs e)
         {
+            if (IsStructuralEdit(e)) forceRefreshAfterStructuralEdit = true;
             ScheduleOnDispatcher();
         }
 
@@ -133,10 +162,12 @@ namespace JavaLanguageSupport.Editor.Intelligence
             // A semantic tagger can publish inexpensive local lexical tags at
             // once. Other taggers still clear obsolete UI adornments as before.
             ITextSnapshot nextSnapshot = View.TextBuffer.CurrentSnapshot;
+            bool rebuildPositions = forceRefreshAfterStructuralEdit;
+            forceRefreshAfterStructuralEdit = false;
             if (!ReferenceEquals(taggedSnapshot, nextSnapshot))
             {
                 List<ITagSpan<TTag>> immediate = null;
-                if (PreserveAdornmentsOnEdit && current.Count != 0)
+                if (PreserveAdornmentsOnEdit && !rebuildPositions && current.Count != 0)
                 {
                     try
                     {
@@ -165,7 +196,8 @@ namespace JavaLanguageSupport.Editor.Intelligence
             }
             ++requestGeneration;
             if (active != null) active.Cancel();
-            timer.Interval = TimeSpan.FromMilliseconds(RefreshDelayMilliseconds);
+            timer.Interval = TimeSpan.FromMilliseconds(rebuildPositions
+                ? StructuralRefreshDelayMilliseconds : RefreshDelayMilliseconds);
             timer.Stop();
             timer.Start();
         }

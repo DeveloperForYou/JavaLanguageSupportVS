@@ -64,6 +64,24 @@ namespace JavaLanguageSupport.Editor.Intelligence
         // Progress notifications from JDT LS may come in bursts; do not use
         // each one to re-query references and implementations during typing.
         protected override bool RefreshOnWorkspaceIdle => !HasPublishedTags;
+        protected override int StructuralRefreshDelayMilliseconds => 900;
+
+        protected override bool IsStructuralEdit(TextContentChangedEventArgs change)
+        {
+            // Multiple replacements and newlines are typical of WorkspaceEdit
+            // (Extract Method / Inline / Make static / formatting).
+            // Do not translate a stale CodeLens above an unrelated declaration.
+            if (change == null || change.Changes.Count > 1) return true;
+            foreach (ITextChange edit in change.Changes)
+            {
+                if (edit.NewText.IndexOf('\n') >= 0 || edit.OldText.IndexOf('\n') >= 0 ||
+                    edit.NewText.IndexOf('\r') >= 0 || edit.OldText.IndexOf('\r') >= 0 ||
+                    edit.NewText.Length > 16 || edit.OldText.Length > 16)
+                    return true;
+            }
+
+            return ChangeTouchesPublishedTagLine(change);
+        }
         protected override bool Allowed => base.Allowed && FeatureEnabled("disable-codelens.flag");
 
         protected override async Task<List<ITagSpan<InterLineAdornmentTag>>> FetchAsync(

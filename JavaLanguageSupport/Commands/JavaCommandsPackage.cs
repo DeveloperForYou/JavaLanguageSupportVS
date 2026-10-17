@@ -46,6 +46,14 @@ namespace JavaLanguageSupport.Commands
         private const int PeekDefinitionId = 0x011B;
         private const int CallHierarchyId = 0x011C;
         private const int TypeHierarchyId = 0x011D;
+        private const int ExtractMethodId = 0x011E;
+        private const int ExtractVariableId = 0x011F;
+        private const int ExtractConstantId = 0x0120;
+        private const int InlineVariableId = 0x0121;
+        private const int ChangeMethodSignatureId = 0x0122;
+        private const int GenerateConstructorId = 0x0123;
+        private const int GenerateGettersSettersId = 0x0124;
+        private const int OverrideImplementMethodsId = 0x0125;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
@@ -78,6 +86,14 @@ namespace JavaLanguageSupport.Commands
             AddJavaContextCommand(service, PeekDefinitionId, JavaEditorOperation.PeekDefinition);
             AddJavaContextCommand(service, CallHierarchyId, JavaEditorOperation.CallHierarchy);
             AddJavaContextCommand(service, TypeHierarchyId, JavaEditorOperation.TypeHierarchy);
+            AddJavaContextCommand(service, ExtractMethodId, JavaEditorOperation.ExtractMethod);
+            AddJavaContextCommand(service, ExtractVariableId, JavaEditorOperation.ExtractVariable);
+            AddJavaContextCommand(service, ExtractConstantId, JavaEditorOperation.ExtractConstant);
+            AddJavaContextCommand(service, InlineVariableId, JavaEditorOperation.InlineVariable);
+            AddJavaContextCommand(service, ChangeMethodSignatureId, JavaEditorOperation.ChangeMethodSignature);
+            AddJavaContextCommand(service, GenerateConstructorId, JavaEditorOperation.GenerateConstructor);
+            AddJavaContextCommand(service, GenerateGettersSettersId, JavaEditorOperation.GenerateGettersSetters);
+            AddJavaContextCommand(service, OverrideImplementMethodsId, JavaEditorOperation.OverrideImplementMethods);
         }
 
         // Solo nell'editor Java e soltanto quando il click destro è su un simbolo.
@@ -140,7 +156,12 @@ namespace JavaLanguageSupport.Commands
                         operation == JavaEditorOperation.GoToTypeDefinition ||
                         operation == JavaEditorOperation.PeekDefinition ||
                         operation == JavaEditorOperation.CallHierarchy ||
-                        operation == JavaEditorOperation.TypeHierarchy)
+                        operation == JavaEditorOperation.TypeHierarchy ||
+                        operation == JavaEditorOperation.InlineVariable ||
+                        operation == JavaEditorOperation.ChangeMethodSignature ||
+                        operation == JavaEditorOperation.GenerateConstructor ||
+                        operation == JavaEditorOperation.GenerateGettersSetters ||
+                        operation == JavaEditorOperation.OverrideImplementMethods)
                         JavaCtrlClickNavigation.PrepareContextCaret(manager, model);
                     if (operation == JavaEditorOperation.RenameSymbol)
                     {

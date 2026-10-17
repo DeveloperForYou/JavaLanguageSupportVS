@@ -2,6 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using Microsoft.VisualStudio.ComponentModelHost;
+using Microsoft.VisualStudio.Editor;
+using Microsoft.VisualStudio.TextManager.Interop;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -97,27 +101,65 @@ namespace JavaLanguageSupport.Editor.Navigation
                 return n == 0 ? a.Column.CompareTo(b.Column) : n;
             });
 
-            // Keep file reads off the UI thread. This is only an excerpt: the positions
-            // come from LSP, never from the displayed text. Unsaved editors can differ.
-            foreach (var group in found.GroupBy(x => x.Path, StringComparer.OrdinalIgnoreCase))
+            // Positions returned by JDT LS apply to the in-memory buffers, not
+            // necessarily to File.ReadAllLines on disk. Capture live snapshots of
+            // already-open documents without opening additional editor tabs.
+            // If the search started before an intervening edit, never show stale
+            // line numbers pretending to be current references.
+            if (!ReferenceEquals(snapshot, snapshot.TextBuffer.CurrentSnapshot))
             {
-                try
-                {
-                    // Avoid loading arbitrarily large files just for an excerpt.
-                    if (new FileInfo(group.Key).Length > 4 * 1024 * 1024)
-                    {
-                        foreach (var match in group) match.Excerpt = "(file grande: apri per leggere)";
-                        continue;
-                    }
-                    var lines = File.ReadAllLines(group.Key);
-                    foreach (var match in group)
-                        match.Excerpt = match.Line < lines.Length ?
-                            Truncate(lines[match.Line].Trim(), 200) : "(riga non presente sul disco)";
-                }
-                catch (IOException) { foreach (var match in group) match.Excerpt = "(non leggibile)"; }
-                catch (UnauthorizedAccessException)
-                { foreach (var match in group) match.Excerpt = "(accesso negato)"; }
+                log("Trova riferimenti: il documento e' cambiato durante la ricerca. Riprova.");
+                return;
             }
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+            var openLines = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+            Uri sourceUri;
+            if (Uri.TryCreate(uri, UriKind.Absolute, out sourceUri) && sourceUri.IsFile &&
+                snapshot.Length <= 4 * 1024 * 1024)
+                openLines[Path.GetFullPath(sourceUri.LocalPath)] = SplitLines(snapshot.GetText());
+            int probed = 0;
+            foreach (var path in found.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (openLines.ContainsKey(path)) continue;
+                // Limit Running Document Table probes on the VS UI thread.
+                if (++probed > 64) break;
+                string[] lines = TryReadOpenBufferLines(path);
+                if (lines != null) openLines[path] = lines;
+            }
+            // Only unopened files require disk I/O; keep it off the UI thread.
+            await Task.Run(() =>
+            {
+                foreach (var group in found.GroupBy(x => x.Path, StringComparer.OrdinalIgnoreCase))
+                {
+                    token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        string[] lines;
+                        if (!openLines.TryGetValue(group.Key, out lines))
+                        {
+                            if (new FileInfo(group.Key).Length > 4 * 1024 * 1024)
+                            {
+                                foreach (var match in group)
+                                    match.Excerpt = "(file grande: apri per leggere)";
+                                continue;
+                            }
+                            lines = File.ReadAllLines(group.Key);
+                        }
+                        foreach (var match in group)
+                            match.Excerpt = match.Line >= 0 && match.Line < lines.Length ?
+                                Truncate(lines[match.Line].Trim(), 200) :
+                                "(riga non presente nello snapshot)";
+                    }
+                    catch (IOException)
+                    {
+                        foreach (var match in group) match.Excerpt = "(non leggibile)";
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        foreach (var match in group) match.Excerpt = "(accesso negato)";
+                    }
+                }
+            }, token).ConfigureAwait(false);
 
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
             Action refreshWhenIdle = null;
@@ -135,6 +177,44 @@ namespace JavaLanguageSupport.Editor.Navigation
                     }).FileAndForget("JavaLanguageSupport/ReferenceRefresh");
                 };
             ShowWindow(found, log, ((JArray)reply).Count > 10000, refreshWhenIdle);
+        }
+
+        private static string[] SplitLines(string text)
+        {
+            return text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+        }
+
+        // Best-effort: read an existing VS editor buffer from the RDT. Do not
+        // open another file, save unsaved changes or block for JDT LS here.
+        // Must run on the UI thread (VS COM services are apartment-affine).
+        private static string[] TryReadOpenBufferLines(string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var running = Package.GetGlobalService(typeof(SVsRunningDocumentTable))
+                as IVsRunningDocumentTable;
+            var component = Package.GetGlobalService(typeof(SComponentModel))
+                as IComponentModel;
+            var adapters = component == null ? null :
+                component.GetService<IVsEditorAdaptersFactoryService>();
+            if (running == null || adapters == null) return null;
+            IVsHierarchy hierarchy;
+            uint itemId, cookie;
+            IntPtr documentData;
+            int hr = running.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_NoLock,
+                path, out hierarchy, out itemId, out documentData, out cookie);
+            if (hr < 0 || documentData == IntPtr.Zero) return null;
+            try
+            {
+                var native = Marshal.GetObjectForIUnknown(documentData) as IVsTextBuffer;
+                if (native == null) return null;
+                var buffer = adapters.GetDocumentBuffer(native) ?? adapters.GetDataBuffer(native);
+                if (buffer == null || buffer.CurrentSnapshot.Length > 4 * 1024 * 1024)
+                    return null;
+                return SplitLines(buffer.CurrentSnapshot.GetText());
+            }
+            catch (COMException) { return null; }
+            catch (InvalidCastException) { return null; }
+            finally { Marshal.Release(documentData); }
         }
 
         private static string Truncate(string text, int max)
@@ -182,7 +262,8 @@ namespace JavaLanguageSupport.Editor.Navigation
                 (results.Count == 0 ? "Nessun risultato dopo l'attesa dell'indice Java. Riprova a importazione completata. " : "") +
                 (truncated ? "Mostrati solo i primi 10.000 risultati. " : "") +
                 "Doppio clic su un risultato per aprire il sorgente. " +
-                "Le anteprime delle righe provengono dai file salvati su disco.",
+                "Le anteprime usano il buffer aperto quando disponibile (altrimenti il disco). " +
+                "Il totale include la dichiarazione; CodeLens conta solo gli utilizzi.",
                 Margin = new Thickness(12, 0, 12, 5), TextWrapping = TextWrapping.Wrap };
             JavaNavigationWindowStyle.ThemeText(note);
 

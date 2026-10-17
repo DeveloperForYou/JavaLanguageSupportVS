@@ -79,6 +79,46 @@
         <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings><ButtonText>Java: Gerarchia tipi</ButtonText></Strings>
       </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdExtractMethod" priority="0x1300" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Estrai metodo</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdExtractVariable" priority="0x1400" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Estrai variabile</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdExtractConstant" priority="0x1500" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Estrai costante</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdInlineVariable" priority="0x1600" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Inline variabile</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdChangeMethodSignature" priority="0x1700" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Cambia firma metodo</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdGenerateConstructor" priority="0x1800" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Genera costruttore</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdGenerateGettersSetters" priority="0x1900" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Genera getter/setter</ButtonText></Strings>
+      </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdOverrideImplementMethods" priority="0x1A00" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings><ButtonText>Java: Override/Implement metodi</ButtonText></Strings>
+      </Button>
     </Buttons>
   </Commands>
   <Symbols>
@@ -101,6 +141,14 @@
       <IDSymbol name="cmdPeekDefinition" value="0x011B" />
       <IDSymbol name="cmdCallHierarchy" value="0x011C" />
       <IDSymbol name="cmdTypeHierarchy" value="0x011D" />
+      <IDSymbol name="cmdExtractMethod" value="0x011E" />
+      <IDSymbol name="cmdExtractVariable" value="0x011F" />
+      <IDSymbol name="cmdExtractConstant" value="0x0120" />
+      <IDSymbol name="cmdInlineVariable" value="0x0121" />
+      <IDSymbol name="cmdChangeMethodSignature" value="0x0122" />
+      <IDSymbol name="cmdGenerateConstructor" value="0x0123" />
+      <IDSymbol name="cmdGenerateGettersSetters" value="0x0124" />
+      <IDSymbol name="cmdOverrideImplementMethods" value="0x0125" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

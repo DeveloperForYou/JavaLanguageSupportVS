@@ -101,10 +101,20 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     JArray diagnostics = JavaDiagnosticsMonitor.ForPosition(uri,
                         row.LineNumber, character);
 
-                    // Use the actual diagnostic span when available; an empty range
-                    // at the caret is valid LSP for refactorings without diagnostics.
-                    object lspRange = diagnostics.Count != 0 &&
-                        diagnostics[0]["range"] != null
+                    // Ctrl+. on a selection must send the WHOLE range to JDT LS.
+                    // A caret-only or diagnostic-only range cannot extract code.
+                    // Do not change the selection or capture a stale snapshot.
+                    SnapshotSpan selectedRange = new SnapshotSpan(snapshot, caret, 0);
+                    var selectedSpans = view.Selection.SelectedSpans;
+                    if (!view.Selection.IsEmpty && selectedSpans.Count == 1 &&
+                        selectedSpans[0].Snapshot == snapshot &&
+                        selectedSpans[0].Snapshot.TextBuffer == buffer)
+                        selectedRange = selectedSpans[0];
+                    object lspRange = !selectedRange.IsEmpty
+                        ? (object)new {
+                            start = JavaLspRpc.Position(snapshot, selectedRange.Start.Position),
+                            end = JavaLspRpc.Position(snapshot, selectedRange.End.Position) }
+                        : diagnostics.Count != 0 && diagnostics[0]["range"] != null
                         ? (object)diagnostics[0]["range"].DeepClone()
                         : new { start = JavaLspRpc.Position(snapshot, caret),
                                 end = JavaLspRpc.Position(snapshot, caret) };
@@ -127,7 +137,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
 
                     var seen = new HashSet<string>(StringComparer.Ordinal);
                     var actions = new List<ISuggestedAction>();
-                    foreach (JObject item in items.OfType<JObject>().Take(60))
+                    foreach (JObject item in items.OfType<JObject>().Take(
+                        selectedRange.IsEmpty ? 60 : 120))
                     {
                         string title = (string)item["title"];
                         if (string.IsNullOrWhiteSpace(title) || !seen.Add(title)) continue;
