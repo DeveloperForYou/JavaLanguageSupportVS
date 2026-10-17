@@ -48,6 +48,13 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 return;
             }
 
+            if (operation == JavaEditorOperation.GenerateGettersSetters)
+            {
+                await JavaAccessorGeneration.ExecuteAsync(uri, buffer, snapshot,
+                    caret, log, token);
+                return;
+            }
+
             int position = Math.Max(0, Math.Min(caret, snapshot.Length));
             ITextSnapshotLine line = snapshot.GetLineFromPosition(position);
             JArray diagnostics = JavaDiagnosticsMonitor.ForPosition(uri, line.LineNumber,

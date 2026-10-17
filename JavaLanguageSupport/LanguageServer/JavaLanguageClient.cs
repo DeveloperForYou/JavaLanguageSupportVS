@@ -75,7 +75,13 @@ namespace JavaLanguageSupport.LanguageServer
                     // Explicit JDT LS preferences: lenses and parameter hints.
                     referencesCodeLens = new { enabled = true },
                     implementationCodeLens = "all",
-                    inlayHints = new { parameterNames = new { enabled = "all" } },
+                    // JDT LS offers semantic inferred-type hints for Java 10+ var.
+                    // Older versions may ignore variableTypes gracefully.
+                    inlayHints = new
+                    {
+                        parameterNames = new { enabled = "all" },
+                        variableTypes = new { enabled = true }
+                    },
                     format = new { enabled = true },
                     configuration = new { updateBuildConfiguration = "automatic" }
                 }

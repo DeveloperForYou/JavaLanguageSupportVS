@@ -3,29 +3,27 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using Microsoft.VisualStudio.ComponentModelHost;
-using Microsoft.VisualStudio.Editor;
-using Microsoft.VisualStudio.TextManager.Interop;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
 using JavaLanguageSupport.LanguageServer;
-using Microsoft.VisualStudio.PlatformUI;
+using Microsoft.VisualStudio.ComponentModelHost;
+using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Threading;
+using Microsoft.VisualStudio.Shell.FindAllReferences;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Shell.TableControl;
+using Microsoft.VisualStudio.Shell.TableManager;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.TextManager.Interop;
 using Newtonsoft.Json.Linq;
-using EnvDTE;
-using WpfWindow = System.Windows.Window;
 
 namespace JavaLanguageSupport.Editor.Navigation
 {
     /// <summary>
-    /// A modeless, navigable Find All References window. Source of truth: JDT LS
-    /// textDocument/references (including declarations), not a text search.
+    /// Java Find All References in the NATIVE Visual Studio Find All References tool window.
+    /// Locations come exclusively from JDT LS (textDocument/references); no textual
+    /// matching. All existing entry points (Shift+F12, CodeLens, editor operations)
+    /// still call RunAsync. No custom WPF window is created.
     /// </summary>
     internal static class JavaReferenceSearch
     {
@@ -37,11 +35,10 @@ namespace JavaLanguageSupport.Editor.Navigation
             internal string Excerpt;
         }
 
-        private static WpfWindow currentWindow;
-
         internal static async Task RunAsync(string uri, ITextSnapshot snapshot, int caret,
             Action<string> log, CancellationToken token)
         {
+            if (snapshot == null || string.IsNullOrEmpty(uri)) return;
             var args = new
             {
                 textDocument = new { uri },
@@ -50,8 +47,9 @@ namespace JavaLanguageSupport.Editor.Navigation
             };
             JToken reply = await JavaLspRpc.RequestAsync("textDocument/references", args,
                 token).ConfigureAwait(false);
-            // A cold workspace can report an empty list before Java types are
-            // indexed. Bounded retries; never rescan source files textually.
+
+            // JDT LS can temporarily return [] while importing dependencies.
+            // Wait only for a bounded interval, never reindex on each request.
             if ((reply is JArray && ((JArray)reply).Count == 0) ||
                 (reply == null && JavaWorkspaceActivity.IsBusy))
             {
@@ -70,10 +68,8 @@ namespace JavaLanguageSupport.Editor.Navigation
             token.ThrowIfCancellationRequested();
             if (!(reply is JArray))
             {
-                log("Find References: nessun elenco. " + JavaWorkspaceActivity.Summary);
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
-                MessageBox.Show("Nessun riferimento disponibile. Controlla l'indicizzazione JDT LS.",
-                    "Java: Trova tutti i riferimenti", MessageBoxButton.OK, MessageBoxImage.Information);
+                log("Java Find References: nessuna risposta LSP valida. " +
+                    JavaWorkspaceActivity.Summary);
                 return;
             }
 
@@ -82,7 +78,8 @@ namespace JavaLanguageSupport.Editor.Navigation
             foreach (JToken item in ((JArray)reply).Take(10000))
             {
                 string address = (string)item["uri"] ?? (string)item["targetUri"];
-                JToken range = item["range"] ?? item["targetSelectionRange"] ?? item["targetRange"];
+                JToken range = item["range"] ?? item["targetSelectionRange"] ??
+                    item["targetRange"];
                 Uri target;
                 if (!Uri.TryCreate(address, UriKind.Absolute, out target) || !target.IsFile ||
                     range == null || range["start"] == null) continue;
@@ -101,14 +98,12 @@ namespace JavaLanguageSupport.Editor.Navigation
                 return n == 0 ? a.Column.CompareTo(b.Column) : n;
             });
 
-            // Positions returned by JDT LS apply to the in-memory buffers, not
-            // necessarily to File.ReadAllLines on disk. Capture live snapshots of
-            // already-open documents without opening additional editor tabs.
-            // If the search started before an intervening edit, never show stale
-            // line numbers pretending to be current references.
+            // LSP coordinates refer to in-memory text, not necessarily the file on disk.
+            // Do not expose offsets obtained from an outdated source snapshot.
             if (!ReferenceEquals(snapshot, snapshot.TextBuffer.CurrentSnapshot))
             {
-                log("Trova riferimenti: il documento e' cambiato durante la ricerca. Riprova.");
+                log("Java Find References: il documento sorgente e' cambiato. " +
+                    "Ripetere la ricerca.");
                 return;
             }
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
@@ -118,18 +113,20 @@ namespace JavaLanguageSupport.Editor.Navigation
                 snapshot.Length <= 4 * 1024 * 1024)
                 openLines[Path.GetFullPath(sourceUri.LocalPath)] = SplitLines(snapshot.GetText());
             int probed = 0;
-            foreach (var path in found.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (string path in found.Select(x => x.Path)
+                .Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 if (openLines.ContainsKey(path)) continue;
-                // Limit Running Document Table probes on the VS UI thread.
+                // Avoid thousands of expensive RDT/COM probes on the editor thread.
                 if (++probed > 64) break;
                 string[] lines = TryReadOpenBufferLines(path);
                 if (lines != null) openLines[path] = lines;
             }
-            // Only unopened files require disk I/O; keep it off the UI thread.
+
             await Task.Run(() =>
             {
-                foreach (var group in found.GroupBy(x => x.Path, StringComparer.OrdinalIgnoreCase))
+                foreach (var group in found.GroupBy(x => x.Path,
+                    StringComparer.OrdinalIgnoreCase))
                 {
                     token.ThrowIfCancellationRequested();
                     try
@@ -139,44 +136,99 @@ namespace JavaLanguageSupport.Editor.Navigation
                         {
                             if (new FileInfo(group.Key).Length > 4 * 1024 * 1024)
                             {
-                                foreach (var match in group)
-                                    match.Excerpt = "(file grande: apri per leggere)";
+                                foreach (Result r in group)
+                                    r.Excerpt = "(file grande: aprire per leggere)";
                                 continue;
                             }
                             lines = File.ReadAllLines(group.Key);
                         }
-                        foreach (var match in group)
-                            match.Excerpt = match.Line >= 0 && match.Line < lines.Length ?
-                                Truncate(lines[match.Line].Trim(), 200) :
+                        foreach (Result r in group)
+                            r.Excerpt = r.Line >= 0 && r.Line < lines.Length ?
+                                Truncate(lines[r.Line].Trim(), 200) :
                                 "(riga non presente nello snapshot)";
                     }
                     catch (IOException)
                     {
-                        foreach (var match in group) match.Excerpt = "(non leggibile)";
+                        foreach (Result r in group) r.Excerpt = "(non leggibile)";
                     }
                     catch (UnauthorizedAccessException)
                     {
-                        foreach (var match in group) match.Excerpt = "(accesso negato)";
+                        foreach (Result r in group) r.Excerpt = "(accesso negato)";
                     }
                 }
             }, token).ConfigureAwait(false);
 
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
-            Action refreshWhenIdle = null;
-            // Requery once when LSP progress settles, but only if the editor
-            // snapshot is unchanged. Avoid creating a stale reference list.
-            if (found.Count == 0 && JavaWorkspaceActivity.IsBusy)
-                refreshWhenIdle = () =>
-                {
-                    if (snapshot.TextBuffer.CurrentSnapshot.Version.VersionNumber !=
-                        snapshot.Version.VersionNumber) return;
-                    ThreadHelper.JoinableTaskFactory.RunAsync(async delegate
-                    {
-                        await Task.Delay(350, token).ConfigureAwait(false);
-                        await RunAsync(uri, snapshot, caret, log, token).ConfigureAwait(false);
-                    }).FileAndForget("JavaLanguageSupport/ReferenceRefresh");
-                };
-            ShowWindow(found, log, ((JArray)reply).Count > 10000, refreshWhenIdle);
+            if (!ReferenceEquals(snapshot, snapshot.TextBuffer.CurrentSnapshot))
+            {
+                log("Java Find References: il documento e' cambiato durante il caricamento " +
+                    "delle anteprime. Ripetere la ricerca.");
+                return;
+            }
+            ShowNativeWindow(found, log, ((JArray)reply).Count > 10000);
+        }
+
+        private static void ShowNativeWindow(IList<Result> results, Action<string> log,
+            bool truncated)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var service = Package.GetGlobalService(typeof(SVsFindAllReferences))
+                as IFindAllReferencesService;
+            if (service == null)
+            {
+                // Never fall back to the removed custom WPF window.
+                log("Java Find References: il servizio nativo SVsFindAllReferences " +
+                    "non e' disponibile.");
+                return;
+            }
+            string label = "Java — " + results.Count + " riferimenti";
+            var window = service.StartSearch(label);
+            if (window == null)
+            {
+                log("Java Find References: il servizio nativo non ha aperto la finestra.");
+                return;
+            }
+            var source = new JavaReferenceTableSource(results.Select(r =>
+                Tuple.Create(r.Path, r.Line, r.Column, r.Excerpt)));
+            // The native window supplies a built-in Code/Text column from the
+            // entry's StandardTableKeyNames.Text. Declaring Text here would add
+            // a second, redundant Description column in some Visual Studio builds.
+            window.Manager.AddSource(source,
+                StandardTableKeyNames.DocumentName,
+                StandardTableKeyNames.Line,
+                StandardTableKeyNames.Column);
+            // Only affects this native results window, not global VS preferences.
+            ConfigureNoGrouping(window, log);
+            window.SetProgress(1.0);
+            log("Java Find References (nativo): " + results.Count + " posizioni " +
+                "(inclusa la dichiarazione)." +
+                (truncated ? " Risultati limitati a 10.000 posizioni." : "") +
+                (results.Count == 0 && JavaWorkspaceActivity.IsBusy ?
+                    " Indicizzazione in corso: riprovare al termine." : ""));
+        }
+
+        private static void ConfigureNoGrouping(IFindAllReferencesWindow window,
+            Action<string> log)
+        {
+            // GroupingPriority -1 = ungrouped in the VS table control. Preserve
+            // the columns' visibility, widths and sorting. This setting applies
+            // to this search only; a user can change it from the native toolbar.
+            try
+            {
+                var control = window.TableControl as IWpfTableControl2;
+                if (control == null || control.ColumnStates == null) return;
+                var states = control.ColumnStates.Select(s =>
+                    (ColumnState)new ColumnState2(s.Name, s.IsVisible, s.Width,
+                        s.SortPriority, s.DescendingSort, -1)).ToArray();
+                if (states.Length != 0) control.SetColumnStates(states);
+            }
+            catch (Exception ex)
+            {
+                // Not all VS SDK builds expose the same grouping behavior.
+                // The references must remain visible even if this preference fails.
+                if (log != null) log("Java FAR: impossibile impostare Nessun raggruppamento: " +
+                    ex.Message);
+            }
         }
 
         private static string[] SplitLines(string text)
@@ -184,9 +236,8 @@ namespace JavaLanguageSupport.Editor.Navigation
             return text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
         }
 
-        // Best-effort: read an existing VS editor buffer from the RDT. Do not
-        // open another file, save unsaved changes or block for JDT LS here.
-        // Must run on the UI thread (VS COM services are apartment-affine).
+        // Read the existing VS buffer via the Running Document Table; don't open
+        // tabs or save user edits. Called only on the UI thread (VS COM).
         private static string[] TryReadOpenBufferLines(string path)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -221,118 +272,60 @@ namespace JavaLanguageSupport.Editor.Navigation
         {
             return text.Length <= max ? text : text.Substring(0, max - 1) + "…";
         }
+    }
 
-        private static void ShowWindow(IList<Result> results, Action<string> log,
-            bool truncated, Action refreshWhenIdle)
+    // ITableDataSource is the supported integration point for Visual Studio's
+    // native Find All References table, including its navigation and grouping.
+    internal sealed class JavaReferenceTableSource : ITableDataSource
+    {
+        private readonly IList<JavaReferenceTableEntry> entries;
+
+        internal JavaReferenceTableSource(IEnumerable<Tuple<string, int, int, string>> refs)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            var tree = new TreeView { Margin = new Thickness(10, 4, 10, 8) };
-            JavaNavigationWindowStyle.SetupTree(tree);
-
-            foreach (var group in results.GroupBy(x => x.Path, StringComparer.OrdinalIgnoreCase))
-            {
-                var header = JavaNavigationWindowStyle.TreeHeader(
-                    Path.GetFileName(group.Key) + " — " + group.Count() +
-                    " riferimenti  (" + group.Key + ")", true);
-                var fileNode = new TreeViewItem { Header = header, IsExpanded = true };
-                foreach (Result r in group)
-                {
-                    Result clicked = r;
-                    var label = JavaNavigationWindowStyle.TreeHeader(
-                        "Riga " + (r.Line + 1) + ", col " + (r.Column + 1) +
-                        "   " + r.Excerpt, false);
-                    var node = new TreeViewItem { Header = label, Tag = r };
-                    node.MouseDoubleClick += (sender, args) =>
-                    {
-                        args.Handled = true;
-                        Navigate(clicked, log);
-                    };
-                    fileNode.Items.Add(node);
-                }
-                tree.Items.Add(fileNode);
-            }
-
-            var title = new TextBlock { Text = "Java: Trova tutti i riferimenti — " +
-                results.Count + " occorrenze in " +
-                results.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() + " file",
-                FontSize = 14, FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(12, 10, 12, 5) };
-            JavaNavigationWindowStyle.ThemeText(title);
-            var note = new TextBlock { Text =
-                (results.Count == 0 ? "Nessun risultato dopo l'attesa dell'indice Java. Riprova a importazione completata. " : "") +
-                (truncated ? "Mostrati solo i primi 10.000 risultati. " : "") +
-                "Doppio clic su un risultato per aprire il sorgente. " +
-                "Le anteprime usano il buffer aperto quando disponibile (altrimenti il disco). " +
-                "Il totale include la dichiarazione; CodeLens conta solo gli utilizzi.",
-                Margin = new Thickness(12, 0, 12, 5), TextWrapping = TextWrapping.Wrap };
-            JavaNavigationWindowStyle.ThemeText(note);
-
-            var panel = new DockPanel();
-            DockPanel.SetDock(title, Dock.Top);
-            DockPanel.SetDock(note, Dock.Top);
-            panel.Children.Add(title);
-            panel.Children.Add(note);
-            panel.Children.Add(tree);
-            var window = new WpfWindow {
-                Title = "Java — Trova tutti i riferimenti", Width = 880, Height = 580,
-                MinWidth = 600, MinHeight = 300, Content = panel,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                ResizeMode = ResizeMode.CanResize, ShowInTaskbar = false
-            };
-            // Consistent dark/light theme and no minimize button.
-            JavaNavigationWindowStyle.SetupWindow(window);
-            if (currentWindow != null) currentWindow.Close();
-            currentWindow = window;
-            // Subscribe only while there is a pending empty result.
-            EventHandler onIdle = null;
-            if (refreshWhenIdle != null)
-            {
-                onIdle = (sender, args) =>
-                {
-                    ThreadHelper.JoinableTaskFactory.RunAsync(async delegate
-                    {
-                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                        if (!ReferenceEquals(currentWindow, window) || !window.IsVisible) return;
-                        JavaWorkspaceActivity.BecameIdle -= onIdle;
-                        onIdle = null;
-                        refreshWhenIdle();
-                    }).FileAndForget("JavaLanguageSupport/ReferenceIdle");
-                };
-                JavaWorkspaceActivity.BecameIdle += onIdle;
-            }
-            window.Closed += (sender, args) =>
-            {
-                if (onIdle != null) JavaWorkspaceActivity.BecameIdle -= onIdle;
-                if (ReferenceEquals(currentWindow, window)) currentWindow = null;
-            };
-            tree.KeyDown += (sender, args) =>
-            {
-                if (args.Key != Key.Enter) return;
-                var item = tree.SelectedItem as TreeViewItem;
-                var result = item == null ? null : item.Tag as Result;
-                if (result == null) return;
-                args.Handled = true;
-                Navigate(result, log);
-            };
-            window.Show();
-            window.Activate();
-            log("Find References: " + results.Count + " occorrenze.");
+            entries = refs.Select(x => new JavaReferenceTableEntry(x.Item1, x.Item2,
+                x.Item3, x.Item4)).ToList();
         }
 
-        private static void Navigate(Result r, Action<string> log)
+        public string SourceTypeIdentifier { get { return "java/jdtls/references"; } }
+        public string Identifier { get { return "JavaLanguageSupport.ReferenceSearch"; } }
+        public string DisplayName { get { return "Java References (JDT LS)"; } }
+
+        public IDisposable Subscribe(ITableDataSink sink)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            try
-            {
-                var dte = Package.GetGlobalService(typeof(SDTE)) as DTE;
-                if (dte == null) throw new InvalidOperationException("DTE non disponibile.");
-                dte.ItemOperations.OpenFile(r.Path, EnvDTE.Constants.vsViewKindTextView);
-                var selection = dte.ActiveDocument == null ? null :
-                    dte.ActiveDocument.Selection as TextSelection;
-                if (selection != null)
-                    selection.MoveToLineAndOffset(r.Line + 1, r.Column + 1, false);
-            }
-            catch (Exception ex) { log("Navigazione riferimento: " + ex.Message); }
+            sink.AddEntries(entries.Cast<ITableEntry>().ToList(), true);
+            return new JavaReferenceSinkRegistration(sink);
+        }
+
+        private sealed class JavaReferenceSinkRegistration : IDisposable
+        {
+            private readonly ITableDataSink sink;
+            internal JavaReferenceSinkRegistration(ITableDataSink sink) { this.sink = sink; }
+            public void Dispose() { sink.RemoveAllEntries(); }
+        }
+    }
+
+    internal sealed class JavaReferenceTableEntry : ITableEntry
+    {
+        private readonly Dictionary<string, object> values = new Dictionary<string, object>();
+
+        internal JavaReferenceTableEntry(string path, int line, int column, string excerpt)
+        {
+            values[StandardTableKeyNames.DocumentName] = path;
+            values[StandardTableKeyNames.Line] = line;      // Visual Studio table uses 0-based
+            values[StandardTableKeyNames.Column] = column; // LSP offsets are 0-based
+            values[StandardTableKeyNames.Text] = excerpt ?? "";
+        }
+
+        public object Identity { get { return values; } }
+        public bool CanSetValue(string keyName) { return true; }
+        public bool TryGetValue(string keyName, out object content)
+        {
+            return values.TryGetValue(keyName, out content);
+        }
+        public bool TrySetValue(string keyName, object content)
+        {
+            values[keyName] = content;
+            return true;
         }
     }
 }

@@ -29,6 +29,25 @@ namespace JavaLanguageSupport.Editor.Navigation
         private const uint SwpNoZOrder = 0x0004;
         private const uint SwpFrameChanged = 0x0020;
 
+        // Every titled Java dialog uses an ALWAYS-WHITE native caption, while its
+        // client remains Visual Studio themed (dark/light). DWM attributes 35/36
+        // are Windows 11-specific; gracefully leave system styling on older OSes.
+        private const uint ScClose = 0xF060;
+        private const uint MfByCommand = 0x00000000;
+
+        [DllImport("dwmapi.dll", PreserveSig = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute,
+            ref int value, int size);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr GetSystemMenu(IntPtr hwnd, bool revert);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DeleteMenu(IntPtr menu, uint position, uint flags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DrawMenuBar(IntPtr hwnd);
+
         [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
         private static extern int GetWindowLong(IntPtr hWnd, int index);
 
@@ -46,7 +65,14 @@ namespace JavaLanguageSupport.Editor.Navigation
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
             window.SetResourceReference(Control.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
-            window.SourceInitialized += (sender, args) => RemoveMinimizeButton(window);
+            window.SourceInitialized += (sender, args) =>
+            {
+                RemoveMinimizeButton(window);
+                WhiteCaption(window);
+                DisableSystemClose(window);
+            };
+            // Keep the caption light even when activating or deactivating VS.
+            window.Activated += (sender, args) => WhiteCaption(window);
 
             var dte = Package.GetGlobalService(typeof(SDTE)) as DTE;
             if (dte != null && dte.MainWindow != null)
@@ -54,6 +80,39 @@ namespace JavaLanguageSupport.Editor.Navigation
                 // Visual Studio 2026 DTE.MainWindow.HWnd is already IntPtr.
                 new WindowInteropHelper(window).Owner = dte.MainWindow.HWnd;
             }
+        }
+
+        private static void WhiteCaption(System.Windows.Window window)
+        {
+            try
+            {
+                IntPtr hwnd = new WindowInteropHelper(window).Handle;
+                if (hwnd == IntPtr.Zero) return;
+                int light = 0;
+                if (DwmSetWindowAttribute(hwnd, 20, ref light, sizeof(int)) != 0)
+                    DwmSetWindowAttribute(hwnd, 19, ref light, sizeof(int));
+                int white = 0x00FFFFFF; // COLORREF, RGB(255,255,255)
+                int black = 0x00000000;
+                DwmSetWindowAttribute(hwnd, 35, ref white, sizeof(int));
+                DwmSetWindowAttribute(hwnd, 36, ref black, sizeof(int));
+            }
+            catch (Exception) { /* Optional OS theme capability. */ }
+        }
+
+        private static void DisableSystemClose(System.Windows.Window window)
+        {
+            // Win32 cannot reliably HIDE only X while retaining the stock
+            // Maximize/Restore and resize frame. Disable it via the system menu;
+            // all these dialogs supply an explicit bottom action/cancel button.
+            try
+            {
+                IntPtr hwnd = new WindowInteropHelper(window).Handle;
+                if (hwnd == IntPtr.Zero) return;
+                IntPtr menu = GetSystemMenu(hwnd, false);
+                if (menu != IntPtr.Zero && DeleteMenu(menu, ScClose, MfByCommand))
+                    DrawMenuBar(hwnd);
+            }
+            catch (Exception) { /* Leave X as system fallback. */ }
         }
 
         private static void RemoveMinimizeButton(System.Windows.Window window)

@@ -292,6 +292,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
                 ShowInTaskbar = false
             };
+            JavaLanguageSupport.Editor.Navigation.JavaNavigationWindowStyle.SetupWindow(dialog);
             dialog.SetResourceReference(Control.BackgroundProperty,
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
             dialog.SetResourceReference(Control.ForegroundProperty,

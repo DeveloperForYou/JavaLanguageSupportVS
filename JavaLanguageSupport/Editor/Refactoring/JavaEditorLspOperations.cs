@@ -401,20 +401,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 EnvironmentColors.ToolWindowTextBrushKey);
             win.SetResourceReference(Control.BorderBrushProperty,
                 EnvironmentColors.ToolWindowBorderBrushKey);
-            win.SourceInitialized += (sender, args) =>
-            {
-                try
-                {
-                    var background = VSColorTheme.GetThemedColor(
-                        EnvironmentColors.ToolWindowBackgroundColorKey);
-                    int luminance = background.R * 299 + background.G * 587 + background.B * 114;
-                    int dark = luminance < 128000 ? 1 : 0;
-                    IntPtr handle = new System.Windows.Interop.WindowInteropHelper(win).Handle;
-                    if (handle != IntPtr.Zero)
-                        DwmSetWindowAttribute(handle, 20, ref dark, sizeof(int));
-                }
-                catch (Exception) { /* Native title bar styling is optional. */ }
-            };
+            JavaNavigationWindowStyle.SetupWindow(win);
             return win;
         }
     }

@@ -21,12 +21,6 @@ namespace JavaLanguageSupport.Editor.Refactoring
     /// </summary>
     internal static class JavaMemberGeneration
     {
-        private sealed class Choice
-        {
-            internal JObject Data;
-            internal string Label;
-        }
-
         internal static async Task ExecuteAsync(JavaEditorOperation operation,
             string uri, ITextBuffer buffer, ITextSnapshot snapshot,
             int caret, Action<string> log, CancellationToken token)
@@ -162,71 +156,156 @@ namespace JavaLanguageSupport.Editor.Refactoring
             if (log != null) log("Java generation: " + message);
         }
 
+        private sealed class ConstructorRow
+        {
+            internal JObject Source;
+            public string Name { get; set; }
+            public string Parameters { get; set; }
+            public bool CanInclude { get { return true; } }
+            public bool Include { get; set; }
+        }
+
+        private sealed class ConstructorFieldRow
+        {
+            internal JObject Source;
+            public string Name { get; set; }
+            public string Type { get; set; }
+            public bool CanInclude { get { return true; } }
+            public bool Include { get; set; }
+        }
+
         private static bool ChooseConstructors(JArray constructors, JArray fields,
             out JArray chosenConstructors, out JArray chosenFields)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             chosenConstructors = new JArray();
             chosenFields = new JArray();
-            if (constructors.Count > 200 || fields.Count > 200)
+            var superRows = new List<ConstructorRow>();
+            foreach (JObject item in constructors.OfType<JObject>())
+                superRows.Add(new ConstructorRow
+                {
+                    Source = (JObject)item.DeepClone(),
+                    Name = (string)item["name"] ?? "Costruttore base",
+                    Parameters = Parameters(item),
+                    // Keep a useful default but never silently select every overload.
+                    Include = superRows.Count == 0
+                });
+            var fieldRows = new List<ConstructorFieldRow>();
+            foreach (JObject item in fields.OfType<JObject>())
+                fieldRows.Add(new ConstructorFieldRow
+                {
+                    Source = (JObject)item.DeepClone(),
+                    Name = (string)item["name"] ?? "campo",
+                    Type = (string)item["type"] ?? "?",
+                    Include = true // All eligible fields can be unchecked individually.
+                });
+            if (superRows.Count == 0) return false;
+            var superTable = JavaGenerationDialogStyle.Table();
+            JavaGenerationDialogStyle.Column(superTable, "Costruttore superclasse", "Name", 1.5);
+            JavaGenerationDialogStyle.Column(superTable, "Parametri", "Parameters", 2);
+            JavaGenerationDialogStyle.CheckColumn(superTable, "Includi", "Include", "CanInclude");
+            superTable.ItemsSource = superRows;
+            var fieldTable = JavaGenerationDialogStyle.Table();
+            JavaGenerationDialogStyle.Column(fieldTable, "Nome variabile", "Name", 2);
+            JavaGenerationDialogStyle.Column(fieldTable, "Tipo", "Type", 1.4);
+            JavaGenerationDialogStyle.CheckColumn(fieldTable, "Includi", "Include", "CanInclude");
+            fieldTable.ItemsSource = fieldRows;
+
+            var body = new Grid { Margin = new Thickness(13, 10, 13, 0), MinHeight = 0 };
+            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(135) });
+            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            var first = JavaGenerationDialogStyle.Text(
+                "Costruttori della superclasse: scegli uno o piu' overload da richiamare.", true);
+            Grid.SetRow(first, 0); body.Children.Add(first);
+            Grid.SetRow(superTable, 1); body.Children.Add(superTable);
+            var second = JavaGenerationDialogStyle.Text(
+                "Campi da inizializzare: deseleziona quelli da escludere.", true);
+            second.Margin = new Thickness(0, 12, 0, 7);
+            Grid.SetRow(second, 2); body.Children.Add(second);
+            Grid.SetRow(fieldTable, 3); body.Children.Add(fieldTable);
+            if (!JavaGenerationDialogStyle.Show("Java: Genera costruttore", body))
+                return false;
+
+            foreach (ConstructorRow row in superRows)
+                if (row.Include) chosenConstructors.Add(row.Source.DeepClone());
+            foreach (ConstructorFieldRow row in fieldRows)
+                if (row.Include) chosenFields.Add(row.Source.DeepClone());
+            if (chosenConstructors.Count == 0)
             {
-                MessageBox.Show("Troppi elementi da mostrare (oltre 200). " +
-                    "Restringi la classe o i campi selezionabili.",
+                MessageBox.Show("Seleziona almeno un costruttore della superclasse.",
                     "Java: Genera costruttore", MessageBoxButton.OK,
                     MessageBoxImage.Information);
                 return false;
             }
-            var constructorList = MakeList(constructors, x =>
-                ((string)x["name"] ?? "Costruttore base") + Parameters(x),
-                x => false);
-            if (constructorList.Items.Count > 0)
-                constructorList.SelectedIndex = 0;
-            var fieldList = MakeList(fields, x =>
-                ((string)x["name"] ?? "campo") + " : " + ((string)x["type"] ?? "?"),
-                x => true);
+            return true;
+        }
 
-            var form = new StackPanel { Margin = new Thickness(12) };
-            form.Children.Add(MakeHeader("Costruttore della superclasse (obbligatorio):"));
-            constructorList.Height = 128;
-            form.Children.Add(constructorList);
-            form.Children.Add(MakeHeader("Campi da inizializzare (Ctrl/clic per selezione multipla):"));
-            fieldList.Height = 160;
-            form.Children.Add(fieldList);
-            bool accepted = ShowSelector("Java: Genera costruttore", form);
-            if (!accepted) return false;
-            chosenConstructors = Selected(constructorList);
-            chosenFields = Selected(fieldList);
-            return chosenConstructors.Count > 0;
+        // JDT LS supplies the authoritative list and method metadata. We pass
+        // back the original JSON payloads selected by the user, unchanged.
+        private sealed class OverrideRow
+        {
+            internal JObject Source;
+            public string MethodName { get; set; }
+            public string DeclaringClass { get; set; }
+            public bool CanInclude { get { return true; } }
+            public bool Include { get; set; }
         }
 
         private static bool ChooseOverrides(JArray methods, out JArray chosenMethods)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             chosenMethods = new JArray();
-            if (methods.Count > 250)
+            var rows = new List<OverrideRow>();
+            foreach (JObject method in methods.OfType<JObject>())
             {
-                MessageBox.Show("Troppi metodi ereditati da visualizzare (oltre 250).",
+                string sourceType = (string)method["declaringClass"] ?? "(tipo sconosciuto)";
+                bool fromJavaObject = string.Equals(sourceType.Trim(), "java.lang.Object",
+                    StringComparison.Ordinal);
+                rows.Add(new OverrideRow
+                {
+                    Source = (JObject)method.DeepClone(),
+                    MethodName = ((string)method["name"] ?? "metodo") + Parameters(method),
+                    DeclaringClass = sourceType,
+                    // By default select inherited/interface methods, never the
+                    // ubiquitous java.lang.Object helpers (equals, clone, etc.).
+                    // The user can still explicitly select Object methods.
+                    Include = !fromJavaObject
+                });
+            }
+            if (rows.Count == 0) return false;
+
+            var table = JavaGenerationDialogStyle.Table();
+            JavaGenerationDialogStyle.Column(table, "Nome metodo", "MethodName", 2.4);
+            JavaGenerationDialogStyle.Column(table, "Classe di provenienza", "DeclaringClass", 2.0);
+            JavaGenerationDialogStyle.CheckColumn(table, "Includi", "Include", "CanInclude");
+            table.ItemsSource = rows;
+
+            var body = new Grid { Margin = new Thickness(13, 10, 13, 0), MinHeight = 0 };
+            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            body.RowDefinitions.Add(new RowDefinition {
+                Height = new GridLength(1, GridUnitType.Star)
+            });
+            var label = JavaGenerationDialogStyle.Text(
+                "Seleziona i metodi da generare. Per impostazione predefinita " +
+                "sono inclusi i metodi delle superclassi e delle interfacce " +
+                "(escluso java.lang.Object).", true);
+            Grid.SetRow(label, 0); body.Children.Add(label);
+            Grid.SetRow(table, 1); body.Children.Add(table);
+            if (!JavaGenerationDialogStyle.Show(
+                "Java: Override/Implement metodi", body, 900, 580)) return false;
+
+            foreach (OverrideRow row in rows)
+                if (row.Include) chosenMethods.Add(row.Source.DeepClone());
+            if (chosenMethods.Count == 0)
+            {
+                MessageBox.Show("Seleziona almeno un metodo da implementare o ridefinire.",
                     "Java: Override/Implement", MessageBoxButton.OK,
                     MessageBoxImage.Information);
                 return false;
             }
-            var list = MakeList(methods, x =>
-                ((string)x["declaringClass"] ?? "tipo base") + " · " +
-                ((string)x["name"] ?? "metodo") + Parameters(x) +
-                ((bool?)x["unimplemented"] == true ? "  [da implementare]" : ""),
-                x => (bool?)x["unimplemented"] == true);
-            // If the type has no abstract/unimplemented methods, still allow
-            // choosing a concrete inherited method to override.
-            if (list.SelectedItems.Count == 0 && list.Items.Count > 0)
-                list.SelectedIndex = 0;
-            list.Height = 350;
-            var form = new StackPanel { Margin = new Thickness(12) };
-            form.Children.Add(MakeHeader("Seleziona i metodi da implementare o ridefinire " +
-                "(Ctrl/clic per selezione multipla):"));
-            form.Children.Add(list);
-            if (!ShowSelector("Java: Override/Implement metodi", form)) return false;
-            chosenMethods = Selected(list);
-            return chosenMethods.Count > 0;
+            return true;
         }
 
         private static string Parameters(JToken value)
@@ -236,88 +315,5 @@ namespace JavaLanguageSupport.Editor.Refactoring
             return "(" + string.Join(", ", parameters.Select(x => (string)x ?? "?")) + ")";
         }
 
-        private static TextBlock MakeHeader(string value)
-        {
-            var text = new TextBlock { Text = value, Margin = new Thickness(0, 10, 0, 5),
-                TextWrapping = TextWrapping.Wrap };
-            text.SetResourceReference(TextBlock.ForegroundProperty,
-                EnvironmentColors.ToolWindowTextBrushKey);
-            return text;
-        }
-
-        private static ListBox MakeList(JArray items, Func<JObject, string> label,
-            Func<JObject, bool> selectDefault)
-        {
-            var list = new ListBox {
-                SelectionMode = SelectionMode.Extended,
-                MinWidth = 580
-            };
-            list.SetResourceReference(Control.BackgroundProperty,
-                EnvironmentColors.ToolWindowBackgroundBrushKey);
-            list.SetResourceReference(Control.ForegroundProperty,
-                EnvironmentColors.ToolWindowTextBrushKey);
-            list.SetResourceReference(Control.BorderBrushProperty,
-                EnvironmentColors.ToolWindowBorderBrushKey);
-            foreach (JObject data in items.OfType<JObject>())
-            {
-                var choice = new Choice { Data = (JObject)data.DeepClone(),
-                    Label = label(data) };
-                var item = new ListBoxItem { Content = choice.Label, Tag = choice };
-                list.Items.Add(item);
-                if (selectDefault(data)) item.IsSelected = true;
-            }
-            return list;
-        }
-
-        private static JArray Selected(ListBox list)
-        {
-            var output = new JArray();
-            foreach (ListBoxItem item in list.SelectedItems)
-            {
-                var choice = item.Tag as Choice;
-                if (choice != null) output.Add(choice.Data.DeepClone());
-            }
-            return output;
-        }
-
-        private static bool ShowSelector(string title, FrameworkElement form)
-        {
-            var window = new Window {
-                Title = title, Width = 700, Height = 510,
-                MinWidth = 620, MinHeight = 350,
-                WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                ResizeMode = ResizeMode.CanResize,
-                ShowInTaskbar = false
-            };
-            window.SetResourceReference(Window.BackgroundProperty,
-                EnvironmentColors.ToolWindowBackgroundBrushKey);
-            var root = new DockPanel();
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(10) };
-            var ok = new Button { Content = "Genera", IsDefault = true,
-                MinWidth = 96, Margin = new Thickness(4) };
-            var cancel = new Button { Content = "Annulla", IsCancel = true,
-                MinWidth = 96, Margin = new Thickness(4) };
-            foreach (var b in new[] { ok, cancel })
-            {
-                b.SetResourceReference(Control.ForegroundProperty,
-                    EnvironmentColors.ToolWindowTextBrushKey);
-                b.SetResourceReference(Control.BackgroundProperty,
-                    EnvironmentColors.ToolWindowBackgroundBrushKey);
-            }
-            ok.Click += (s, e) => { window.DialogResult = true; window.Close(); };
-            cancel.Click += (s, e) => { window.DialogResult = false; window.Close(); };
-            buttons.Children.Add(ok);
-            buttons.Children.Add(cancel);
-            DockPanel.SetDock(buttons, Dock.Bottom);
-            root.Children.Add(buttons);
-            var scroll = new ScrollViewer { Content = form,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
-            root.Children.Add(scroll);
-            window.Content = root;
-            return window.ShowDialog() == true;
-        }
     }
 }

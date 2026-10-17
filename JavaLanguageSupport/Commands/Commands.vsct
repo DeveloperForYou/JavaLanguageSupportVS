@@ -45,19 +45,10 @@
         <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings><ButtonText>Java: Rinomina simbolo nel progetto</ButtonText></Strings>
       </Button>
-      <Button guid="guidJavaToolsCmdSet" id="cmdCodeActions" priority="0x0900" type="Button">
-        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
-        <Strings><ButtonText>Java: Azioni e refactoring</ButtonText></Strings>
-      </Button>
       <Button guid="guidJavaToolsCmdSet" id="cmdGoToTypeDefinition" priority="0x0f00" type="Button">
         <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
         <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings><ButtonText>Java: Vai alla definizione del tipo</ButtonText></Strings>
-      </Button>
-      <Button guid="guidJavaToolsCmdSet" id="cmdPeekDefinition" priority="0x1000" type="Button">
-        <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
-        <CommandFlag>DynamicVisibility</CommandFlag>
-        <Strings><ButtonText>Java: Anteprima definizione</ButtonText></Strings>
       </Button>
       <Button guid="guidJavaToolsCmdSet" id="cmdCallHierarchy" priority="0x1100" type="Button">
         <Parent guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" />
@@ -124,9 +115,7 @@
       <IDSymbol name="cmdFormatSelection" value="0x0111" />
       <IDSymbol name="cmdOrganizeImports" value="0x0112" />
       <IDSymbol name="cmdRename" value="0x0113" />
-      <IDSymbol name="cmdCodeActions" value="0x0114" />
       <IDSymbol name="cmdGoToTypeDefinition" value="0x011A" />
-      <IDSymbol name="cmdPeekDefinition" value="0x011B" />
       <IDSymbol name="cmdCallHierarchy" value="0x011C" />
       <IDSymbol name="cmdTypeHierarchy" value="0x011D" />
       <IDSymbol name="cmdExtractMethod" value="0x011E" />

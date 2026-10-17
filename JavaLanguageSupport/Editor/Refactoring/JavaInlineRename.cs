@@ -1149,6 +1149,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 ResizeMode = ResizeMode.CanResize,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Content = content, ShowInTaskbar = false };
+            // The inline rename popup is intentionally frameless. Only the
+            // separate preview dialog follows the common native caption policy.
+            JavaLanguageSupport.Editor.Navigation.JavaNavigationWindowStyle.SetupWindow(window);
             window.SourceInitialized += (sender, args) => RemovePreviewMinimizeButton(window);
             if (owner != null && owner.IsVisible) window.Owner = owner;
             else {

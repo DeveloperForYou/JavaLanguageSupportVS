@@ -15,6 +15,7 @@ public class Child extends Parent {
         this.name = "default";
     }
 
+
     public String name() {
         return name;
     }
