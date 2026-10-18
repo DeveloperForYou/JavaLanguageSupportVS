@@ -104,6 +104,14 @@ namespace JavaLanguageSupport.Editor.Navigation
                 BorderThickness = new Thickness(1)
             };
             JavaNavigationWindowStyle.ThemeControl(source);
+            // Refresh the lexical fallback when the dialog becomes active.
+            // This re-reads the current VS palette and never mutates the editor.
+            dialog.Activated += (sender, args) =>
+            {
+                if (dialog.IsVisible)
+                    source.Document = JavaPreviewSyntax.Create(lines, first, last,
+                        location.Line);
+            };
             Grid.SetRow(source, 1);
             root.Children.Add(source);
             var row = new StackPanel {

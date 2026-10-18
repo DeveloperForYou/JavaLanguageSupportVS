@@ -17,7 +17,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
     [Export(typeof(IViewTaggerProvider))]
     [Name("Java JDT LS Semantic Classifications")]
     [ContentType("java")]
-    [TextViewRole(PredefinedTextViewRoles.Document)]
+    // Include native Peek text views, which need not have the Document role.
     [TagType(typeof(IClassificationTag))]
     internal sealed class JavaSemanticTaggerProvider : IViewTaggerProvider
     {

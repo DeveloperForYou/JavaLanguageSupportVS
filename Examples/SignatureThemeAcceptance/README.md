@@ -1,0 +1,1 @@
+Test Java manuali per Hotfix 31: aprire Customer.java, usare Genera costruttore, Genera getter/setter e Cambia firma metodo su compute; verificare Consumer.java dopo i refactoring. Il codice compila con Java 11+ (per List.of e var). Non è necessario Maven.

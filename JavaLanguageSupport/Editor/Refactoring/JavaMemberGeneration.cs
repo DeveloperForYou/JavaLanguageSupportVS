@@ -83,6 +83,14 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 }
                 if (!ChooseConstructors(constructors, fields ?? new JArray(),
                     out chosenConstructors, out chosenFields)) return;
+                string duplicateReason;
+                if (!JavaConstructorDuplicateGuard.Allowed(snapshot,
+                    chosenConstructors, chosenFields, out duplicateReason))
+                {
+                    await NotifyAsync(duplicateReason ??
+                        "La firma selezionata non puo' essere generata in sicurezza.", token);
+                    return;
+                }
                 request = new JObject {
                     ["context"] = context,
                     ["constructors"] = chosenConstructors,
@@ -225,8 +233,21 @@ namespace JavaLanguageSupport.Editor.Refactoring
             second.Margin = new Thickness(0, 12, 0, 7);
             Grid.SetRow(second, 2); body.Children.Add(second);
             Grid.SetRow(fieldTable, 3); body.Children.Add(fieldTable);
-            if (!JavaGenerationDialogStyle.Show("Java: Genera costruttore", body))
-                return false;
+            // Object() is implicit and can be auto-selected. For any other
+            // superclass the user must explicitly keep at least one overload.
+            bool onlyObject = superRows.Count == 1 &&
+                string.Equals(superRows[0].Name, "Object", StringComparison.Ordinal);
+            if (!JavaGenerationDialogStyle.Show("Java: Genera costruttore", body,
+                790, 580, () =>
+                {
+                    if (onlyObject || superRows.Any(x => x.Include)) return true;
+                    MessageBox.Show("Seleziona almeno un costruttore della superclasse.",
+                        "Java: Genera costruttore", MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return false;
+                })) return false;
+            if (onlyObject && !superRows.Any(x => x.Include))
+                superRows[0].Include = true;
 
             foreach (ConstructorRow row in superRows)
                 if (row.Include) chosenConstructors.Add(row.Source.DeepClone());

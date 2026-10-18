@@ -48,7 +48,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 SelectionMode = DataGridSelectionMode.Single,
                 SelectionUnit = DataGridSelectionUnit.FullRow,
                 HeadersVisibility = DataGridHeadersVisibility.Column,
-                GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
+                GridLinesVisibility = DataGridGridLinesVisibility.All,
                 EnableRowVirtualization = true,
                 EnableColumnVirtualization = true,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -63,6 +63,10 @@ namespace JavaLanguageSupport.Editor.Refactoring
             grid.SetResourceReference(Control.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
             grid.SetResourceReference(Control.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            grid.SetResourceReference(DataGrid.VerticalGridLinesBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            grid.SetResourceReference(DataGrid.HorizontalGridLinesBrushProperty,
                 EnvironmentColors.ToolWindowBorderBrushKey);
             VirtualizingStackPanel.SetIsVirtualizing(grid, true);
             VirtualizingStackPanel.SetVirtualizationMode(grid, VirtualizationMode.Recycling);
@@ -142,7 +146,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
         }
 
         internal static bool Show(string title, UIElement content, double width = 790,
-            double height = 580)
+            double height = 580, Func<bool> canGenerate = null)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var desktop = SystemParameters.WorkArea;
@@ -155,8 +159,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 Height = Math.Min(height, maxHeight),
                 MinWidth = Math.Min(590, maxWidth),
                 MinHeight = Math.Min(350, maxHeight),
-                MaxWidth = maxWidth,
-                MaxHeight = maxHeight,
+                // Let Windows handle maximizing on the active monitor.
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 ResizeMode = ResizeMode.CanResize,
                 ShowInTaskbar = false,
@@ -172,7 +175,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
             };
             var ok = Button("Genera", true, false);
             var cancel = Button("Annulla", false, true);
-            ok.Click += (sender, args) => { window.DialogResult = true; };
+            ok.Click += (sender, args) => { if (canGenerate == null || canGenerate()) window.DialogResult = true; };
             cancel.Click += (sender, args) => { window.DialogResult = false; };
             footer.Children.Add(ok);
             footer.Children.Add(cancel);
@@ -188,6 +191,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
             var button = new Button { Content = label, MinWidth = 106,
                 IsDefault = isDefault, IsCancel = isCancel,
                 Margin = new Thickness(5, 0, 0, 0), Padding = new Thickness(8, 4, 8, 4) };
+            button.SetResourceReference(FrameworkElement.StyleProperty,
+                Microsoft.VisualStudio.Shell.VsResourceKeys.ThemedDialogButtonStyleKey);
             button.SetResourceReference(Control.BackgroundProperty,
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
             button.SetResourceReference(Control.ForegroundProperty,

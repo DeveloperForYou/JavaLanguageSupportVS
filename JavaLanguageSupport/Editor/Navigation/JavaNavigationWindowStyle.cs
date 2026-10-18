@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using EnvDTE;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
@@ -65,14 +66,23 @@ namespace JavaLanguageSupport.Editor.Navigation
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
             window.SetResourceReference(Control.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
+            // Native OS title (including VS executable logo). Minimize is
+            // hidden and Close is disabled; Maximize/Restore remains functional.
+            if (window.WindowStyle != WindowStyle.None)
+                window.WindowStyle = WindowStyle.SingleBorderWindow;
             window.SourceInitialized += (sender, args) =>
             {
+                InstallVisualStudioIcon(window);
                 RemoveMinimizeButton(window);
                 WhiteCaption(window);
                 DisableSystemClose(window);
             };
             // Keep the caption light even when activating or deactivating VS.
             window.Activated += (sender, args) => WhiteCaption(window);
+            InstallReadableButtons(window);
+            // True custom white title with only Maximize/Restore; the native
+            // disabled Minimize/X icons must NOT remain visible.
+            // Hotfix31: native Windows caption; custom frameless title removed.
 
             var dte = Package.GetGlobalService(typeof(SDTE)) as DTE;
             if (dte != null && dte.MainWindow != null)
@@ -80,6 +90,130 @@ namespace JavaLanguageSupport.Editor.Navigation
                 // Visual Studio 2026 DTE.MainWindow.HWnd is already IntPtr.
                 new WindowInteropHelper(window).Owner = dte.MainWindow.HWnd;
             }
+        }
+
+        private const int WmGetIcon = 0x007F;
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hwnd, uint msg,
+            IntPtr wParam, IntPtr lParam);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr ExtractIcon(IntPtr instance, string filename,
+            uint iconIndex);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DestroyIcon(IntPtr icon);
+
+        private static void InstallVisualStudioIcon(System.Windows.Window window)
+        {
+            try
+            {
+                if (window.Icon != null) return;
+                var dte = Package.GetGlobalService(typeof(SDTE)) as DTE;
+                if (dte == null || dte.MainWindow == null) return;
+                IntPtr mainHwnd = dte.MainWindow.HWnd;
+                if (mainHwnd == IntPtr.Zero) return;
+                IntPtr icon = SendMessage(mainHwnd, WmGetIcon,
+                    new IntPtr(2), IntPtr.Zero);
+                if (icon == IntPtr.Zero)
+                    icon = SendMessage(mainHwnd, WmGetIcon,
+                        new IntPtr(0), IntPtr.Zero);
+                bool ownsIcon = false;
+                if (icon == IntPtr.Zero)
+                {
+                    // The IDE sometimes exposes no WM_GETICON; in VS Exp the
+                    // current executable is still devenv.exe (Visual Studio).
+                    icon = ExtractIcon(IntPtr.Zero,
+                        System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName, 0);
+                    ownsIcon = icon.ToInt64() > 1;
+                }
+                if (icon.ToInt64() > 1)
+                {
+                    try {
+                        window.Icon = Imaging.CreateBitmapSourceFromHIcon(icon,
+                            Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                    }
+                    finally { if (ownsIcon) DestroyIcon(icon); }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine("[Java Dialog Icon] " + ex.Message);
+            }
+        }
+
+        private sealed class HoverState
+        {
+            internal Button Button;
+            internal Brush Background;
+            internal Brush Foreground;
+            internal Brush Border;
+        }
+
+        private static void InstallReadableButtons(System.Windows.Window window)
+        {
+            HoverState active = null;
+            Action restore = () =>
+            {
+                if (active == null) return;
+                active.Button.SetCurrentValue(Control.BackgroundProperty, active.Background);
+                active.Button.SetCurrentValue(Control.ForegroundProperty, active.Foreground);
+                active.Button.SetCurrentValue(Control.BorderBrushProperty, active.Border);
+                active = null;
+            };
+            Action<Button> select = button =>
+            {
+                if (active != null && ReferenceEquals(active.Button, button)) return;
+                restore();
+                if (button == null || !button.IsEnabled || !JavaSemanticPaletteDark()) return;
+                active = new HoverState { Button = button,
+                    Background = button.Background, Foreground = button.Foreground,
+                    Border = button.BorderBrush };
+                // Subtle VS-like hover, readable white text regardless of focus.
+                button.SetCurrentValue(Control.BackgroundProperty,
+                    new SolidColorBrush(Color.FromRgb(0x37, 0x45, 0x55)));
+                button.SetCurrentValue(Control.ForegroundProperty, Brushes.White);
+                button.SetCurrentValue(Control.BorderBrushProperty,
+                    new SolidColorBrush(Color.FromRgb(0x5A, 0x6B, 0x7D)));
+            };
+            window.PreviewMouseMove += (sender, args) =>
+            {
+                DependencyObject node = args.OriginalSource as DependencyObject;
+                Button target = null;
+                while (node != null && node != window)
+                {
+                    target = node as Button;
+                    if (target != null) break;
+                    try { node = VisualTreeHelper.GetParent(node); }
+                    catch (InvalidOperationException) { node = LogicalTreeHelper.GetParent(node); }
+                }
+                select(target);
+            };
+            window.MouseLeave += (sender, args) => restore();
+            window.Closed += (sender, args) => restore();
+            window.AddHandler(Keyboard.GotKeyboardFocusEvent,
+                new KeyboardFocusChangedEventHandler((sender, args) =>
+                {
+                    var button = args.NewFocus as Button;
+                    if (button != null) select(button);
+                }), true);
+            window.AddHandler(Keyboard.LostKeyboardFocusEvent,
+                new KeyboardFocusChangedEventHandler((sender, args) =>
+                {
+                    if (args.OldFocus is Button) restore();
+                }), true);
+        }
+
+        private static bool JavaSemanticPaletteDark()
+        {
+            try
+            {
+                var color = VSColorTheme.GetThemedColor(
+                    EnvironmentColors.ToolWindowBackgroundColorKey);
+                return color.R * 299 + color.G * 587 + color.B * 114 < 128000;
+            }
+            catch (Exception) { return false; }
         }
 
         private static void WhiteCaption(System.Windows.Window window)
