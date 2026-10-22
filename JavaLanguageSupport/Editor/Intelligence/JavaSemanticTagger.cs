@@ -23,11 +23,15 @@ namespace JavaLanguageSupport.Editor.Intelligence
     {
         [Import] internal ITextDocumentFactoryService Documents = null;
         [Import] internal IClassificationTypeRegistryService Registry = null;
+        [Import] internal IClassificationFormatMapService FormatMaps = null;
 
         public ITagger<T> CreateTagger<T>(ITextView view, ITextBuffer buffer) where T : ITag
         {
             var wpf = view as IWpfTextView;
             if (wpf == null || !ReferenceEquals(view.TextBuffer, buffer)) return null;
+            // Register format-map theme refresh from the tagger too. This covers
+            // Java native Peek views and is independent of MEF view role matching.
+            JavaSemanticThemeRefresh.AttachView(wpf, FormatMaps, Registry);
             return wpf.Properties.GetOrCreateSingletonProperty(() =>
                 new JavaSemanticTagger(wpf, Documents, Registry)) as ITagger<T>;
         }
@@ -85,6 +89,17 @@ namespace JavaLanguageSupport.Editor.Intelligence
                     lexicalMethodStarts.Add(candidate.Span.Start.Position);
             }
 
+            // JDT LS may report these as generic keyword/modifier/type tokens.
+            // Keep explicit, user-configurable Java classifications authoritative.
+            var javaKeywordStarts = new HashSet<int>();
+            foreach (ITagSpan<IClassificationTag> candidate in lexical)
+            {
+                var classification = candidate.Tag.ClassificationType;
+                if (classification != null &&
+                    JavaKeywordClassificationNames.IsNewKeywordClassification(
+                        classification.Classification))
+                    javaKeywordStarts.Add(candidate.Span.Start.Position);
+            }
             var semanticPositions = new HashSet<int>();
             if (JavaLspRpc.Connected && JavaSemanticLegend.Available)
             {
@@ -117,6 +132,9 @@ namespace JavaLanguageSupport.Editor.Intelligence
                         IClassificationType type = classifications.GetClassificationType(kind);
                         if (type == null) continue;
                         int offset = textLine.Start.Position + col;
+                        // User-configurable Java keyword colors take precedence
+                        // over JDT LS's generic keyword/modifier token categories.
+                        if (javaKeywordStarts.Contains(offset)) continue;
                         // On partially broken source, JDT LS sometimes reports
                         // a generic identifier for an actual invocation. The
                         // lexical scanner sees the following '(' reliably, even

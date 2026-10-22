@@ -42,6 +42,14 @@ namespace JavaLanguageSupport.Editor.Intelligence
         private static readonly Regex VarBeforeHint = new Regex(
             @"\bvar\s+[\p{L}_$][\p{L}\p{Nd}_$]*\s*$", RegexOptions.Compiled);
 
+        // JDT LS deliberately suppresses var type hints when the initializer is
+        // an obvious constructor call (e.g. new Customer(...)).  For that *only*,
+        // the constructor's explicit, non-generic type can be displayed safely.
+        // No guesses are made for diamond operators, lambdas or method returns.
+        private static readonly Regex ExplicitConstructorVar = new Regex(
+            @"\bvar[ \t]+(?<name>[\p{L}_$][\p{L}\p{Nd}_$]*)[ \t]*=[ \t]*new[ \t]+(?<type>[\p{L}_$][\p{L}\p{Nd}_$]*(?:\.[\p{L}_$][\p{L}\p{Nd}_$]*)*)[ \t]*\(",
+            RegexOptions.Compiled);
+
         internal JavaInlayHintsTagger(IWpfTextView view, ITextDocumentFactoryService documents)
             : base(view, documents) { }
 
@@ -60,7 +68,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
                               end = JavaLspRpc.Position(snapshot, end) }
             };
             var response = await JavaLspRpc.RequestAsync(MethodName, parameters, token) as JArray;
-            if (response == null) return result;
+            if (response == null) response = new JArray();
 
             var distinct = new HashSet<string>(StringComparer.Ordinal);
             foreach (var hint in response.OfType<JObject>().Take(180))
@@ -99,6 +107,40 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 var span = new SnapshotSpan(snapshot, offset, 0);
                 result.Add(new TagSpan<IntraTextAdornmentTag>(span,
                     new IntraTextAdornmentTag(ui, null, PositionAffinity.Predecessor)));
+            }
+            // Eclipse JDT LS omits "obvious" constructor-initialized local vars.
+            // Add a visually distinct hint ONLY for the unambiguous syntax:
+            // var example = new Customer(...);
+            // Do not duplicate a semantic hint that the server supplied.
+            int first = Math.Max(0, snapshot.GetLineFromPosition(Math.Max(0, Math.Min(start, snapshot.Length))).LineNumber);
+            int last = Math.Min(snapshot.LineCount - 1,
+                snapshot.GetLineFromPosition(Math.Max(0, Math.Min(end, snapshot.Length))).LineNumber);
+            int extra = 0;
+            for (int n = first; n <= last && extra < 40; n++)
+            {
+                token.ThrowIfCancellationRequested();
+                var line = snapshot.GetLineFromLineNumber(n);
+                string lineText = line.GetText();
+                if (lineText.Length > 2000) continue;
+                var match = ExplicitConstructorVar.Match(lineText);
+                if (!match.Success) continue;
+                string prefix = lineText.Substring(0, match.Index).Trim();
+                if (prefix.Length != 0 && prefix != "final") continue;
+                // Do not mislabel an anonymous subclass using the declared base name.
+                string tail = lineText.Substring(match.Index + match.Length);
+                if (Regex.IsMatch(tail, @"\)\s*\{")) continue;
+                int position = line.Start.Position + match.Groups["name"].Index +
+                    match.Groups["name"].Length;
+                if (position < start || position > end ||
+                    result.Any(x => x.Span.Start.Position == position)) continue;
+                string qualified = match.Groups["type"].Value;
+                string label = qualified.Substring(qualified.LastIndexOf('.') + 1);
+                // The type is *not* written into the source buffer.
+                var span = new SnapshotSpan(snapshot, position, 0);
+                result.Add(new TagSpan<IntraTextAdornmentTag>(span,
+                    new IntraTextAdornmentTag(MakeLabel(label, true), null,
+                        PositionAffinity.Predecessor)));
+                extra++;
             }
             return result;
         }

@@ -44,14 +44,14 @@ namespace JavaLanguageSupport.Editor.Navigation
 
             internal Colors(bool dark)
             {
-                Plain = MakeBrush(dark ? 0xD4D4D4 : 0x242424);
+                Plain = MakeBrush(dark ? 0xD4D4D4 : 0x000000);
                 Keyword = MakeBrush(dark ? 0x569CD6 : 0x0000FF);
-                Type = MakeBrush(dark ? 0x4EC9B0 : 0x267F99);
-                Method = MakeBrush(dark ? 0xDCDCAA : 0x795E26);
+                Type = MakeBrush(dark ? 0x4EC9B0 : 0x2B91AF);
+                Method = MakeBrush(dark ? 0xDCDCAA : 0x74531F);
                 Comment = MakeBrush(dark ? 0x6A9955 : 0x008000);
                 String = MakeBrush(dark ? 0xCE9178 : 0xA31515);
                 Number = MakeBrush(dark ? 0xB5CEA8 : 0x098658);
-                Annotation = MakeBrush(dark ? 0xC586C0 : 0xAF00DB);
+                Annotation = MakeBrush(dark ? 0xC586C0 : 0x7E7E7E);
                 Gutter = MakeBrush(dark ? 0x858585 : 0x777777);
                 ActiveLine = MakeBrush(dark ? 0x333D4A : 0xEAF2FA);
             }

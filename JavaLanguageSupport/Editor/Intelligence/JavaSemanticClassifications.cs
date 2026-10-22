@@ -138,9 +138,10 @@ namespace JavaLanguageSupport.Editor.Intelligence
         public JavaSemanticTypeFormat()
         {
             DisplayName = "Java: tipi, classi e interfacce (JDT LS)";
+            IsBold = !JavaSemanticPalette.DarkTheme;
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0x4E, 0xC9, 0xB0)  // dark VS: teal
-                : Color.FromRgb(0x0D, 0x70, 0x6B); // light VS: dark teal
+                : Color.FromRgb(0x2B, 0x91, 0xAF); // light VS: dark teal
         }
     }
 
@@ -155,8 +156,8 @@ namespace JavaLanguageSupport.Editor.Intelligence
         {
             DisplayName = "Java: metodi e chiamate (JDT LS)";
             ForegroundColor = JavaSemanticPalette.DarkTheme
-                ? Color.FromRgb(0xFF, 0xD1, 0x66)  // dark VS: distinct gold
-                : Color.FromRgb(0x93, 0x47, 0x12); // light VS: dark brown
+                ? Color.FromRgb(0xDC, 0xDC, 0xAA)  // dark VS: distinct gold
+                : Color.FromRgb(0x74, 0x53, 0x1F); // light VS: dark brown
         }
     }
     // Extra classifications deliberately DO NOT reuse the generic VS identifier
@@ -173,7 +174,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             DisplayName = "Java: variabili e campi (JDT LS)";
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0x9C, 0xDC, 0xFE)
-                : Color.FromRgb(0x53, 0x37, 0x7E);
+                : Color.FromRgb(0x00, 0x00, 0x00);
         }
     }
 
@@ -189,7 +190,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             DisplayName = "Java: parametri (JDT LS)";
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0xD7, 0xBA, 0x7D)
-                : Color.FromRgb(0x24, 0x62, 0x86);
+                : Color.FromRgb(0x76, 0x5C, 0x24);
         }
     }
 
@@ -203,9 +204,10 @@ namespace JavaLanguageSupport.Editor.Intelligence
         public JavaSemanticAnnotationFormat()
         {
             DisplayName = "Java: annotazioni (JDT LS)";
+            IsBold = true;
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0xC5, 0x86, 0xC0)
-                : Color.FromRgb(0x83, 0x25, 0xA4);
+                : Color.FromRgb(0x7E, 0x7E, 0x7E);
         }
     }
 
@@ -219,9 +221,10 @@ namespace JavaLanguageSupport.Editor.Intelligence
         public JavaDirectiveKeywordFormat()
         {
             DisplayName = "Java: parole chiave package/import";
+            IsBold = true;
             ForegroundColor = JavaSemanticPalette.DarkTheme
-                ? Color.FromRgb(0xC5, 0x86, 0xC0) // violet
-                : Color.FromRgb(0x77, 0x2B, 0x97);
+                ? Color.FromRgb(0x56, 0x9C, 0xD6) // violet
+                : Color.FromRgb(0x7F, 0x00, 0x55);
         }
     }
 
@@ -235,9 +238,10 @@ namespace JavaLanguageSupport.Editor.Intelligence
         public JavaNamespaceFormat()
         {
             DisplayName = "Java: package e namespace degli import";
+            IsBold = true;
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0x82, 0xB8, 0xE6) // distinct from method yellow and class teal
-                : Color.FromRgb(0x28, 0x5F, 0x8E);
+                : Color.FromRgb(0x00, 0x00, 0xFF);
         }
     }
 
@@ -253,7 +257,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             DisplayName = "Java: parentesi tonde, quadre e graffe";
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0xDA, 0xAE, 0xF0) // lilac - not method yellow
-                : Color.FromRgb(0x6F, 0x39, 0x7D);
+                : Color.FromRgb(0x00, 0x00, 0x00);
         }
     }
 
@@ -268,8 +272,8 @@ namespace JavaLanguageSupport.Editor.Intelligence
         {
             DisplayName = "Java: separatori punto, virgola e punto e virgola";
             ForegroundColor = JavaSemanticPalette.DarkTheme
-                ? Color.FromRgb(0xBE, 0xCD, 0xDF) // light cool gray
-                : Color.FromRgb(0x52, 0x5E, 0x6B);
+                ? Color.FromRgb(0xFF, 0xFF, 0xFF) // light cool gray
+                : Color.FromRgb(0x00, 0x00, 0x00);
         }
     }
 
@@ -285,7 +289,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             DisplayName = "Java: parentesi annidate - livello 1";
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0xF9, 0xD6, 0x6B)
-                : Color.FromRgb(0x80, 0x5A, 0x0A);
+                : Color.FromRgb(0x80, 0x53, 0x0B);
         }
     }
 
@@ -301,7 +305,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             DisplayName = "Java: parentesi annidate - livello 2";
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0xCE, 0x93, 0xD8)
-                : Color.FromRgb(0x76, 0x2C, 0x90);
+                : Color.FromRgb(0x6F, 0x2F, 0x8D);
         }
     }
 
@@ -317,7 +321,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             DisplayName = "Java: parentesi annidate - livello 3";
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0x6C, 0xCB, 0xFF)
-                : Color.FromRgb(0x16, 0x5A, 0x88);
+                : Color.FromRgb(0x16, 0x57, 0x85);
         }
     }
 
@@ -333,7 +337,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             DisplayName = "Java: parentesi annidate - livello 4";
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0x8F, 0xD1, 0x9E)
-                : Color.FromRgb(0x33, 0x6F, 0x35);
+                : Color.FromRgb(0x2E, 0x6A, 0x38);
         }
     }
 
@@ -349,7 +353,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             DisplayName = "Java: parentesi annidate - livello 5";
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0xFF, 0x9E, 0x64)
-                : Color.FromRgb(0x95, 0x50, 0x17);
+                : Color.FromRgb(0x90, 0x50, 0x1E);
         }
     }
 
@@ -365,7 +369,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             DisplayName = "Java: parentesi annidate - livello 6";
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0xA7, 0xA5, 0xFF)
-                : Color.FromRgb(0x55, 0x52, 0x8B);
+                : Color.FromRgb(0x51, 0x52, 0x97);
         }
     }
 

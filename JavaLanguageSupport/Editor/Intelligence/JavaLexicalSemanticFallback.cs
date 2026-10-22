@@ -59,6 +59,29 @@ namespace JavaLanguageSupport.Editor.Intelligence
             "uses", "provides", "with", "transitive", "to", "when", "_"
         };
 
+        // Reserved Java words are recolored by our editable VS classifications.
+        // Directive keywords (package/import/static import) keep their existing
+        // classification and are handled before this method is considered.
+        private static string NewKeywordClassification(string value)
+        {
+            switch (value)
+            {
+                case "var":
+                    return JavaKeywordClassificationNames.Var;
+                case "boolean": case "byte": case "short": case "int":
+                case "long": case "char": case "float": case "double": case "void":
+                    return JavaKeywordClassificationNames.Primitive;
+                case "public": case "protected": case "private":
+                case "static": case "final": case "abstract": case "native":
+                case "strictfp": case "transient": case "volatile": case "sealed":
+                    return JavaKeywordClassificationNames.Modifier;
+                case "true": case "false": case "null":
+                    return JavaKeywordClassificationNames.Constant;
+                default:
+                    return JavaKeywordClassificationNames.Keyword;
+            }
+        }
+
         internal static List<ITagSpan<IClassificationTag>> Scan(ITextSnapshot snapshot,
             IClassificationTypeRegistryService registry, HashSet<int> semanticPositions)
         {
@@ -72,7 +95,14 @@ namespace JavaLanguageSupport.Editor.Intelligence
             for (int index = 0; index < words.Count && result.Count < 40000; index++)
             {
                 Word word = words[index];
-                if (!word.Directive && Keywords.Contains(word.Value)) continue;
+                if (!word.Directive && Keywords.Contains(word.Value))
+                {
+                    // Scanner already excludes comments, literals and text blocks.
+                    // Use distinct VS classifications for reserved Java words.
+                    AddTag(result, snapshot, cached, registry,
+                        NewKeywordClassification(word.Value), word.Start, word.Length);
+                    continue;
+                }
                 // JDT LS is authoritative for normal Java identifiers. Directive
                 // identifiers are handled here to separate import namespaces/types.
                 if (!word.Directive && semanticPositions != null &&

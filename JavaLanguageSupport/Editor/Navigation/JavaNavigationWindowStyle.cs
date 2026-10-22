@@ -166,16 +166,21 @@ namespace JavaLanguageSupport.Editor.Navigation
             {
                 if (active != null && ReferenceEquals(active.Button, button)) return;
                 restore();
-                if (button == null || !button.IsEnabled || !JavaSemanticPaletteDark()) return;
+                if (button == null || !button.IsEnabled) return;
+                bool dark = JavaSemanticPaletteDark();
                 active = new HoverState { Button = button,
                     Background = button.Background, Foreground = button.Foreground,
                     Border = button.BorderBrush };
                 // Subtle VS-like hover, readable white text regardless of focus.
                 button.SetCurrentValue(Control.BackgroundProperty,
-                    new SolidColorBrush(Color.FromRgb(0x37, 0x45, 0x55)));
-                button.SetCurrentValue(Control.ForegroundProperty, Brushes.White);
+                    dark ? (Brush)new SolidColorBrush(Color.FromRgb(0x37, 0x45, 0x55)) :
+                        new SolidColorBrush(Color.FromRgb(0xD8, 0xE9, 0xF7)));
+                button.SetCurrentValue(Control.ForegroundProperty,
+                    dark ? (Brush)Brushes.White :
+                        new SolidColorBrush(Color.FromRgb(0x17, 0x2D, 0x42)));
                 button.SetCurrentValue(Control.BorderBrushProperty,
-                    new SolidColorBrush(Color.FromRgb(0x5A, 0x6B, 0x7D)));
+                    dark ? (Brush)new SolidColorBrush(Color.FromRgb(0x5A, 0x6B, 0x7D)) :
+                        new SolidColorBrush(Color.FromRgb(0x77, 0xA3, 0xCA)));
             };
             window.PreviewMouseMove += (sender, args) =>
             {
