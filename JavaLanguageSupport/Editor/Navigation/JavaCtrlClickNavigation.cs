@@ -30,6 +30,7 @@ namespace JavaLanguageSupport.Editor.Navigation
 
         private static WeakReference<IWpfTextView> contextView;
         private static int contextOffset = -1;
+        private static int contextVersion = -1;
         private static DateTime contextTimestampUtc;
 
         public void TextViewCreated(IWpfTextView view)
@@ -44,6 +45,7 @@ namespace JavaLanguageSupport.Editor.Navigation
         {
             contextView = new WeakReference<IWpfTextView>(view);
             contextOffset = position;
+            contextVersion = view.TextBuffer.CurrentSnapshot.Version.VersionNumber;
             contextTimestampUtc = DateTime.UtcNow;
         }
 
@@ -51,6 +53,7 @@ namespace JavaLanguageSupport.Editor.Navigation
         {
             contextView = null;
             contextOffset = -1;
+            contextVersion = -1;
         }
 
         internal static bool HasRecentContextSymbol
@@ -61,6 +64,7 @@ namespace JavaLanguageSupport.Editor.Navigation
                 return contextView != null &&
                     contextView.TryGetTarget(out view) && view != null && !view.IsClosed &&
                     (DateTime.UtcNow - contextTimestampUtc) < TimeSpan.FromSeconds(8) &&
+                    contextVersion == view.TextBuffer.CurrentSnapshot.Version.VersionNumber &&
                     contextOffset >= 0 && contextOffset < view.TextBuffer.CurrentSnapshot.Length &&
                     view.TextBuffer.ContentType.IsOfType("java") &&
                     IsIdentifier(view.TextBuffer.CurrentSnapshot[contextOffset]);
@@ -104,6 +108,7 @@ namespace JavaLanguageSupport.Editor.Navigation
             private readonly ITextDocumentFactoryService documents;
             private Cursor previousCursor;
             private bool changedCursor;
+            private readonly CancellationTokenSource viewLifetime = new CancellationTokenSource();
 
             internal JavaMouseHandler(IWpfTextView view, ITextDocumentFactoryService documents)
             {
@@ -170,7 +175,11 @@ namespace JavaLanguageSupport.Editor.Navigation
                     await JavaNavigation.ExecuteAsync(JavaEditorOperation.GoToDefinition,
                         uri, clicked.Value.Snapshot, clicked.Value.Position,
                         message => System.Diagnostics.Trace.WriteLine("Java Ctrl+Click: " + message),
-                        CancellationToken.None);
+                        viewLifetime.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Document was closed while resolving the definition.
                 }
                 catch (Exception ex)
                 {
@@ -205,6 +214,7 @@ namespace JavaLanguageSupport.Editor.Navigation
 
             private void OnClosed(object sender, EventArgs args)
             {
+                viewLifetime.Cancel();
                 RestoreCursor();
                 view.VisualElement.PreviewMouseRightButtonDown -= OnRightButtonDown;
                 view.VisualElement.PreviewMouseLeftButtonUp -= OnLeftButtonUp;

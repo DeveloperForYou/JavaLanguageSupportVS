@@ -89,13 +89,35 @@ namespace JavaLanguageSupport.Editor.Navigation
                 default: return;
             }
             token.ThrowIfCancellationRequested();
+            // LSP results describe the source snapshot at request time. Do not
+            // navigate to an outdated symbol if the user edited the file while
+            // JDT LS was resolving it (including the implementation retries).
+            if (!ReferenceEquals(snapshot, snapshot.TextBuffer.CurrentSnapshot))
+            {
+                log("Java: il documento e' cambiato durante la navigazione. Ripeti il comando.");
+                return;
+            }
+            // JDT LS can occasionally report the same implementation more than
+            // once (Location and LocationLink, or duplicated workspace entries).
+            // Collapse only identical locations, preserving distinct overloads.
+            if (operation == JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToDefinition ||
+                operation == JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToImplementation ||
+                operation == JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToTypeDefinition)
+            {
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                targets.RemoveAll(item => !seen.Add(item.Uri + "|" + item.Line + "|" + item.Column));
+            }
             if (targets.Count == 0)
             {
                 log("JDT LS: nessuna destinazione. " + JavaWorkspaceActivity.Summary);
                 return;
             }
             JavaSymbolDestination chosen = targets[0];
-            if (targets.Count > 1 || operation != JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToDefinition)
+            // Native-like behavior: navigate immediately if there is exactly
+            // one target. Explicit symbol browsers still keep their chooser.
+            if (targets.Count > 1 ||
+                operation == JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToDocumentSymbol ||
+                operation == JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToWorkspaceSymbol)
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
                 chosen = JavaNavigationDialog.Choose(targets);
@@ -104,6 +126,13 @@ namespace JavaLanguageSupport.Editor.Navigation
             string path = await ResolvePathAsync(chosen.Uri, log, token).ConfigureAwait(false);
             if (string.IsNullOrEmpty(path)) return;
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+            // A jdt:// source resolution may take time too. Check again on the
+            // UI thread immediately before changing the active VS document.
+            if (!ReferenceEquals(snapshot, snapshot.TextBuffer.CurrentSnapshot))
+            {
+                log("Java: il documento e' cambiato prima dell'apertura. Ripeti il comando.");
+                return;
+            }
             var dte = Package.GetGlobalService(typeof(Microsoft.VisualStudio.Shell.Interop.SDTE)) as DTE;
             if (dte == null) { log("Servizio DTE di Visual Studio non disponibile."); return; }
             try

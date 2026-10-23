@@ -91,27 +91,42 @@ namespace JavaLanguageSupport.Editor.Navigation
 
             ThreadHelper.JoinableTaskFactory.RunAsync(async delegate
             {
-                Action<string> log = message => System.Diagnostics.Trace.WriteLine(
-                    "[Java Native Navigation] " + message);
-                try
+                // Do not allow a delayed JDT LS reply to open a navigation
+                // window after the initiating Java editor has been closed.
+                using (var lifetime = new CancellationTokenSource())
                 {
-                    if (operation == "references")
-                        await JavaReferenceSearch.RunAsync(uri, snapshot, caret, log,
-                            CancellationToken.None);
-                    else
-                        await JavaNavigation.ExecuteAsync(
-                            operation == "implementation" ?
-                                JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToImplementation :
-                                JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToDefinition,
-                            uri, snapshot, caret, log, CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    log(ex.ToString());
-                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                    System.Windows.MessageBox.Show("Navigazione Java: " + ex.Message,
-                        "Java Language Support", System.Windows.MessageBoxButton.OK,
-                        System.Windows.MessageBoxImage.Warning);
+                    if (view.IsClosed) return;
+                    EventHandler onClosed = (sender, args) => lifetime.Cancel();
+                    view.Closed += onClosed;
+                    Action<string> log = message => System.Diagnostics.Trace.WriteLine(
+                        "[Java Native Navigation] " + message);
+                    try
+                    {
+                        if (operation == "references")
+                            await JavaReferenceSearch.RunAsync(uri, snapshot, caret, log,
+                                lifetime.Token);
+                        else
+                            await JavaNavigation.ExecuteAsync(
+                                operation == "implementation" ?
+                                    JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToImplementation :
+                                    JavaLanguageSupport.Editor.Refactoring.JavaEditorOperation.GoToDefinition,
+                                uri, snapshot, caret, log, lifetime.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Closing the source view is a normal cancellation, not
+                        // an error message that should interrupt the user.
+                    }
+                    catch (Exception ex)
+                    {
+                        log(ex.ToString());
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        if (!view.IsClosed)
+                            System.Windows.MessageBox.Show("Navigazione Java: " + ex.Message,
+                                "Java Language Support", System.Windows.MessageBoxButton.OK,
+                                System.Windows.MessageBoxImage.Warning);
+                    }
+                    finally { view.Closed -= onClosed; }
                 }
             }).FileAndForget("JavaLanguageSupport/NativeNavigation");
             return true;
