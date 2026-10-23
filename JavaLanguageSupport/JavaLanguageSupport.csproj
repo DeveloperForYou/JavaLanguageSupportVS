@@ -40,6 +40,10 @@
       <ResourceName>Menus.ctmenu</ResourceName>
     </VSCTCompile>
     <None Include="source.extension.vsixmanifest" />
+    <Content Include="Configuration\JavaThemeColors.pkgdef">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
     <Content Include="Configuration\JavaTextMate.pkgdef">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
@@ -57,4 +61,18 @@
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
   </ItemGroup>
+  <!-- Register theme-specific Java colors before VSIX packaging. -->
+  <!-- SDK-style VSIX: VSInstallDir may be empty in managed builds. -->
+  <PropertyGroup>
+    <JavaVsixCompilerRelativePath>VSSDK\VisualStudioIntegration\Tools\Bin\VsixColorCompiler.exe</JavaVsixCompilerRelativePath>
+    <!-- Preserve an explicit /p:JavaVsixColorCompiler or environment override. -->
+    <JavaVsixColorCompiler Condition="'$(JavaVsixColorCompiler)' == '' and '$(VSInstallDir)' != '' and Exists('$(VSInstallDir)$(JavaVsixCompilerRelativePath)')">$(VSInstallDir)$(JavaVsixCompilerRelativePath)</JavaVsixColorCompiler>
+    <JavaVsixColorCompiler Condition="'$(JavaVsixColorCompiler)' == '' and '$(DevEnvDir)' != '' and Exists('$(DevEnvDir)..\..\$(JavaVsixCompilerRelativePath)')">$([System.IO.Path]::GetFullPath('$(DevEnvDir)..\..\$(JavaVsixCompilerRelativePath)'))</JavaVsixColorCompiler>
+    <JavaVsixColorCompiler Condition="'$(JavaVsixColorCompiler)' == '' and '$(VisualStudioInstallDir)' != '' and Exists('$(VisualStudioInstallDir)\$(JavaVsixCompilerRelativePath)')">$(VisualStudioInstallDir)\$(JavaVsixCompilerRelativePath)</JavaVsixColorCompiler>
+  </PropertyGroup>
+  <Target Name="GenerateJavaThemeColors" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(JavaVsixColorCompiler)' == '' or !Exists('$(JavaVsixColorCompiler)')"
+           Text="VsixColorCompiler.exe non trovato. VSInstallDir puo' essere vuoto nei progetti SDK-style. Installare il workload 'Sviluppo di estensioni di Visual Studio', oppure impostare /p:JavaVsixColorCompiler=PATH_COMPLETO. Vedere la guida ZIP." />
+    <Exec Command="&quot;$(JavaVsixColorCompiler)&quot; &quot;$(MSBuildProjectDirectory)\Configuration\JavaThemeColors.xml&quot; &quot;$(MSBuildProjectDirectory)\Configuration\JavaThemeColors.pkgdef&quot; /noLogo" />
+  </Target>
 </Project>

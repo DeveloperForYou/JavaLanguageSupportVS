@@ -31,7 +31,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             if (wpf == null || !ReferenceEquals(view.TextBuffer, buffer)) return null;
             // Register format-map theme refresh from the tagger too. This covers
             // Java native Peek views and is independent of MEF view role matching.
-            JavaSemanticThemeRefresh.AttachView(wpf, FormatMaps, Registry);
+            // Defaults are supplied by the per-theme JavaThemeColors.pkgdef.
             return wpf.Properties.GetOrCreateSingletonProperty(() =>
                 new JavaSemanticTagger(wpf, Documents, Registry)) as ITagger<T>;
         }

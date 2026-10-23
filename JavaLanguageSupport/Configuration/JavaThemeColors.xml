@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Themes>
+  <Theme Name="Light" GUID="{de3dbbcd-f642-433c-8353-8f1df4370aba}">
+    <Category Name="MEFColours" GUID="{75A05685-00A8-4DED-BAE5-E7A50BFA929A}">
+      <Color Name="Java JDT LS - Control Keywords Format">
+        <Foreground Type="CT_RAW" Source="FF0000FF" />
+      </Color>
+      <Color Name="Java JDT LS - Primitive Types Format">
+        <Foreground Type="CT_RAW" Source="FF0000FF" />
+      </Color>
+      <Color Name="Java JDT LS - Var Keyword Format">
+        <Foreground Type="CT_RAW" Source="FF0000FF" />
+      </Color>
+      <Color Name="Java JDT LS - Modifiers Format">
+        <Foreground Type="CT_RAW" Source="FF0000FF" />
+      </Color>
+      <Color Name="Java JDT LS - Language Constants Format">
+        <Foreground Type="CT_RAW" Source="FF0000FF" />
+      </Color>
+      <Color Name="Java JDT LS - Type Format">
+        <Foreground Type="CT_RAW" Source="FF2B91AF" />
+      </Color>
+      <Color Name="Java JDT LS - Method Format">
+        <Foreground Type="CT_RAW" Source="FF74531F" />
+      </Color>
+      <Color Name="Java JDT LS - Variable Format">
+        <Foreground Type="CT_RAW" Source="FF000000" />
+      </Color>
+      <Color Name="Java JDT LS - Parameter Format">
+        <Foreground Type="CT_RAW" Source="FF765C24" />
+      </Color>
+      <Color Name="Java JDT LS - Annotation Format">
+        <Foreground Type="CT_RAW" Source="FF7E7E7E" />
+      </Color>
+      <Color Name="Java JDT LS - Package Import Keyword Format">
+        <Foreground Type="CT_RAW" Source="FF7F0055" />
+      </Color>
+      <Color Name="Java JDT LS - Package Namespace Format">
+        <Foreground Type="CT_RAW" Source="FF0000FF" />
+      </Color>
+      <Color Name="Java JDT LS - Bracket Format">
+        <Foreground Type="CT_RAW" Source="FF000000" />
+      </Color>
+      <Color Name="Java JDT LS - Separator Format">
+        <Foreground Type="CT_RAW" Source="FF000000" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 1 Format">
+        <Foreground Type="CT_RAW" Source="FF80530B" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 2 Format">
+        <Foreground Type="CT_RAW" Source="FF6F2F8D" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 3 Format">
+        <Foreground Type="CT_RAW" Source="FF165785" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 4 Format">
+        <Foreground Type="CT_RAW" Source="FF2E6A38" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 5 Format">
+        <Foreground Type="CT_RAW" Source="FF90501E" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 6 Format">
+        <Foreground Type="CT_RAW" Source="FF515297" />
+      </Color>
+    </Category>
+  </Theme>
+  <Theme Name="Dark" GUID="{1ded0138-47ce-435e-84ef-9ec1f439b749}">
+    <Category Name="MEFColours" GUID="{75A05685-00A8-4DED-BAE5-E7A50BFA929A}">
+      <Color Name="Java JDT LS - Control Keywords Format">
+        <Foreground Type="CT_RAW" Source="FF569CD6" />
+      </Color>
+      <Color Name="Java JDT LS - Primitive Types Format">
+        <Foreground Type="CT_RAW" Source="FF569CD6" />
+      </Color>
+      <Color Name="Java JDT LS - Var Keyword Format">
+        <Foreground Type="CT_RAW" Source="FF569CD6" />
+      </Color>
+      <Color Name="Java JDT LS - Modifiers Format">
+        <Foreground Type="CT_RAW" Source="FF569CD6" />
+      </Color>
+      <Color Name="Java JDT LS - Language Constants Format">
+        <Foreground Type="CT_RAW" Source="FF569CD6" />
+      </Color>
+      <Color Name="Java JDT LS - Type Format">
+        <Foreground Type="CT_RAW" Source="FF4EC9B0" />
+      </Color>
+      <Color Name="Java JDT LS - Method Format">
+        <Foreground Type="CT_RAW" Source="FFDCDCAA" />
+      </Color>
+      <Color Name="Java JDT LS - Variable Format">
+        <Foreground Type="CT_RAW" Source="FF9CDCFE" />
+      </Color>
+      <Color Name="Java JDT LS - Parameter Format">
+        <Foreground Type="CT_RAW" Source="FFD7BA7D" />
+      </Color>
+      <Color Name="Java JDT LS - Annotation Format">
+        <Foreground Type="CT_RAW" Source="FFC586C0" />
+      </Color>
+      <Color Name="Java JDT LS - Package Import Keyword Format">
+        <Foreground Type="CT_RAW" Source="FF569CD6" />
+      </Color>
+      <Color Name="Java JDT LS - Package Namespace Format">
+        <Foreground Type="CT_RAW" Source="FF82B8E6" />
+      </Color>
+      <Color Name="Java JDT LS - Bracket Format">
+        <Foreground Type="CT_RAW" Source="FFDAAEF0" />
+      </Color>
+      <Color Name="Java JDT LS - Separator Format">
+        <Foreground Type="CT_RAW" Source="FFFFFFFF" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 1 Format">
+        <Foreground Type="CT_RAW" Source="FFF9D66B" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 2 Format">
+        <Foreground Type="CT_RAW" Source="FFCE93D8" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 3 Format">
+        <Foreground Type="CT_RAW" Source="FF6CCBFF" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 4 Format">
+        <Foreground Type="CT_RAW" Source="FF8FD19E" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 5 Format">
+        <Foreground Type="CT_RAW" Source="FFFF9E64" />
+      </Color>
+      <Color Name="Java JDT LS - Rainbow Brackets 6 Format">
+        <Foreground Type="CT_RAW" Source="FFA7A5FF" />
+      </Color>
+    </Category>
+  </Theme>
+</Themes>

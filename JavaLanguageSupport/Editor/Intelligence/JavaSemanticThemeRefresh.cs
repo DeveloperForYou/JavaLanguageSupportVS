@@ -16,7 +16,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
     /// Custom colors in Fonts and Colors are left alone if they differ from the
     /// previous palette. Only java editors, no LSP requests or buffer changes.
     /// </summary>
-    [Export(typeof(IWpfTextViewCreationListener))]
+    // Disabled MEF listener: VS theme pkgdef now owns Java defaults.
     [ContentType("java")]
     // The SDK requires a role for IWpfTextViewCreationListener exports.
     // The semantic tagger also calls AttachView for Java Peek/non-Document roles.
