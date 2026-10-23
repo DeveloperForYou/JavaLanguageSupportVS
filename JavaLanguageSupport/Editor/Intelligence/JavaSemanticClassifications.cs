@@ -138,7 +138,6 @@ namespace JavaLanguageSupport.Editor.Intelligence
         public JavaSemanticTypeFormat()
         {
             DisplayName = "Java: tipi, classi e interfacce (JDT LS)";
-            IsBold = !JavaSemanticPalette.DarkTheme;
             ForegroundColor = JavaSemanticPalette.DarkTheme
                 ? Color.FromRgb(0x4E, 0xC9, 0xB0)  // dark VS: teal
                 : Color.FromRgb(0x2B, 0x91, 0xAF); // light VS: dark teal

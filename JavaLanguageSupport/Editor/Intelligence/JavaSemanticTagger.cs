@@ -23,15 +23,13 @@ namespace JavaLanguageSupport.Editor.Intelligence
     {
         [Import] internal ITextDocumentFactoryService Documents = null;
         [Import] internal IClassificationTypeRegistryService Registry = null;
-        [Import] internal IClassificationFormatMapService FormatMaps = null;
 
         public ITagger<T> CreateTagger<T>(ITextView view, ITextBuffer buffer) where T : ITag
         {
             var wpf = view as IWpfTextView;
             if (wpf == null || !ReferenceEquals(view.TextBuffer, buffer)) return null;
-            // Register format-map theme refresh from the tagger too. This covers
-            // Java native Peek views and is independent of MEF view role matching.
-            // Defaults are supplied by the per-theme JavaThemeColors.pkgdef.
+            // JavaThemeColors.pkgdef provides the theme defaults; this tagger
+            // only publishes Java syntax classifications.
             return wpf.Properties.GetOrCreateSingletonProperty(() =>
                 new JavaSemanticTagger(wpf, Documents, Registry)) as ITagger<T>;
         }
