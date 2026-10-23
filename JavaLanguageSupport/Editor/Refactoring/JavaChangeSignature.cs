@@ -159,11 +159,19 @@ namespace JavaLanguageSupport.Editor.Refactoring
             down.Click += (s,e) => Move(rows, table, 1);
             var controls = new StackPanel { Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right };
-            // Use the exact VS button style used by the window footer.
+            // Use the same idle colors as the dialog footer buttons.
+            // The themed style alone may keep action buttons highlighted even
+            // when they no longer have keyboard or mouse focus.
             foreach (Button b in new[] { add, remove, up, down })
             {
                 b.SetResourceReference(FrameworkElement.StyleProperty,
                     Microsoft.VisualStudio.Shell.VsResourceKeys.ThemedDialogButtonStyleKey);
+                b.SetResourceReference(Control.BackgroundProperty,
+                    EnvironmentColors.ToolWindowBackgroundBrushKey);
+                b.SetResourceReference(Control.ForegroundProperty,
+                    EnvironmentColors.ToolWindowTextBrushKey);
+                b.SetResourceReference(Control.BorderBrushProperty,
+                    EnvironmentColors.ToolWindowBorderBrushKey);
                 controls.Children.Add(b);
             }
             var form = new Grid { Margin = new Thickness(12) };
