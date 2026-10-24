@@ -22,7 +22,9 @@ using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text.Operations;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Threading;
 using Newtonsoft.Json.Linq;
@@ -157,6 +159,15 @@ namespace JavaLanguageSupport.Editor.Refactoring
 
             bool running = false, released = false;
             int counterGeneration = 0;
+            // Pack C1: cancel abandoned LSP estimates rather than allowing
+            // old names to occupy the gate while the user commits a rename.
+            CancellationTokenSource activeEstimate = null;
+            Action cancelEstimate = () => {
+                if (activeEstimate != null) {
+                    activeEstimate.Cancel();
+                    activeEstimate = null;
+                }
+            };
             // La stima e il commit non devono interrogare contemporaneamente
             // JDT LS per lo stesso simbolo. Il commit ha priorita' sulle stime in coda.
             var renameGate = new SemaphoreSlim(1, 1);
@@ -178,34 +189,45 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 // provvisorio per interrogare il server senza applicare alcuna modifica.
                 string proposedName = typedName == oldName ? oldName + "_RenamePreview" : typedName;
                 int requestId = ++counterGeneration;
+                cancelEstimate();
+                var estimateCancellation = new CancellationTokenSource();
+                activeEstimate = estimateCancellation;
                 referenceCount.Text = "Calcolo delle modifiche con JDT LS…";
                 ThreadHelper.JoinableTaskFactory.RunAsync(async delegate {
                     try {
                         var args2 = new { textDocument = new { uri },
                             position = JavaLspRpc.Position(snapshot, caret), newName = proposedName };
-                        await renameGate.WaitAsync().ConfigureAwait(false);
+                        await renameGate.WaitAsync(estimateCancellation.Token).ConfigureAwait(false);
                         JToken estimate;
                         try {
                             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                             // Ignora le stime superate senza intasare il Language Server.
                             if (!window.IsVisible || running || requestId != counterGeneration) return;
                             estimate = await JavaLspRpc.RequestAsync("textDocument/rename",
-                                args2, CancellationToken.None).ConfigureAwait(false);
+                                args2, estimateCancellation.Token).ConfigureAwait(false);
                         } finally {
                             renameGate.Release();
                         }
                         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                         if (window.IsVisible && !running && requestId == counterGeneration)
                             referenceCount.Text = JavaProjectRenameEdits.DescribeRename(estimate);
+                    } catch (OperationCanceledException) {
+                        // Pack C1: a new name or commit has superseded this estimate.
                     } catch (Exception ex) {
                         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                         if (window.IsVisible && !running && requestId == counterGeneration)
                             referenceCount.Text = "Impossibile contare le modifiche: " + ex.Message;
+                    } finally {
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        if (ReferenceEquals(activeEstimate, estimateCancellation))
+                            activeEstimate = null;
+                        estimateCancellation.Dispose();
                     }
                 }).FileAndForget("JavaLanguageSupport/RenameEstimate");
             };
             input.TextChanged += (sender, args) => {
                 if (running || !window.IsVisible) return;
+                cancelEstimate();
                 ++counterGeneration;
                 counterTimer.Stop();
                 counterTimer.Start();
@@ -222,6 +244,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
             view.Closed += onViewClosed;
             window.Closed += (sender, args) => {
                 counterTimer.Stop();
+                cancelEstimate();
                 ++counterGeneration;
                 view.Closed -= onViewClosed;
                 if (activeWindow == window) activeWindow = null;
@@ -238,6 +261,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 if (newName == oldName) { cancel(); return; }
                 running = true;
                 counterTimer.Stop();
+                cancelEstimate();
                 ++counterGeneration;
                 input.IsEnabled = false;
                 toggle.IsEnabled = false;
@@ -283,7 +307,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                             " file; " + plan.RenameCount + " nomi di file .java da aggiornare.";
                         if ((preview || includeComments.IsChecked == true ||
                             includeStrings.IsChecked == true) &&
-                            !JavaProjectRenameEdits.ShowPreview(WpfWindow.GetWindow(view.VisualElement), plan)) {
+                            !JavaProjectRenameEdits.ShowPreview(WpfWindow.GetWindow(view.VisualElement), plan, view)) {
                             referenceCount.Text = "Anteprima annullata: nessun file modificato.";
                             return;
                         }
@@ -695,7 +719,12 @@ namespace JavaLanguageSupport.Editor.Refactoring
                         comments, strings))
                         if (!target.Edits.Any(x => candidate.Start < x.End && x.Start < candidate.End))
                             target.Edits.Add(candidate);
-                target.Edits = target.Edits.OrderByDescending(x => x.Start).ToList();
+                // Pack C1: remove only *identical* text edits. Distinct,
+                // overlapping edits remain an error; do not guess their order.
+                target.Edits = target.Edits
+                    .GroupBy(x => new { x.Start, x.End, x.NewText })
+                    .Select(g => g.First())
+                    .OrderByDescending(x => x.Start).ToList();
                 int previous = snapshot.Length + 1;
                 foreach (var r in target.Edits) {
                     if (r.End < r.Start || r.End > previous || r.Start < 0 || r.End > snapshot.Length)
@@ -881,23 +910,128 @@ namespace JavaLanguageSupport.Editor.Refactoring
             return null;
         }
 
-        private static string PreviewLineText(Target target, Edit change)
+        // Pack C1 Preview/Theme Hotfix 2: show the exact old/new LSP text, not
+        // just the resulting source line (which can hide a rename in the tree).
+        // Pack C1 Preview/Syntax Hotfix 3: never flatten multiline TextEdits
+        // into a single tree row containing literal escaped newline sequences.
+        // One checkbox still represents ONE atomic LSP TextEdit.
+        private static string PreviewLineText(Target target, Edit change,
+            string oldName, string newName)
         {
-            int lineNumber = target.Original.GetLineFromPosition(
-                Math.Min(change.Start, Math.Max(0, target.Original.Length - 1))).LineNumber;
-            var line = target.Original.GetLineFromLineNumber(lineNumber);
-            string code = line.GetText();
-            int start = change.Start - line.Start.Position;
-            int end = change.End - line.Start.Position;
-            if (start >= 0 && end >= start && end <= code.Length)
-                code = code.Substring(0, start) + change.NewText + code.Substring(end);
-            code = code.Trim();
-            return code.Length > 115 ? code.Substring(0, 112) + "..." : code;
+            int start = Math.Min(change.Start, Math.Max(0, target.Original.Length - 1));
+            int end = Math.Min(Math.Max(change.Start, change.End - 1),
+                Math.Max(0, target.Original.Length - 1));
+            int first = target.Original.GetLineFromPosition(start).LineNumber + 1;
+            int last = target.Original.GetLineFromPosition(end).LineNumber + 1;
+            string where = first == last ? "Riga " + first :
+                "Righe " + first + "-" + last;
+            if (string.Equals(change.OldText, change.NewText,
+                StringComparison.Ordinal))
+                return where + ": (nessuna differenza LSP)";
+
+            string pattern = @"(?<![A-Za-z0-9_$])" + Regex.Escape(oldName) +
+                @"(?![A-Za-z0-9_$])";
+            int occurrences = Regex.Matches(change.OldText ?? "", pattern).Count;
+            if (occurrences > 0 && (change.NewText ?? "").Contains(newName))
+                return where + ": " + oldName + " → " + newName +
+                    (occurrences > 1 ? " (" + occurrences + " occorrenze)" : "");
+            return where + ": modifica Java (vedi anteprima)";
         }
 
+        // Pack C1 Preview/Syntax Hotfix 3: use the SAME Java editor font/color
+        // classifications (including Fonts and Colors user overrides) instead
+        // of hard-coded guesses. If VS exposes no map, use the editor defaults.
+        private sealed class PreviewJavaColors
+        {
+            internal Brush Plain, Keyword, Type, Method, Variable, Namespace;
+            internal Brush Comment, Literal, Number, Bracket, Separator, Highlight;
+        }
+
+        private static Brush PreviewColor(IClassificationFormatMap map,
+            IClassificationTypeRegistryService registry, string name, Brush fallback)
+        {
+            if (map == null || registry == null) return fallback;
+            try {
+                var kind = registry.GetClassificationType(name);
+                if (kind == null) return fallback;
+                var style = map.GetTextProperties(kind);
+                return style != null && !style.ForegroundBrushEmpty &&
+                    style.ForegroundBrush != null ? style.ForegroundBrush : fallback;
+            } catch (Exception) { return fallback; }
+        }
+
+        private static PreviewJavaColors GetPreviewColors(ITextView editor)
+        {
+            bool dark = JavaLanguageSupport.Editor.Intelligence.JavaSemanticPalette.DarkTheme;
+            Brush baseText = dark ? Brushes.Gainsboro : Brushes.Black;
+            var colors = new PreviewJavaColors {
+                Plain = baseText,
+                Keyword = new SolidColorBrush(dark ? Color.FromRgb(0x56, 0x9C, 0xD6) : Color.FromRgb(0, 0, 0xFF)),
+                Type = new SolidColorBrush(dark ? Color.FromRgb(0x4E, 0xC9, 0xB0) : Color.FromRgb(0x2B, 0x91, 0xAF)),
+                Method = new SolidColorBrush(dark ? Color.FromRgb(0xDC, 0xDC, 0xAA) : Color.FromRgb(0x74, 0x53, 0x1F)),
+                Variable = new SolidColorBrush(dark ? Color.FromRgb(0x9C, 0xDC, 0xFE) : Color.FromRgb(0, 0, 0)),
+                Namespace = new SolidColorBrush(dark ? Color.FromRgb(0x82, 0xB8, 0xE6) : Color.FromRgb(0, 0, 0xFF)),
+                Comment = new SolidColorBrush(dark ? Color.FromRgb(0x6A, 0x99, 0x55) : Color.FromRgb(0, 0x80, 0)),
+                Literal = new SolidColorBrush(dark ? Color.FromRgb(0xCE, 0x91, 0x78) : Color.FromRgb(0xA0, 0x37, 0x19)),
+                Number = new SolidColorBrush(dark ? Color.FromRgb(0xB5, 0xCE, 0xA8) : Color.FromRgb(0x0F, 0x5F, 0x32)),
+                Bracket = new SolidColorBrush(dark ? Color.FromRgb(0xDA, 0xAE, 0xF0) : Colors.Black),
+                Separator = dark ? Brushes.White : Brushes.Black,
+                Highlight = new SolidColorBrush(dark ? Color.FromRgb(0x38, 0x4F, 0x69) : Color.FromRgb(0xC3, 0xDC, 0xF9))
+            };
+            try {
+                var component = Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel;
+                var service = component == null ? null :
+                    component.GetService<IClassificationFormatMapService>();
+                var registry = component == null ? null :
+                    component.GetService<IClassificationTypeRegistryService>();
+                var map = service == null || editor == null ? null :
+                    service.GetClassificationFormatMap(editor);
+                colors.Plain = map == null || map.DefaultTextProperties == null ||
+                    map.DefaultTextProperties.ForegroundBrush == null ? colors.Plain :
+                    map.DefaultTextProperties.ForegroundBrush;
+                colors.Keyword = PreviewColor(map, registry,
+                    JavaLanguageSupport.Editor.Intelligence.JavaKeywordClassificationNames.Keyword,
+                    colors.Keyword);
+                colors.Type = PreviewColor(map, registry,
+                    JavaLanguageSupport.Editor.Intelligence.JavaSemanticClassificationNames.Type,
+                    colors.Type);
+                colors.Method = PreviewColor(map, registry,
+                    JavaLanguageSupport.Editor.Intelligence.JavaSemanticClassificationNames.Method,
+                    colors.Method);
+                colors.Variable = PreviewColor(map, registry,
+                    JavaLanguageSupport.Editor.Intelligence.JavaSemanticClassificationNames.Variable,
+                    colors.Variable);
+                colors.Namespace = PreviewColor(map, registry,
+                    JavaLanguageSupport.Editor.Intelligence.JavaSemanticClassificationNames.Namespace,
+                    colors.Namespace);
+                colors.Bracket = PreviewColor(map, registry,
+                    JavaLanguageSupport.Editor.Intelligence.JavaSemanticClassificationNames.Bracket,
+                    colors.Bracket);
+                colors.Separator = PreviewColor(map, registry,
+                    JavaLanguageSupport.Editor.Intelligence.JavaSemanticClassificationNames.Separator,
+                    colors.Separator);
+                colors.Comment = PreviewColor(map, registry, "comment", colors.Comment);
+                colors.Literal = PreviewColor(map, registry, "string", colors.Literal);
+                colors.Number = PreviewColor(map, registry, "number", colors.Number);
+            } catch (Exception) { /* Fall back to the documented Java palette. */ }
+            return colors;
+        }
+
+        // Tokenizer exclusively for READ-ONLY preview; refactorings are still
+        // produced by JDT LS and applied by the existing safe workspace engine.
         private static readonly Regex PreviewTokens = new Regex(
-            @"//.*|""(?:\\.|[^""\\])*""|'(?:\\.|[^'\\])*'|\b(?:abstract|assert|boolean|break|byte|case|catch|char|class|const|continue|default|do|double|else|enum|extends|final|finally|float|for|if|implements|import|instanceof|int|interface|long|native|new|package|private|protected|public|record|return|short|static|strictfp|super|switch|synchronized|this|throw|throws|transient|try|var|void|volatile|while|true|false|null)\b|\b\d+(?:\.\d+)?\b|\b[A-Z][A-Za-z0-9_]*\b",
+            @"//.*|""(?:\\.|[^""\\])*""|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|[A-Za-z_$][A-Za-z0-9_$]*|[()\[\]{}]|[.,;]",
             RegexOptions.Compiled);
+        private static readonly HashSet<string> PreviewKeywords =
+            new HashSet<string>(StringComparer.Ordinal) {
+                "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
+                "class", "const", "continue", "default", "do", "double", "else", "enum",
+                "extends", "final", "finally", "float", "for", "if", "implements", "import",
+                "instanceof", "int", "interface", "long", "native", "new", "package",
+                "private", "protected", "public", "record", "return", "short", "static",
+                "strictfp", "super", "switch", "synchronized", "this", "throw", "throws",
+                "transient", "try", "var", "void", "volatile", "while", "true", "false", "null"
+            };
 
         private static void AddColoredRun(Paragraph paragraph, string source,
             int from, int to, Brush foreground, Brush highlight, int changedFrom, int changedTo)
@@ -918,78 +1052,161 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }
         }
 
+        // A single JDT LS TextEdit can replace a block containing two or more
+        // occurrences. Build the proposed *whole document* (without modifying
+        // any live buffer), then show context around ALL affected lines.
+        private static int PreviewLineIndex(string source, int position)
+        {
+            int n = 0;
+            for (int i = 0; i < Math.Min(Math.Max(0, position), source.Length); ++i)
+                if (source[i] == '\n') n++;
+            return n;
+        }
+
         private static void AddJavaPreviewLine(FlowDocument document, string code,
-            int changedFrom, int changedTo, bool dark)
+            IList<Tuple<int, int>> changed, PreviewJavaColors colors)
         {
             var paragraph = new Paragraph { Margin = new Thickness(0),
                 LineHeight = 19, FontFamily = new FontFamily("Consolas"), FontSize = 12.5 };
-            Brush standard = dark ? Brushes.Gainsboro : Brushes.Black;
-            Brush keyword = new SolidColorBrush(dark ? Color.FromRgb(86, 156, 214) : Color.FromRgb(0, 0, 205));
-            Brush type = new SolidColorBrush(dark ? Color.FromRgb(78, 201, 176) : Color.FromRgb(25, 100, 120));
-            Brush comment = new SolidColorBrush(dark ? Color.FromRgb(106, 153, 85) : Color.FromRgb(0, 128, 0));
-            Brush literal = new SolidColorBrush(dark ? Color.FromRgb(206, 145, 120) : Color.FromRgb(160, 55, 25));
-            Brush number = new SolidColorBrush(dark ? Color.FromRgb(181, 206, 168) : Color.FromRgb(15, 95, 50));
-            Brush highlight = new SolidColorBrush(dark ? Color.FromRgb(56, 79, 105) : Color.FromRgb(195, 220, 249));
             int cursor = 0;
+            bool directive = code.TrimStart().StartsWith("package ", StringComparison.Ordinal) ||
+                code.TrimStart().StartsWith("import ", StringComparison.Ordinal);
             foreach (Match token in PreviewTokens.Matches(code)) {
                 if (token.Index > cursor)
-                    AddColoredRun(paragraph, code, cursor, token.Index,
-                        standard, highlight, changedFrom, changedTo);
+                    AddPreviewRun(paragraph, code, cursor, token.Index,
+                        colors.Plain, colors.Highlight, changed);
                 string value = token.Value;
-                Brush color = value.StartsWith("//", StringComparison.Ordinal) ? comment :
-                    value[0] == '"' || value[0] == '\'' ? literal :
-                    char.IsDigit(value[0]) ? number :
-                    char.IsUpper(value[0]) ? type : keyword;
-                AddColoredRun(paragraph, code, token.Index, token.Index + token.Length,
-                    color, highlight, changedFrom, changedTo);
+                Brush color;
+                if (value.StartsWith("//", StringComparison.Ordinal)) color = colors.Comment;
+                else if (value[0] == '"' || value[0] == '\'') color = colors.Literal;
+                else if (char.IsDigit(value[0])) color = colors.Number;
+                else if (PreviewKeywords.Contains(value)) color = colors.Keyword;
+                else if ("()[]{}".IndexOf(value[0]) >= 0 && value.Length == 1)
+                    color = colors.Bracket;
+                else if (".,;".IndexOf(value[0]) >= 0 && value.Length == 1)
+                    color = colors.Separator;
+                else if (char.IsUpper(value[0])) color = colors.Type;
+                else if (directive) color = colors.Namespace;
+                else {
+                    int next = token.Index + token.Length;
+                    while (next < code.Length && char.IsWhiteSpace(code[next])) next++;
+                    color = next < code.Length && code[next] == '(' ?
+                        colors.Method : colors.Variable;
+                }
+                AddPreviewRun(paragraph, code, token.Index, token.Index + token.Length,
+                    color, colors.Highlight, changed);
                 cursor = token.Index + token.Length;
             }
             if (cursor < code.Length)
-                AddColoredRun(paragraph, code, cursor, code.Length,
-                    standard, highlight, changedFrom, changedTo);
+                AddPreviewRun(paragraph, code, cursor, code.Length,
+                    colors.Plain, colors.Highlight, changed);
             if (code.Length == 0) paragraph.Inlines.Add(new Run(" "));
             document.Blocks.Add(paragraph);
         }
 
-        private static void RenderPreviewCode(RichTextBox viewer, PreviewEntry selected)
+        private static void AddPreviewRun(Paragraph paragraph, string line,
+            int from, int to, Brush foreground, Brush highlight,
+            IList<Tuple<int, int>> intervals)
+        {
+            int at = from;
+            foreach (var span in intervals.OrderBy(x => x.Item1)) {
+                int begin = Math.Max(at, span.Item1);
+                int end = Math.Min(to, span.Item2);
+                if (begin >= end) continue;
+                if (at < begin)
+                    paragraph.Inlines.Add(new Run(line.Substring(at, begin - at)) {
+                        Foreground = foreground });
+                paragraph.Inlines.Add(new Run(line.Substring(begin, end - begin)) {
+                    Foreground = foreground,
+                    Background = highlight,
+                    FontWeight = FontWeights.SemiBold });
+                at = end;
+            }
+            if (at < to)
+                paragraph.Inlines.Add(new Run(line.Substring(at, to - at)) {
+                    Foreground = foreground });
+        }
+
+        private static void RenderPreviewCode(RichTextBox viewer,
+            PreviewEntry selected, RenamePlan plan, PreviewJavaColors colors)
         {
             var document = new FlowDocument { PagePadding = new Thickness(10, 7, 10, 7),
                 FontFamily = new FontFamily("Consolas"), FontSize = 12.5,
-                Foreground = viewer.Foreground };
-            var background = viewer.Background as SolidColorBrush;
-            bool dark = background != null &&
-                (background.Color.R * 299 + background.Color.G * 587 +
-                 background.Color.B * 114) < 128000;
+                Foreground = colors.Plain, Background = viewer.Background };
             var leaf = FirstPreviewLeaf(selected);
             if (leaf == null) {
                 document.Blocks.Add(new Paragraph(new Run("Nessuna modifica da visualizzare.")));
-            } else if (leaf.Move != null) {
+            } else if (leaf.Move != null && selected.Move != null) {
                 document.Blocks.Add(new Paragraph(new Run("Rinomina file .java:")));
                 document.Blocks.Add(new Paragraph(new Run(leaf.Move.From)));
                 document.Blocks.Add(new Paragraph(new Run("↓")));
                 document.Blocks.Add(new Paragraph(new Run(leaf.Move.To)));
-            } else if (leaf.Target != null && leaf.Change != null) {
-                var target = leaf.Target;
-                var change = leaf.Change;
-                var current = target.Original.GetLineFromPosition(
-                    Math.Min(change.Start, Math.Max(0, target.Original.Length - 1)));
-                int startLine = Math.Max(0, current.LineNumber - 5);
-                int endLine = Math.Min(target.Original.LineCount - 1, current.LineNumber + 6);
-                for (int i = startLine; i <= endLine; ++i) {
-                    var line = target.Original.GetLineFromLineNumber(i);
-                    string code = line.GetText();
-                    int changedFrom = -1, changedTo = -1;
-                    if (i == current.LineNumber) {
-                        int from = change.Start - line.Start.Position;
-                        int to = change.End - line.Start.Position;
-                        if (from >= 0 && to >= from && to <= code.Length &&
-                            change.NewText.IndexOfAny(new[] { '\r', '\n' }) == -1) {
-                            code = code.Substring(0, from) + change.NewText + code.Substring(to);
-                            changedFrom = from;
-                            changedTo = from + change.NewText.Length;
-                        }
+            } else if (leaf.Target != null) {
+                // Find its file ancestor, so all checked edits in this document
+                // are visible at the same time (not just the first LSP range).
+                Target target = leaf.Target;
+                PreviewEntry file = leaf;
+                while (file.Parent != null &&
+                    ReferenceEquals(file.Parent.Target, target)) file = file.Parent;
+                var edits = file.Children.Where(x => x.Change != null &&
+                    x.Check.IsChecked == true).Select(x => x.Change)
+                    .OrderBy(x => x.Start).ToList();
+                if (edits.Count == 0) {
+                    document.Blocks.Add(new Paragraph(new Run(
+                        "Nessuna modifica selezionata per questo documento.")));
+                } else {
+                    var modified = new StringBuilder(target.Before);
+                    foreach (var edit in edits.OrderByDescending(x => x.Start)) {
+                        modified.Remove(edit.Start, edit.End - edit.Start);
+                        modified.Insert(edit.Start, edit.NewText ?? string.Empty);
                     }
-                    AddJavaPreviewLine(document, code, changedFrom, changedTo, dark);
+                    string source = modified.ToString();
+                    var mapped = new List<Tuple<Edit, int, int>>();
+                    int shift = 0;
+                    foreach (var edit in edits) {
+                        int begin = edit.Start + shift;
+                        int finish = begin + (edit.NewText ?? string.Empty).Length;
+                        mapped.Add(Tuple.Create(edit, begin, finish));
+                        shift += (edit.NewText ?? string.Empty).Length -
+                            (edit.End - edit.Start);
+                    }
+                    Edit focus = edits.Contains(leaf.Change) ? leaf.Change : edits[0];
+                    var focused = mapped.First(x => ReferenceEquals(x.Item1, focus));
+                    int firstLine = PreviewLineIndex(source, focused.Item2);
+                    int lastLine = PreviewLineIndex(source,
+                        Math.Max(focused.Item2, focused.Item3 - 1));
+                    // Include enough context AND all lines of this multiline edit.
+                    var lines = source.Split('\n');
+                    int fromLine = Math.Max(0, firstLine - 5);
+                    int toLine = Math.Min(lines.Length - 1, lastLine + 6);
+                    var lineStarts = new List<int> { 0 };
+                    for (int i = 0; i < source.Length; ++i)
+                        if (source[i] == '\n') lineStarts.Add(i + 1);
+                    for (int i = fromLine; i <= toLine; i++) {
+                        string code = lines[i].TrimEnd('\r');
+                        int lineStart = lineStarts[i];
+                        int lineEnd = lineStart + code.Length;
+                        var changed = new List<Tuple<int, int>>();
+                        foreach (var span in mapped) {
+                            int begin = Math.Max(lineStart, span.Item2);
+                            int end = Math.Min(lineEnd, span.Item3);
+                            if (end <= begin) continue;
+                            // For a multiline block edit, highlight the renamed
+                            // symbol(s), not the entire unchanged surrounding line.
+                            string pattern = @"(?<![A-Za-z0-9_$])" +
+                                Regex.Escape(plan.NewName) + @"(?![A-Za-z0-9_$])";
+                            foreach (Match match in Regex.Matches(code, pattern)) {
+                                int global = lineStart + match.Index;
+                                if (global >= begin && global + match.Length <= end)
+                                    changed.Add(Tuple.Create(match.Index,
+                                        match.Index + match.Length));
+                            }
+                            if (changed.Count == 0)
+                                changed.Add(Tuple.Create(begin - lineStart,
+                                    end - lineStart));
+                        }
+                        AddJavaPreviewLine(document, code, changed, colors);
+                    }
                 }
             }
             viewer.Document = document;
@@ -1029,7 +1246,108 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 PreviewSwpFrameChanged);
         }
 
-        internal static bool ShowPreview(WpfWindow owner, RenamePlan plan)
+        // Pack C1: moving OldName.java to NewName.java without also
+        // changing its verified top-level declaration (or vice versa) creates
+        // an inconsistent source. Keep related preview leaves together.
+        private static bool ValidPreviewTypeMoves(RenamePlan plan,
+            List<PreviewEntry> entries, out string problem)
+        {
+            problem = null;
+            foreach (var move in plan.moves) {
+                if (!PathCompare.Equals(Path.GetFileName(move.From), plan.OldName + ".java") ||
+                    !PathCompare.Equals(Path.GetFileName(move.To), plan.NewName + ".java"))
+                    continue;
+                var target = plan.targets.FirstOrDefault(x =>
+                    PathCompare.Equals(x.Path, move.From));
+                var declaration = target == null ? null : target.Edits.FirstOrDefault(x =>
+                    x.OldText == plan.OldName && x.NewText == plan.NewName &&
+                    IsTypeDeclaration(target.Before, x.Start));
+                bool selectedMove = entries.Any(x => ReferenceEquals(x.Move, move) &&
+                    x.Check.IsChecked == true);
+                bool selectedDeclaration = declaration != null && entries.Any(x =>
+                    ReferenceEquals(x.Change, declaration) && x.Check.IsChecked == true);
+                if (declaration == null || selectedMove != selectedDeclaration) {
+                    problem = "La rinomina del tipo '" + plan.OldName +
+                        "' e del file '" + Path.GetFileName(move.From) +
+                        "' devono essere selezionate insieme. " +
+                        "Seleziona entrambe le modifiche oppure deselezionale entrambe.";
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Pack C1 Preview/Theme Hotfix 2: the stock WPF Button template has
+        // its own hover/focus triggers that can ignore Control.Foreground.
+        // Set a local template that keeps white/dark text legible on its hover.
+        // Base brushes still follow the Visual Studio dynamic theme resources.
+        private static void ConfigurePreviewButton(Button button)
+        {
+            bool dark = false;
+            try {
+                var background = VSColorTheme.GetThemedColor(
+                    EnvironmentColors.ToolWindowBackgroundColorKey);
+                dark = background.R * 299 + background.G * 587 +
+                    background.B * 114 < 128000;
+            } catch (Exception) { }
+            Brush hoverBackground = new SolidColorBrush(dark
+                ? Color.FromRgb(0x37, 0x45, 0x55)
+                : Color.FromRgb(0xD8, 0xE9, 0xF7));
+            Brush pressedBackground = new SolidColorBrush(dark
+                ? Color.FromRgb(0x28, 0x4A, 0x66)
+                : Color.FromRgb(0xB9, 0xD8, 0xEF));
+            Brush contrast = dark ? Brushes.White :
+                (Brush)new SolidColorBrush(Color.FromRgb(0x17, 0x2D, 0x42));
+
+            var template = new ControlTemplate(typeof(Button));
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "PreviewButtonChrome";
+            chrome.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
+            chrome.SetValue(Border.PaddingProperty, new Thickness(12, 5, 12, 5));
+            chrome.SetBinding(Border.BackgroundProperty, new Binding("Background") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            chrome.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.Name = "PreviewButtonContent";
+            content.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+                HorizontalAlignment.Center);
+            content.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+            content.SetBinding(TextElement.ForegroundProperty, new Binding("Foreground") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            chrome.AppendChild(content);
+            template.VisualTree = chrome;
+
+            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, hoverBackground,
+                "PreviewButtonChrome"));
+            hover.Setters.Add(new Setter(TextElement.ForegroundProperty, contrast,
+                "PreviewButtonContent"));
+            template.Triggers.Add(hover);
+            var focus = new Trigger {
+                Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focus.Setters.Add(new Setter(Border.BackgroundProperty, hoverBackground,
+                "PreviewButtonChrome"));
+            focus.Setters.Add(new Setter(TextElement.ForegroundProperty, contrast,
+                "PreviewButtonContent"));
+            template.Triggers.Add(focus);
+            var pressed = new Trigger { Property = Button.IsPressedProperty, Value = true };
+            pressed.Setters.Add(new Setter(Border.BackgroundProperty, pressedBackground,
+                "PreviewButtonChrome"));
+            pressed.Setters.Add(new Setter(TextElement.ForegroundProperty, contrast,
+                "PreviewButtonContent"));
+            template.Triggers.Add(pressed);
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.48));
+            template.Triggers.Add(disabled);
+            button.Template = template;
+        }
+
+        internal static bool ShowPreview(WpfWindow owner, RenamePlan plan,
+            ITextView sourceView)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var tree = new TreeView { BorderThickness = new Thickness(0),
@@ -1040,13 +1358,14 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 EnvironmentColors.ToolWindowTextBrushKey);
             ScrollViewer.SetHorizontalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
             ScrollViewer.SetVerticalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
-            var rootLabel = plan.OldName;
+            var rootLabel = plan.OldName + "  →  " + plan.NewName;
             var declaring = plan.targets.FirstOrDefault(x =>
                 Path.GetFileNameWithoutExtension(x.Path) == plan.OldName);
             if (declaring != null) {
                 var package = Regex.Match(declaring.Before,
                     @"(?m)^\s*package\s+([\w.]+)\s*;");
-                if (package.Success) rootLabel = package.Groups[1].Value + "." + rootLabel;
+                if (package.Success) rootLabel = package.Groups[1].Value + "." +
+                    plan.OldName + "  →  " + plan.NewName;
             }
             var root = AddPreviewEntry(tree, null, rootLabel, "◆", null, null, null);
             var all = new List<PreviewEntry> { root };
@@ -1058,7 +1377,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     int line = target.Original.GetLineFromPosition(
                         Math.Min(edit.Start, Math.Max(0, target.Original.Length - 1))).LineNumber + 1;
                     var change = AddPreviewEntry(file.Item, file,
-                        "Riga " + line + ": " + PreviewLineText(target, edit),
+                        PreviewLineText(target, edit, plan.OldName, plan.NewName),
                         "↳", target, edit, null, edit.Category + " - " + target.Path);
                     all.Add(change);
                 }
@@ -1072,6 +1391,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
             // Stato intermedio impostato solo dal codice: il click dell'utente
             // deve alternare inclusione/esclusione, non entrare in un terzo stato.
 
+            var previewColors = GetPreviewColors(sourceView);
             var viewer = new RichTextBox { IsReadOnly = true,
                 IsDocumentEnabled = false,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -1095,6 +1415,18 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 IsDefault = true };
             var no = new Button { Content = "Annulla", MinWidth = 95, Margin = new Thickness(4),
                 IsCancel = true };
+            // Pack C1 Undo Hotfix: colors are dynamic Visual Studio resources,
+            // including the unfocused state of the Preview Changes buttons.
+            foreach (Button button in new[] { yes, no }) {
+                button.SetResourceReference(Control.BackgroundProperty,
+                    EnvironmentColors.ToolWindowBackgroundBrushKey);
+                button.SetResourceReference(Control.ForegroundProperty,
+                    EnvironmentColors.ToolWindowTextBrushKey);
+                button.SetResourceReference(Control.BorderBrushProperty,
+                    EnvironmentColors.ToolWindowBorderBrushKey);
+            }
+            ConfigurePreviewButton(yes);
+            ConfigurePreviewButton(no);
             var buttons = new StackPanel { Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right };
             buttons.Children.Add(yes);
@@ -1168,6 +1500,14 @@ namespace JavaLanguageSupport.Editor.Refactoring
             Action updateCount = () => {
                 int selected = all.Count(x => x.Change != null && x.Check.IsChecked == true);
                 int moves = all.Count(x => x.Move != null && x.Check.IsChecked == true);
+                int files = all.Where(x => x.Target != null &&
+                    (x.Change != null || x.Move != null) && x.Check.IsChecked == true)
+                    .Select(x => x.Target.Path).Distinct(PathCompare).Count();
+                // Pack C1: visible counts reflect only the *selected* leaves,
+                // not the original all-inclusive JDT LS result.
+                caption.Text = "Rinomina '" + plan.OldName + "' in '" + plan.NewName +
+                    "': " + selected + " modifiche, " + moves +
+                    " rinomine file, " + files + " file coinvolti.";
                 yes.IsEnabled = selected + moves > 0;
                 yes.ToolTip = selected + " modifiche al codice, " + moves + " rinomine file selezionate";
             };
@@ -1180,6 +1520,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     finally { changing = false; }
                     item.Item.IsSelected = true;
                     updateCount();
+                    var active = tree.SelectedItem as TreeViewItem;
+                    if (active != null && active.Tag is PreviewEntry)
+                        RenderPreviewCode(viewer, (PreviewEntry)active.Tag, plan, previewColors);
                 };
                 item.Check.Unchecked += (s, e) => {
                     if (changing) return;
@@ -1188,19 +1531,32 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     finally { changing = false; }
                     item.Item.IsSelected = true;
                     updateCount();
+                    var active = tree.SelectedItem as TreeViewItem;
+                    if (active != null && active.Tag is PreviewEntry)
+                        RenderPreviewCode(viewer, (PreviewEntry)active.Tag, plan, previewColors);
                 };
             }
             tree.SelectedItemChanged += (sender, args) => {
                 var current = args.NewValue as TreeViewItem;
                 if (current != null && current.Tag is PreviewEntry)
-                    RenderPreviewCode(viewer, (PreviewEntry)current.Tag);
+                    RenderPreviewCode(viewer, (PreviewEntry)current.Tag, plan, previewColors);
             };
             window.ContentRendered += (sender, args) => {
                 viewer.ApplyTemplate();
                 root.Item.IsSelected = true;
             };
             updateCount();
-            yes.Click += (sender, args) => { if (yes.IsEnabled) window.DialogResult = true; };
+            yes.Click += (sender, args) => {
+                if (!yes.IsEnabled) return;
+                string problem;
+                if (!ValidPreviewTypeMoves(plan, all, out problem)) {
+                    System.Windows.MessageBox.Show(window, problem,
+                        "Java: anteprima rinomina", MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+                window.DialogResult = true;
+            };
             no.Click += (sender, args) => { window.DialogResult = false; };
             if (window.ShowDialog() != true) return false;
 
@@ -1256,6 +1612,93 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }
         }
 
+        // Pack C1 Undo Hotfix: a non-textual file move must participate in the
+        // SAME VS undo transaction as all edits, including a rename started from
+        // a reference in another open document.
+        private sealed class RenameFileUndoPrimitive : ITextUndoPrimitive
+        {
+            private readonly List<FileRename> moves;
+            private readonly List<Target> targets;
+            internal RenameFileUndoPrimitive(IEnumerable<FileRename> fileMoves,
+                IEnumerable<Target> documents)
+            {
+                moves = fileMoves.Select(x => new FileRename { From = x.From, To = x.To }).ToList();
+                targets = documents.ToList();
+            }
+            public ITextUndoTransaction Parent { get; set; }
+            public bool CanUndo { get { return true; } }
+            public bool CanRedo { get { return true; } }
+            public bool CanMerge(ITextUndoPrimitive older) { return false; }
+            public ITextUndoPrimitive Merge(ITextUndoPrimitive older)
+            {
+                throw new NotSupportedException("Non unire la rinomina fisica a un'altra modifica.");
+            }
+            public void Do() { Move(true); } // Redo (initial Apply moves directly).
+            public void Undo() { Move(false); }
+            private void Move(bool redo)
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                var ordered = redo ? moves : moves.AsEnumerable().Reverse();
+                var done = new List<FileRename>();
+                try {
+                    foreach (var move in ordered) {
+                        string from = redo ? move.From : move.To;
+                        string to = redo ? move.To : move.From;
+                        var document = targets.FirstOrDefault(x => PathCompare.Equals(
+                            x.Path, move.From));
+                        if (document == null) throw new InvalidOperationException(
+                            "Documento associato alla rinomina non trovato: " + from);
+                        if (!File.Exists(from) || File.Exists(to))
+                            throw new IOException("Undo/Redo rinomina: percorso inatteso: " + from + " -> " + to);
+                        File.Move(from, to);
+                        done.Add(new FileRename { From = from, To = to });
+                        RenameOpenDocument(document, from, to);
+                    }
+                } catch {
+                    foreach (var move in done.AsEnumerable().Reverse()) {
+                        try {
+                            var doc = targets.First(x => PathCompare.Equals(x.Path, move.From) ||
+                                PathCompare.Equals(x.Path, move.To));
+                            RenameOpenDocument(doc, move.To, move.From);
+                            if (File.Exists(move.To) && !File.Exists(move.From))
+                                File.Move(move.To, move.From);
+                        } catch (Exception ex) {
+                            System.Diagnostics.Trace.WriteLine("[Java Rename undo recovery] " + ex);
+                        }
+                    }
+                    throw;
+                }
+                RefreshExplorerFiles(redo ? moves : moves.Select(x =>
+                    new FileRename { From = x.To, To = x.From }), null);
+                // VS linked undo reverts sibling buffers after individual primitives.
+                // Persist only AFTER the entire undo/redo cycle reaches the dispatcher.
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+                    new Action(() => {
+                        foreach (var target in targets) {
+                            try { if (target.Document.IsDirty) target.Document.Save(); }
+                            catch (Exception ex) {
+                                System.Diagnostics.Trace.WriteLine("[Java Rename undo save] " +
+                                    target.Path + ": " + ex);
+                            }
+                        }
+                    }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+        }
+
+        private static void RenameOpenDocument(Target target, string from, string to)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var rdt = Package.GetGlobalService(typeof(SVsRunningDocumentTable))
+                as IVsRunningDocumentTable;
+            if (rdt == null) throw new InvalidOperationException(
+                "RDT non disponibile: rinomina fisica non sicura.");
+            Microsoft.VisualStudio.ErrorHandler.ThrowOnFailure(rdt.RenameDocument(
+                from, to, Microsoft.VisualStudio.VSConstants.HIERARCHY_DONTCHANGE,
+                Microsoft.VisualStudio.VSConstants.VSITEMID_NIL));
+            if (!PathCompare.Equals(target.Document.FilePath, to))
+                target.Document.Rename(to);
+        }
+
         internal static int Apply(RenamePlan plan, Action<string> log)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -1265,64 +1708,122 @@ namespace JavaLanguageSupport.Editor.Refactoring
             foreach (var move in plan.moves)
                 if (!File.Exists(move.From) || File.Exists(move.To))
                     throw new IOException("La destinazione del file e' cambiata: " + move.To);
+
+            // Never silently save into an existing global undo transaction: it
+            // belongs to another VS component and cannot be safely composed.
+            var dte = Package.GetGlobalService(typeof(SDTE)) as DTE;
+            if (dte == null || dte.UndoContext == null || dte.UndoContext.IsOpen)
+                throw new InvalidOperationException(
+                    "Undo globale Visual Studio non disponibile o gia' attivo; rinomina annullata.");
+            var model = Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel;
+            var registry = model == null ? null : model.GetService<ITextUndoHistoryRegistry>();
+            if (registry == null)
+                throw new InvalidOperationException("ITextUndoHistoryRegistry mancante; nessuna modifica applicata.");
+
+            // The source buffer is not necessarily the file whose physical name
+            // changes. Its undo transaction is linked with all affected buffers.
+            var anchor = plan.targets.FirstOrDefault(x => PathCompare.Equals(x.Path, plan.Origin))
+                ?? plan.targets.FirstOrDefault(x => x.Edits.Count != 0)
+                ?? plan.targets.FirstOrDefault();
+            if (anchor == null) throw new InvalidOperationException("Nessun file nel piano di rinomina.");
+            var history = registry.GetHistory(anchor.Buffer);
+            if (history == null)
+                throw new InvalidOperationException("Cronologia undo del buffer iniziale assente.");
+            foreach (var target in plan.targets) {
+                // Verify all participating documents have an undo manager before
+                // applying any text: we refuse a partially undoable rename.
+                if (registry.GetHistory(target.Buffer) == null)
+                    throw new InvalidOperationException("Undo Java non disponibile: " + target.Path);
+                string checkedPath = target.Document.FilePath;
+                if (File.Exists(checkedPath) &&
+                    (File.GetAttributes(checkedPath) & FileAttributes.ReadOnly) != 0)
+                    throw new IOException("Sorgente di sola lettura: " + checkedPath);
+            }
+
             var applied = new List<Target>();
             var moved = new List<FileRename>();
+            ITextUndoTransaction fileUndo = null;
+            bool linkedOpen = false;
             try {
+                // EnvDTE.UndoContext uses the VS linked-undo service; a single
+                // Ctrl+Z in any participating document must undo the whole rename.
+                dte.UndoContext.Open("Java: Rinomina " + plan.OldName + " -> " + plan.NewName, true);
+                linkedOpen = true;
+                if (plan.moves.Count > 0)
+                    fileUndo = history.CreateTransaction("Java: rinomina file .java");
+
                 foreach (var target in plan.targets) {
-                    // renameFile senza TextEdit e' valido: non creare un edit vuoto.
                     if (target.Edits.Count == 0) continue;
+                    applied.Add(target);
                     using (var transaction = target.Buffer.CreateEdit()) {
                         foreach (var r in target.Edits)
                             transaction.Replace(r.Start, r.End - r.Start, r.NewText);
                         if (transaction.Apply() == target.Original)
                             throw new InvalidOperationException("Impossibile modificare: " + target.Path);
                     }
-                    applied.Add(target);
                 }
                 foreach (var move in plan.moves) {
                     File.Move(move.From, move.To);
                     moved.Add(move);
                     var target = plan.targets.First(x => PathCompare.Equals(x.Path, move.From));
-                    // Prima aggiorna il documento nell'RDT, poi il percorso del buffer.
-                    var running = Package.GetGlobalService(typeof(SVsRunningDocumentTable))
-                        as IVsRunningDocumentTable;
-                    if (running != null)
-                        Microsoft.VisualStudio.ErrorHandler.ThrowOnFailure(running.RenameDocument(
-                            move.From, move.To, Microsoft.VisualStudio.VSConstants.HIERARCHY_DONTCHANGE,
-                            Microsoft.VisualStudio.VSConstants.VSITEMID_NIL));
-                    if (!PathCompare.Equals(target.Document.FilePath, move.To))
-                        target.Document.Rename(move.To);
+                    RenameOpenDocument(target, move.From, move.To);
                 }
-                // File.Move + RDT.RenameDocument update disk and the open
-                // buffer; Open Folder / Solution Explorer may still be displaying
-                // the old item from its file-change cache. Force the shell's file
-                // watchers to reconcile both old and new monikers immediately.
+                if (fileUndo != null) {
+                    fileUndo.AddUndo(new RenameFileUndoPrimitive(plan.moves, plan.targets));
+                    fileUndo.Complete();
+                    fileUndo.Dispose();
+                    fileUndo = null;
+                }
+                dte.UndoContext.Close();
+                linkedOpen = false;
                 RefreshExplorerFiles(plan.moves, log);
-                return plan.targets.Count;
             } catch (Exception ex) {
                 var rollbackErrors = new List<string>();
+                if (fileUndo != null) {
+                    try { fileUndo.Cancel(); fileUndo.Dispose(); }
+                    catch (Exception rollback) { rollbackErrors.Add(rollback.Message); }
+                }
+                // Abort linked undo before the disk rollback; it may revert
+                // edits already recorded in other open document histories.
+                if (linkedOpen) {
+                    try { dte.UndoContext.SetAborted(); dte.UndoContext.Close(); }
+                    catch (Exception rollback) { rollbackErrors.Add(rollback.Message); }
+                }
                 foreach (var move in moved.AsEnumerable().Reverse()) {
                     try {
                         var target = plan.targets.First(x => PathCompare.Equals(x.Path, move.From));
-                        var running = Package.GetGlobalService(typeof(SVsRunningDocumentTable))
-                            as IVsRunningDocumentTable;
-                        if (running != null) running.RenameDocument(move.To, move.From,
-                            Microsoft.VisualStudio.VSConstants.HIERARCHY_DONTCHANGE,
-                            Microsoft.VisualStudio.VSConstants.VSITEMID_NIL);
                         if (PathCompare.Equals(target.Document.FilePath, move.To))
-                            target.Document.Rename(move.From);
-                        if (File.Exists(move.To)) File.Move(move.To, move.From);
+                            RenameOpenDocument(target, move.To, move.From);
+                        if (File.Exists(move.To) && !File.Exists(move.From)) File.Move(move.To, move.From);
                     } catch (Exception rollback) { rollbackErrors.Add(rollback.Message); }
                 }
                 foreach (var target in applied.AsEnumerable().Reverse()) {
-                    try { target.Buffer.Replace(new Microsoft.VisualStudio.Text.Span(0, target.Buffer.CurrentSnapshot.Length), target.Before); }
-                    catch (Exception rollback) { rollbackErrors.Add(rollback.Message); }
+                    try {
+                        var current = target.Buffer.CurrentSnapshot;
+                        if (!string.Equals(current.GetText(), target.Before, StringComparison.Ordinal))
+                            target.Buffer.Replace(new Microsoft.VisualStudio.Text.Span(
+                                0, current.Length), target.Before);
+                    } catch (Exception rollback) { rollbackErrors.Add(rollback.Message); }
                 }
                 if (rollbackErrors.Count != 0)
                     throw new InvalidOperationException("Errore nella rinomina: " + ex.Message +
                         ". Ripristino incompleto: " + string.Join("; ", rollbackErrors), ex);
                 throw;
             }
+
+            // Pack C1 Undo Hotfix: persist *each changed buffer* after the linked
+            // transaction is closed; otherwise JDT LS sees old on-disk class names
+            // until the user manually invokes Save All.
+            var saveErrors = new List<string>();
+            foreach (var target in plan.targets) {
+                try { if (target.Document.IsDirty) target.Document.Save(); }
+                catch (Exception ex) { saveErrors.Add(target.Document.FilePath + ": " + ex.Message); }
+            }
+            if (saveErrors.Count > 0)
+                throw new IOException("Rinomina applicata, ma alcuni file NON sono stati salvati: " +
+                    string.Join(" | ", saveErrors) +
+                    ". Il comando Annulla globale resta disponibile; verifica i file prima di continuare.");
+            return plan.targets.Count;
         }
 
         private static string LocalJavaPath(string uri)
