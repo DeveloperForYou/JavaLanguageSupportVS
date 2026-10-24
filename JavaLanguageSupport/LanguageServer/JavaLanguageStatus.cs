@@ -27,6 +27,14 @@ namespace JavaLanguageSupport.LanguageServer
             new System.Collections.Generic.Dictionary<string, int>();
         private static readonly System.Collections.Generic.Dictionary<string, string> LspLast =
             new System.Collections.Generic.Dictionary<string, string>();
+        // Completion timing is diagnostic only. No source text is recorded.
+        private static long completionLastMs;
+        private static long completionMaxMs;
+        private static int completionSamples;
+        private static int completionSlowSamples;
+        private static int completionIncompleteSamples;
+        private static int completionLastItemCount;
+        private static int completionLastResolved;
 
         internal static void Starting(string javaExe, string launcher, string workspace)
         {
@@ -44,6 +52,13 @@ namespace JavaLanguageSupport.LanguageServer
                 lastError = "";
                 LspRequests.Clear();
                 LspLast.Clear();
+                completionLastMs = 0;
+                completionMaxMs = 0;
+                completionSamples = 0;
+                completionSlowSamples = 0;
+                completionIncompleteSamples = 0;
+                completionLastItemCount = 0;
+                completionLastResolved = 0;
                 initializationSummary = "Initialize non intercettato";
                 codeActionSummary = "Nessuna Code Action registrata";
                 executeCommandSummary = "Nessun comando LSP eseguito";
@@ -136,6 +151,24 @@ namespace JavaLanguageSupport.LanguageServer
         }
 
 
+        internal static void LspCompletionMetrics(long elapsedMs, JToken response,
+            int prefetched)
+        {
+            var list = response as JArray ?? (response as JObject)?["items"] as JArray;
+            var wrapper = response as JObject;
+            bool incomplete = wrapper != null && (bool?)wrapper["isIncomplete"] == true;
+            lock (Sync)
+            {
+                completionSamples++;
+                completionLastMs = Math.Max(0, elapsedMs);
+                completionMaxMs = Math.Max(completionMaxMs, completionLastMs);
+                if (elapsedMs > 250) completionSlowSamples++;
+                if (incomplete) completionIncompleteSamples++;
+                completionLastItemCount = list == null ? 0 : list.Count;
+                completionLastResolved = prefetched;
+            }
+        }
+
         // LSP initialize: diagnostica del contratto client/server, senza alterarlo.
         internal static void LspInitialize(JToken parameters, JToken result)
         {
@@ -203,6 +236,16 @@ namespace JavaLanguageSupport.LanguageServer
                 result.AppendLine("Semantic Tokens JDT LS: " + (JavaSemanticLegend.Available ? "legend negoziata" : "non annunciati / server in avvio"));
                 result.AppendLine("--- Capabilities negoziate LSP ---");
                 result.AppendLine(initializationSummary);
+                result.AppendLine("--- Prestazioni completamento Java (diagnostica) ---");
+                result.AppendLine("Richieste completamento misurate: " + completionSamples);
+                result.AppendLine("Durata ultima / massima: " + completionLastMs + " / " +
+                    completionMaxMs + " ms (compreso tempo JDT LS e prefetch)");
+                result.AppendLine("Richieste >250 ms: " + completionSlowSamples +
+                    "; risposte isIncomplete: " + completionIncompleteSamples);
+                result.AppendLine("Ultimi elementi / resolve preventivi: " +
+                    completionLastItemCount + " / " + completionLastResolved);
+                result.AppendLine("NOTA: risposte incomplete e tempi alti dipendono anche " +
+                    "da classpath, indicizzazione e carico di JDT LS.");
                 result.AppendLine("--- Richieste LSP osservate (da apertura ultimo server) ---");
                 foreach (string method in new[] { "textDocument/completion", "completionItem/resolve",
                     "textDocument/hover", "textDocument/codeAction", "workspace/executeCommand",

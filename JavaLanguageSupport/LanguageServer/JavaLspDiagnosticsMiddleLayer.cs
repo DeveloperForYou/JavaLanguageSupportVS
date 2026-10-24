@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -42,37 +43,69 @@ namespace JavaLanguageSupport.LanguageServer
                 || methodName == "textDocument/publishDiagnostics";
         }
 
-        private static async Task TryPrefetchCompletionDetailsAsync(JToken response)
+        // Only call resolve when the server explicitly advertises that feature.
+        // VS itself owns native completion, snapshot cancellation and item selection.
+        private static int completionResolveSupported;
+
+        private static async Task<JObject> ResolveCompletionItemAsync(JObject item,
+            CancellationToken cancellationToken)
         {
-            if (!JavaLspRpc.Connected || response == null) return;
+            try
+            {
+                return await JavaLspRpc.RequestAsync("completionItem/resolve",
+                    item.DeepClone(), cancellationToken).ConfigureAwait(false) as JObject;
+            }
+            catch (OperationCanceledException) { return null; }
+            catch (Exception ex)
+            {
+                JavaLanguageStatus.LspFailure("completionItem/resolve", ex.GetType().Name);
+                return null;
+            }
+        }
+
+        private static async Task<int> TryPrefetchCompletionDetailsAsync(JToken response)
+        {
+            if (!JavaLspRpc.Connected || response == null) return 0;
             var array = response as JArray ?? (response as JObject)?["items"] as JArray;
-            if (array == null) return;
+            if (array == null) return 0;
+
+            // Preserve the original behavior (at most two top candidates),
+            // but bound the wall-clock delay even if a JSON-RPC cancellation
+            // is not acknowledged immediately by the language server.
             var candidates = array.OfType<JObject>()
                 .Where(item => item["data"] != null &&
                     (item["documentation"] == null || item["additionalTextEdits"] == null))
                 .Take(2).ToArray();
-            if (candidates.Length == 0) return;
-            using (var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(120)))
+            if (candidates.Length == 0) return 0;
+
+            using (var timeout = new CancellationTokenSource())
             {
-                try
+                var tasks = candidates.Select(item =>
+                    ResolveCompletionItemAsync(item, timeout.Token)).ToArray();
+                var all = Task.WhenAll(tasks);
+                // Never hold up native IntelliSense for an unresponsive resolve.
+                if (await Task.WhenAny(all, Task.Delay(120)).ConfigureAwait(false) != all)
+                    timeout.Cancel();
+
+                int resolvedCount = 0;
+                // IMPORTANT: the asynchronous tasks touch only deep-cloned
+                // requests. ONLY this method may mutate the completion result,
+                // and it does so BEFORE handing the result back to Visual Studio.
+                // A late resolve is safely discarded, never applied after return.
+                for (int i = 0; i < tasks.Length; i++)
                 {
-                    await Task.WhenAll(candidates.Select(async item =>
+                    if (tasks[i].Status != TaskStatus.RanToCompletion) continue;
+                    JObject details = tasks[i].Result;
+                    if (details == null) continue;
+                    foreach (string key in new[] {
+                        "documentation", "additionalTextEdits", "detail", "textEdit" })
                     {
-                        var detail = await JavaLspRpc.RequestAsync("completionItem/resolve",
-                            item.DeepClone(), timeout.Token).ConfigureAwait(false) as JObject;
-                        if (detail == null) return;
-                        foreach (var key in new[] { "documentation", "additionalTextEdits", "detail", "textEdit" })
-                        {
-                            if (detail[key] != null && item[key] == null)
-                                item[key] = detail[key].DeepClone();
-                        }
-                    })).ConfigureAwait(false);
+                        if (details[key] != null && candidates[i][key] == null)
+                            candidates[i][key] = details[key].DeepClone();
+                    }
+                    resolvedCount++;
                 }
-                catch (OperationCanceledException) { /* Nessun blocco sull'editor. */ }
-                catch (Exception ex)
-                {
-                    JavaLanguageStatus.LspFailure("completionItem/resolve", ex.GetType().Name);
-                }
+                return resolvedCount;
             }
         }
 
@@ -100,6 +133,10 @@ namespace JavaLanguageSupport.LanguageServer
         {
             // Manteniamo esattamente la semantica delle richieste originali.
             // Anche quando il server risponde con un errore, non lo assorbiamo.
+            Stopwatch timing = methodName == "textDocument/completion" ?
+                Stopwatch.StartNew() : null;
+            if (methodName == "initialize")
+                Volatile.Write(ref completionResolveSupported, 0);
             JavaLanguageStatus.LspRequest(methodName);
             if (methodName == "workspace/executeCommand")
                 JavaLanguageStatus.LspExecuteCommand(methodParam);
@@ -144,6 +181,11 @@ namespace JavaLanguageSupport.LanguageServer
                 {
                     JavaLanguageStatus.LspInitialize(methodParam, response);
                     JavaSemanticLegend.ReadInitialize(response);
+                    JToken provider = response == null ? null :
+                        response.SelectToken("capabilities.completionProvider.resolveProvider");
+                    Volatile.Write(ref completionResolveSupported,
+                        provider != null && provider.Type == JTokenType.Boolean &&
+                        provider.Value<bool>() ? 1 : 0);
                     return response;
                 }
 
@@ -151,8 +193,11 @@ namespace JavaLanguageSupport.LanguageServer
                 // selezione. Risolviamo in anticipo pochi elementi, con budget breve,
                 // per ottenere documentazione e additionalTextEdits (import).
                 // Se il server e' lento, restituiamo i risultati originali.
-                if (methodName == "textDocument/completion")
-                    await TryPrefetchCompletionDetailsAsync(response);
+                int prefetched = 0;
+                if (methodName == "textDocument/completion" &&
+                    Volatile.Read(ref completionResolveSupported) != 0)
+                    prefetched = await TryPrefetchCompletionDetailsAsync(response)
+                        .ConfigureAwait(false);
 
                 // Non salviamo il contenuto dei sorgenti. Per code action
                 // memorizziamo soltanto pochi titoli e flag diagnostici in RAM.
@@ -194,6 +239,9 @@ namespace JavaLanguageSupport.LanguageServer
                 }
                 JavaLanguageStatus.LspResponse(methodName, items,
                     hasDocumentation, hasAdditionalTextEdits);
+                if (timing != null)
+                    JavaLanguageStatus.LspCompletionMetrics(
+                        timing.ElapsedMilliseconds, response, prefetched);
                 return response;
             }
             catch (Exception ex)
