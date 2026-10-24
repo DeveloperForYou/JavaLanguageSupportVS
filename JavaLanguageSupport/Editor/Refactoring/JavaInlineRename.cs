@@ -1246,31 +1246,73 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 PreviewSwpFrameChanged);
         }
 
-        // Pack C1: moving OldName.java to NewName.java without also
-        // changing its verified top-level declaration (or vice versa) creates
-        // an inconsistent source. Keep related preview leaves together.
+        // Pack C1 Hotfix 4: a JDT LS TextEdit can replace MULTIPLE lines.
+        // A single edit may include both the class declaration and constructors;
+        // OldText/NewText are then NOT equal to the simple type names. Validate
+        // the resulting code, instead of comparing whole TextEdit strings.
+        private static bool SelectedPreviewRenamesTopLevelType(RenamePlan plan,
+            Target target, List<PreviewEntry> entries)
+        {
+            if (target == null || string.IsNullOrEmpty(target.Before)) return false;
+            int declaration = FindTopLevelTypeName(target.Before, plan.OldName);
+            if (declaration < 0) return false;
+
+            var selectedEdits = entries.Where(x => ReferenceEquals(x.Target, target) &&
+                x.Change != null && x.Check.IsChecked == true)
+                .Select(x => x.Change).OrderByDescending(x => x.Start).ToList();
+
+            // The edit must really cover the original verified declaration.
+            // A change to a constructor, string or comment alone is not enough.
+            bool coversDeclaration = selectedEdits.Any(x => x.Start <= declaration &&
+                x.End >= declaration + plan.OldName.Length);
+            if (!coversDeclaration) return false;
+
+            var result = new StringBuilder(target.Before);
+            foreach (var change in selectedEdits)
+            {
+                if (change.Start < 0 || change.End < change.Start ||
+                    change.End > result.Length)
+                    return false;
+                result.Remove(change.Start, change.End - change.Start);
+                result.Insert(change.Start, change.NewText ?? string.Empty);
+            }
+            string after = result.ToString();
+            // Both checks matter: a separate type named NewName must not make
+            // an unchanged declaration of OldName appear renamed.
+            return FindTopLevelTypeName(after, plan.NewName) >= 0 &&
+                FindTopLevelTypeName(after, plan.OldName) < 0;
+        }
+
+        // A physical Foo.java -> Bar.java move and the class declaration must
+        // be selected together. The check also supports multiline TextEdits.
         private static bool ValidPreviewTypeMoves(RenamePlan plan,
             List<PreviewEntry> entries, out string problem)
         {
             problem = null;
-            foreach (var move in plan.moves) {
+            foreach (var move in plan.moves)
+            {
                 if (!PathCompare.Equals(Path.GetFileName(move.From), plan.OldName + ".java") ||
                     !PathCompare.Equals(Path.GetFileName(move.To), plan.NewName + ".java"))
                     continue;
                 var target = plan.targets.FirstOrDefault(x =>
                     PathCompare.Equals(x.Path, move.From));
-                var declaration = target == null ? null : target.Edits.FirstOrDefault(x =>
-                    x.OldText == plan.OldName && x.NewText == plan.NewName &&
-                    IsTypeDeclaration(target.Before, x.Start));
                 bool selectedMove = entries.Any(x => ReferenceEquals(x.Move, move) &&
                     x.Check.IsChecked == true);
-                bool selectedDeclaration = declaration != null && entries.Any(x =>
-                    ReferenceEquals(x.Change, declaration) && x.Check.IsChecked == true);
-                if (declaration == null || selectedMove != selectedDeclaration) {
-                    problem = "La rinomina del tipo '" + plan.OldName +
-                        "' e del file '" + Path.GetFileName(move.From) +
+                bool selectedDeclaration = SelectedPreviewRenamesTopLevelType(
+                    plan, target, entries);
+                if (selectedMove != selectedDeclaration)
+                {
+                    problem = "La dichiarazione del tipo '" + plan.OldName +
+                        "' e la rinomina di '" + Path.GetFileName(move.From) +
                         "' devono essere selezionate insieme. " +
                         "Seleziona entrambe le modifiche oppure deselezionale entrambe.";
+                    return false;
+                }
+                // Do not accept a file move if the original top-level type
+                // cannot be verified, even when an LSP edit was proposed.
+                if (selectedMove && target == null)
+                {
+                    problem = "Dichiarazione Java non disponibile per " + move.From;
                     return false;
                 }
             }
