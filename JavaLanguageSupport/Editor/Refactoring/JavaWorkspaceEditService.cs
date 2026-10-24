@@ -5,6 +5,9 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
+using System.Windows.Media;
 using EnvDTE;
 using JavaLanguageSupport.LanguageServer;
 using Microsoft.VisualStudio;
@@ -14,6 +17,7 @@ using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Operations;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Newtonsoft.Json.Linq;
 
@@ -27,6 +31,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
     /// </summary>
     internal static class JavaWorkspaceEditService
     {
+        // PACK C2: linked undo, preview and persisted multi-document edits.
         private static readonly StringComparer Paths = StringComparer.OrdinalIgnoreCase;
         private const int MaximumDocuments = 50;
         private const int MaximumEdits = 5000;
@@ -44,6 +49,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
             internal ITextBuffer Buffer;
             internal ITextSnapshot Snapshot;
             internal string Before;
+            internal ITextDocument Document;
             internal List<Change> Edits = new List<Change>();
         }
 
@@ -81,8 +87,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }
             Apply(plan);
             if (log != null)
-                log("WorkspaceEdit: applicate " + plan.EditCount + " modifiche in " +
-                    plan.Documents.Count + " documenti Java. Salvare i file modificati.");
+                log("WorkspaceEdit: applicate e salvate " + plan.EditCount + " modifiche in " +
+                    plan.Documents.Count + " documenti Java; Undo/Redo collegati.");
         }
 
         private static Dictionary<string, List<JToken>> Parse(JToken edit, string originUri)
@@ -176,8 +182,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
             var plan = new Plan { SourcePath = sourcePath };
             var adapters = Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel;
             var editorAdapters = adapters == null ? null : adapters.GetService<IVsEditorAdaptersFactoryService>();
-            if (editorAdapters == null)
-                throw new InvalidOperationException("IVsEditorAdaptersFactoryService non disponibile.");
+            var documentFactory = adapters == null ? null : adapters.GetService<ITextDocumentFactoryService>();
+            if (editorAdapters == null || documentFactory == null)
+                throw new InvalidOperationException("Servizi buffer/documento Visual Studio non disponibili.");
             var dte = Package.GetGlobalService(typeof(SDTE)) as DTE;
             if (dte == null)
                 throw new InvalidOperationException("Visual Studio DTE non disponibile.");
@@ -205,8 +212,12 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     ITextSnapshot snapshot = buffer.CurrentSnapshot;
                     if (Paths.Equals(file, sourcePath) && !ReferenceEquals(snapshot, initial))
                         throw new InvalidOperationException("Il file originale e' cambiato dopo la richiesta LSP.");
+                    ITextDocument textDocument;
+                    if (!documentFactory.TryGetTextDocument(buffer, out textDocument) ||
+                        !Paths.Equals(Path.GetFullPath(textDocument.FilePath), file))
+                        throw new InvalidOperationException("Documento Java non disponibile: " + file);
                     var entry = new DocumentChange { Path = file, Buffer = buffer,
-                        Snapshot = snapshot, Before = snapshot.GetText() };
+                        Snapshot = snapshot, Before = snapshot.GetText(), Document = textDocument };
                     foreach (JToken token in group.Value)
                     {
                         var begin = ToOffset(snapshot, token["range"]["start"]);
@@ -282,12 +293,148 @@ namespace JavaLanguageSupport.Editor.Refactoring
             finally { Marshal.Release(pointer); }
         }
 
+        // PACK C2: preview is non-destructive. The WorkspaceEdit remains atomic:
+        // no partial selection of edits that could invalidate the refactoring.
+        private sealed class PreviewSelection
+        {
+            internal DocumentChange Document;
+            internal Change Edit;
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex PreviewSyntax =
+            new System.Text.RegularExpressions.Regex(
+                @"//[^\r\n]*|""(?:\\.|[^""\\])*""|'(?:\\.|[^'\\])*'|\b(?:package|import|public|private|protected|static|final|abstract|class|interface|enum|record|extends|implements|new|return|void|var|int|long|short|boolean|char|double|float|byte|if|else|for|while|try|catch|throw|throws|this|super|true|false|null)\b|\b[A-Z][\w$]*\b|\b\d+(?:\.\d+)?\b|\b[a-zA-Z_$][\w$]*(?=\()",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static void AddPreviewSyntax(Paragraph row, string source, bool dark)
+        {
+            Brush regular = dark ? (Brush)Brushes.Gainsboro : Brushes.Black;
+            Brush keyword = new SolidColorBrush(dark ? Color.FromRgb(0x56, 0x9C, 0xD6) : Color.FromRgb(0, 0, 255));
+            Brush type = new SolidColorBrush(dark ? Color.FromRgb(0x4E, 0xC9, 0xB0) : Color.FromRgb(0x2B, 0x91, 0xAF));
+            Brush method = new SolidColorBrush(dark ? Color.FromRgb(0xDC, 0xDC, 0xAA) : Color.FromRgb(0x74, 0x53, 0x1F));
+            Brush literal = new SolidColorBrush(dark ? Color.FromRgb(0xCE, 0x91, 0x78) : Color.FromRgb(0xA0, 0x37, 0x19));
+            Brush comment = new SolidColorBrush(dark ? Color.FromRgb(0x6A, 0x99, 0x55) : Color.FromRgb(0, 0x80, 0));
+            int previous = 0;
+            foreach (System.Text.RegularExpressions.Match token in PreviewSyntax.Matches(source))
+            {
+                if (token.Index > previous)
+                    row.Inlines.Add(new Run(source.Substring(previous, token.Index - previous)) { Foreground = regular });
+                string value = token.Value;
+                Brush color = value.StartsWith("//", StringComparison.Ordinal) ? comment :
+                    (value[0] == '"' || value[0] == '\'') ? literal :
+                    char.IsDigit(value[0]) ? literal :
+                    char.IsUpper(value[0]) ? type :
+                    token.Index + value.Length < source.Length && source[token.Index + value.Length] == '(' ? method : keyword;
+                row.Inlines.Add(new Run(value) { Foreground = color });
+                previous = token.Index + value.Length;
+            }
+            if (previous < source.Length)
+                row.Inlines.Add(new Run(source.Substring(previous)) { Foreground = regular });
+        }
+
+        private static void RenderPreview(RichTextBox viewer, PreviewSelection chosen)
+        {
+            if (chosen == null || chosen.Document == null) return;
+            var doc = chosen.Document;
+            var updated = new System.Text.StringBuilder(doc.Before);
+            // Descending offsets: every edit uses the SAME original snapshot.
+            foreach (Change change in doc.Edits)
+            {
+                updated.Remove(change.Start, change.End - change.Start);
+                updated.Insert(change.Start, change.Text);
+            }
+            // Map the LSP offset BEFORE normalizing CRLF: VS snapshots count
+            // the CR character too, whereas the preview lines below do not.
+            string afterRaw = updated.ToString();
+            int target = chosen.Edit == null ? 0 : chosen.Edit.Start;
+            if (chosen.Edit != null)
+            {
+                foreach (Change change in doc.Edits)
+                    if (change.Start < chosen.Edit.Start)
+                        target += change.Text.Length - (change.End - change.Start);
+            }
+            target = Math.Max(0, Math.Min(target, afterRaw.Length));
+            int rowNumber = 0;
+            for (int i = 0; i < target; i++) if (afterRaw[i] == '\n') rowNumber++;
+            string[] lines = afterRaw.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            int first = Math.Max(0, rowNumber - 3);
+            int last = Math.Min(lines.Length - 1, Math.Max(rowNumber + 7, first + 10));
+            bool dark = JavaLanguageSupport.Editor.Intelligence.JavaSemanticPalette.DarkTheme;
+            var flow = new FlowDocument {
+                PagePadding = new Thickness(9, 7, 9, 7),
+                FontFamily = new FontFamily("Consolas"), FontSize = 12.5,
+                Foreground = dark ? Brushes.Gainsboro : Brushes.Black,
+                Background = viewer.Background
+            };
+            for (int n = first; n <= last; n++)
+            {
+                var line = new Paragraph { Margin = new Thickness(0), LineHeight = 19 };
+                line.Inlines.Add(new Run((n + 1).ToString().PadLeft(4) + "  ") {
+                    Foreground = dark ? (Brush)Brushes.Gray : Brushes.DimGray });
+                AddPreviewSyntax(line, lines[n], dark);
+                if (n == rowNumber && chosen.Edit != null)
+                    line.Background = new SolidColorBrush(dark ? Color.FromRgb(0x34, 0x4D, 0x62) :
+                        Color.FromRgb(0xDD, 0xED, 0xFB));
+                flow.Blocks.Add(line);
+            }
+            viewer.Document = flow;
+            viewer.ScrollToHome();
+        }
+
+        // Explicit WPF template: the stock button may ignore VS foreground when hovered.
+        // Mirrors the verified behavior of the Pack C1 rename preview buttons.
+        private static void ThemePreviewButton(Button button)
+        {
+            bool dark = JavaLanguageSupport.Editor.Intelligence.JavaSemanticPalette.DarkTheme;
+            Brush hover = new SolidColorBrush(dark ? Color.FromRgb(0x37, 0x45, 0x55) :
+                Color.FromRgb(0xD8, 0xE9, 0xF7));
+            Brush pressed = new SolidColorBrush(dark ? Color.FromRgb(0x28, 0x4A, 0x66) :
+                Color.FromRgb(0xB9, 0xD8, 0xEF));
+            Brush foreground = dark ? Brushes.White :
+                (Brush)new SolidColorBrush(Color.FromRgb(0x17, 0x2D, 0x42));
+            var template = new ControlTemplate(typeof(Button));
+            var border = new FrameworkElementFactory(typeof(Border));
+            border.Name = "ButtonBorder";
+            border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
+            border.SetValue(Border.PaddingProperty, new Thickness(12, 5, 12, 5));
+            border.SetBinding(Border.BackgroundProperty, new Binding("Background") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            border.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.Name = "ButtonContent";
+            content.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            content.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+            content.SetBinding(TextElement.ForegroundProperty, new Binding("Foreground") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            border.AppendChild(content);
+            template.VisualTree = border;
+            var over = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            over.Setters.Add(new Setter(Border.BackgroundProperty, hover, "ButtonBorder"));
+            over.Setters.Add(new Setter(TextElement.ForegroundProperty, foreground, "ButtonContent"));
+            template.Triggers.Add(over);
+            var focus = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focus.Setters.Add(new Setter(Border.BackgroundProperty, hover, "ButtonBorder"));
+            focus.Setters.Add(new Setter(TextElement.ForegroundProperty, foreground, "ButtonContent"));
+            template.Triggers.Add(focus);
+            var down = new Trigger { Property = Button.IsPressedProperty, Value = true };
+            down.Setters.Add(new Setter(Border.BackgroundProperty, pressed, "ButtonBorder"));
+            down.Setters.Add(new Setter(TextElement.ForegroundProperty, foreground, "ButtonContent"));
+            template.Triggers.Add(down);
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.48));
+            template.Triggers.Add(disabled);
+            button.Template = template;
+        }
+
         private static bool ConfirmMultiFile(Plan plan)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var dialog = new DialogWindow {
                 Title = "Java: Anteprima modifiche multi-file",
-                Width = 790, Height = 500, MinWidth = 570, MinHeight = 350,
+                Width = 890, Height = 625, MinWidth = 630, MinHeight = 425,
                 ResizeMode = ResizeMode.CanResize,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
                 ShowInTaskbar = false
@@ -297,46 +444,84 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
             dialog.SetResourceReference(Control.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
-            var grid = new Grid { Margin = new Thickness(14) };
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var summary = new TextBlock {
+            var layout = new Grid { Margin = new Thickness(10) };
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2, GridUnitType.Star), MinHeight = 100 });
+            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(6) });
+            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = 115 });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var caption = new TextBlock {
                 Text = plan.EditCount + " modifiche in " + plan.Documents.Count +
-                    " file Java. Verificare i percorsi; nessun file verra' salvato automaticamente.",
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 10)
+                    " file Java. Operazione unica con Undo/Redo collegati. " +
+                    "Dopo Applica, i file coinvolti verranno salvati, incluse eventuali modifiche preesistenti.",
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8)
             };
-            summary.SetResourceReference(TextBlock.ForegroundProperty,
+            caption.SetResourceReference(TextBlock.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
-            Grid.SetRow(summary, 0);
-            grid.Children.Add(summary);
-            var listing = new ListBox { MinHeight = 140 };
-            listing.SetResourceReference(Control.BackgroundProperty,
+            Grid.SetRow(caption, 0);
+            layout.Children.Add(caption);
+            var tree = new TreeView { BorderThickness = new Thickness(1),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            tree.SetResourceReference(Control.BackgroundProperty,
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
-            listing.SetResourceReference(Control.ForegroundProperty,
+            tree.SetResourceReference(Control.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
-            listing.SetResourceReference(Control.BorderBrushProperty,
+            tree.SetResourceReference(Control.BorderBrushProperty,
                 EnvironmentColors.ToolWindowBorderBrushKey);
-            foreach (var document in plan.Documents)
+            ScrollViewer.SetHorizontalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
+            ScrollViewer.SetVerticalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
+            foreach (DocumentChange doc in plan.Documents)
             {
-                listing.Items.Add(Path.GetFileName(document.Path) +
-                    " — " + document.Edits.Count + " modifiche — " + document.Path);
-                foreach (Change change in document.Edits.Take(8))
-                    listing.Items.Add("    posizione " + change.Start + ": " +
-                        Brief(document.Before.Substring(change.Start,
-                            Math.Min(35, change.End - change.Start))) + "  →  " + Brief(change.Text));
-                if (document.Edits.Count > 8)
-                    listing.Items.Add("    ... altre " + (document.Edits.Count - 8) + " modifiche");
+                var parent = new TreeViewItem {
+                    Header = Path.GetFileName(doc.Path) + " - " + doc.Edits.Count + " modifiche",
+                    Tag = new PreviewSelection { Document = doc }, ToolTip = doc.Path,
+                    IsExpanded = true };
+                foreach (Change change in doc.Edits.OrderBy(x => x.Start))
+                {
+                    int row = doc.Snapshot.GetLineFromPosition(
+                        Math.Min(change.Start, Math.Max(0, doc.Snapshot.Length - 1))).LineNumber + 1;
+                    string old = doc.Before.Substring(change.Start, change.End - change.Start);
+                    parent.Items.Add(new TreeViewItem {
+                        Header = "Riga " + row + ": " + Brief(old) + "  →  " + Brief(change.Text),
+                        Tag = new PreviewSelection { Document = doc, Edit = change },
+                        ToolTip = "Modifica JDT LS in " + doc.Path });
+                }
+                tree.Items.Add(parent);
             }
-            Grid.SetRow(listing, 1);
-            grid.Children.Add(listing);
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal,
+            Grid.SetRow(tree, 1);
+            layout.Children.Add(tree);
+            var splitter = new GridSplitter { Height = 6,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                ResizeDirection = GridResizeDirection.Rows,
+                ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+                ShowsPreview = true };
+            splitter.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            Grid.SetRow(splitter, 2);
+            layout.Children.Add(splitter);
+            var preview = new RichTextBox { IsReadOnly = true, IsDocumentEnabled = false,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            preview.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            preview.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            preview.SetResourceReference(Control.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            Grid.SetRow(preview, 3);
+            layout.Children.Add(preview);
+            tree.SelectedItemChanged += (sender, args) => {
+                var node = args.NewValue as TreeViewItem;
+                var current = node == null ? null : node.Tag as PreviewSelection;
+                if (current != null) RenderPreview(preview, current);
+            };
+            var actions = new StackPanel { Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(0, 10, 0, 0) };
-            var apply = new Button { Content = "Applica tutte", MinWidth = 110,
+                Margin = new Thickness(0, 9, 0, 0) };
+            var apply = new Button { Content = "Applica tutte", MinWidth = 115,
                 Margin = new Thickness(4, 0, 4, 0), IsDefault = true };
-            var cancel = new Button { Content = "Annulla", MinWidth = 92,
+            var cancel = new Button { Content = "Annulla", MinWidth = 95,
                 Margin = new Thickness(4, 0, 4, 0), IsCancel = true };
             foreach (Button button in new[] { apply, cancel })
             {
@@ -346,13 +531,18 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     EnvironmentColors.ToolWindowTextBrushKey);
                 button.SetResourceReference(Control.BorderBrushProperty,
                     EnvironmentColors.ToolWindowBorderBrushKey);
-                buttons.Children.Add(button);
+                ThemePreviewButton(button);
+                actions.Children.Add(button);
             }
             apply.Click += (sender, args) => { dialog.DialogResult = true; };
             cancel.Click += (sender, args) => { dialog.DialogResult = false; };
-            Grid.SetRow(buttons, 2);
-            grid.Children.Add(buttons);
-            dialog.Content = grid;
+            Grid.SetRow(actions, 4);
+            layout.Children.Add(actions);
+            dialog.Content = layout;
+            dialog.ContentRendered += (sender, args) => {
+                var first = tree.Items.OfType<TreeViewItem>().FirstOrDefault();
+                if (first != null) first.IsSelected = true;
+            };
             return dialog.ShowModal() == true;
         }
 
@@ -362,49 +552,139 @@ namespace JavaLanguageSupport.Editor.Refactoring
             return value.Length > 65 ? value.Substring(0, 65) + "..." : value;
         }
 
+        // PACK C2: a no-op undo primitive linked to all participating text buffers.
+        // Its only purpose is persisting the resulting buffers AFTER VS linked
+        // Undo/Redo has finished reversing the text edits.
+        private sealed class WorkspaceSaveUndoPrimitive : ITextUndoPrimitive
+        {
+            private readonly List<DocumentChange> documents;
+            internal WorkspaceSaveUndoPrimitive(IEnumerable<DocumentChange> items)
+            {
+                documents = items.ToList();
+            }
+            public ITextUndoTransaction Parent { get; set; }
+            public bool CanUndo { get { return true; } }
+            public bool CanRedo { get { return true; } }
+            public bool CanMerge(ITextUndoPrimitive other) { return false; }
+            public ITextUndoPrimitive Merge(ITextUndoPrimitive other)
+            {
+                throw new NotSupportedException("WorkspaceEdit: annullamenti non aggregabili.");
+            }
+            public void Do() { ScheduleSave(); }
+            public void Undo() { ScheduleSave(); }
+            private void ScheduleSave()
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+                    new Action(() => {
+                        foreach (DocumentChange doc in documents)
+                        {
+                            try { if (doc.Document.IsDirty) doc.Document.Save(); }
+                            catch (Exception ex) {
+                                System.Diagnostics.Trace.WriteLine("[Java C2 Undo save] " + doc.Path + ": " + ex);
+                            }
+                        }
+                    }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+        }
+
         private static void Apply(Plan plan)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            // Validate the entire plan before touching a single text buffer.
-            foreach (DocumentChange document in plan.Documents)
-                if (!ReferenceEquals(document.Buffer.CurrentSnapshot, document.Snapshot))
+            var dte = Package.GetGlobalService(typeof(SDTE)) as DTE;
+            if (dte == null || dte.UndoContext == null || dte.UndoContext.IsOpen)
+                throw new InvalidOperationException(
+                    "Undo globale di Visual Studio non disponibile o gia' attivo: nessun file modificato.");
+            var model = Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel;
+            var registry = model == null ? null : model.GetService<ITextUndoHistoryRegistry>();
+            if (registry == null)
+                throw new InvalidOperationException("Servizio Undo dei buffer Java assente.");
+
+            // Validate the WHOLE plan before touching any document.
+            foreach (DocumentChange doc in plan.Documents)
+            {
+                if (!ReferenceEquals(doc.Buffer.CurrentSnapshot, doc.Snapshot))
                     throw new InvalidOperationException(
-                        "Il documento e' cambiato dopo l'anteprima: " + document.Path);
+                        "Il documento e' cambiato dopo l'anteprima: " + doc.Path);
+                if (!File.Exists(doc.Path) ||
+                    (File.GetAttributes(doc.Path) & FileAttributes.ReadOnly) != 0)
+                    throw new IOException("File Java mancante o di sola lettura: " + doc.Path);
+                if (!Paths.Equals(Path.GetFullPath(doc.Document.FilePath), doc.Path))
+                    throw new InvalidOperationException("Il documento aperto ha cambiato percorso: " + doc.Path);
+                if (registry.GetHistory(doc.Buffer) == null)
+                    throw new InvalidOperationException("Undo Java non disponibile: " + doc.Path);
+            }
+            var anchor = plan.Documents.FirstOrDefault(x => Paths.Equals(x.Path, plan.SourcePath))
+                ?? plan.Documents.First();
+            var history = registry.GetHistory(anchor.Buffer);
             var changed = new List<DocumentChange>();
+            ITextUndoTransaction saveUndo = null;
+            bool linkedOpen = false;
             try
             {
-                foreach (DocumentChange document in plan.Documents)
+                dte.UndoContext.Open("Java: WorkspaceEdit su " + plan.Documents.Count + " file", true);
+                linkedOpen = true;
+                saveUndo = history.CreateTransaction("Java: salvataggi collegati Undo/Redo");
+                foreach (DocumentChange doc in plan.Documents)
                 {
-                    changed.Add(document); // rollback even if Apply throws halfway
-                    using (var transaction = document.Buffer.CreateEdit())
+                    changed.Add(doc);
+                    using (var transaction = doc.Buffer.CreateEdit())
                     {
-                        foreach (Change edit in document.Edits)
+                        foreach (Change edit in doc.Edits)
                             transaction.Replace(edit.Start, edit.End - edit.Start, edit.Text);
-                        if (ReferenceEquals(transaction.Apply(), document.Snapshot))
-                            throw new InvalidOperationException("Modifica del buffer rifiutata: " + document.Path);
+                        if (ReferenceEquals(transaction.Apply(), doc.Snapshot))
+                            throw new InvalidOperationException("Modifica del buffer rifiutata: " + doc.Path);
                     }
                 }
+                saveUndo.AddUndo(new WorkspaceSaveUndoPrimitive(plan.Documents));
+                saveUndo.Complete();
+                saveUndo.Dispose();
+                saveUndo = null;
+                dte.UndoContext.Close();
+                linkedOpen = false;
             }
             catch (Exception failure)
             {
                 var errors = new List<string>();
-                foreach (DocumentChange document in changed.AsEnumerable().Reverse())
+                if (saveUndo != null)
+                {
+                    try { saveUndo.Cancel(); saveUndo.Dispose(); }
+                    catch (Exception rollback) { errors.Add("Transazione Undo: " + rollback.Message); }
+                }
+                if (linkedOpen)
+                {
+                    try { dte.UndoContext.SetAborted(); dte.UndoContext.Close(); }
+                    catch (Exception rollback) { errors.Add("Undo collegato: " + rollback.Message); }
+                }
+                foreach (DocumentChange doc in changed.AsEnumerable().Reverse())
                 {
                     try
                     {
-                        if (!string.Equals(document.Buffer.CurrentSnapshot.GetText(),
-                            document.Before, StringComparison.Ordinal))
-                            document.Buffer.Replace(new Microsoft.VisualStudio.Text.Span(
-                                0, document.Buffer.CurrentSnapshot.Length), document.Before);
+                        if (!string.Equals(doc.Buffer.CurrentSnapshot.GetText(),
+                            doc.Before, StringComparison.Ordinal))
+                            doc.Buffer.Replace(new Microsoft.VisualStudio.Text.Span(
+                                0, doc.Buffer.CurrentSnapshot.Length), doc.Before);
                     }
-                    catch (Exception error) { errors.Add(document.Path + ": " + error.Message); }
+                    catch (Exception rollback) { errors.Add(doc.Path + ": " + rollback.Message); }
                 }
                 if (errors.Count != 0)
-                    throw new InvalidOperationException("WorkspaceEdit non riuscito: " +
-                        failure.Message + ". RIPRISTINO INCOMPLETO: " + string.Join("; ", errors),
-                        failure);
+                    throw new InvalidOperationException("WorkspaceEdit non riuscito: " + failure.Message +
+                        ". RIPRISTINO INCOMPLETO: " + string.Join("; ", errors), failure);
                 throw;
             }
+
+            // The linked transaction is closed before Save(), as verified by
+            // the preceding Pack C1 (otherwise Ctrl+Z can lose the undo group).
+            var failures = new List<string>();
+            foreach (DocumentChange doc in plan.Documents)
+            {
+                try { if (doc.Document.IsDirty) doc.Document.Save(); }
+                catch (Exception ex) { failures.Add(doc.Path + ": " + ex.Message); }
+            }
+            if (failures.Count > 0)
+                throw new IOException("WorkspaceEdit applicato, ma salvataggio INCOMPLETO: " +
+                    string.Join(" | ", failures) + ". Undo/Redo rimangono disponibili; verifica i file.");
         }
+
     }
 }
