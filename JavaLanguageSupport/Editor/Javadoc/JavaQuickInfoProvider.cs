@@ -43,7 +43,10 @@ namespace JavaLanguageSupport.Editor.Javadoc
         public async Task<QuickInfoItem> GetQuickInfoItemAsync(
             IAsyncQuickInfoSession session, CancellationToken cancellationToken)
         {
-            if (!JavaLspRpc.Connected) return null;
+            // Pack A2: do not start a hover for a disposed/incomplete view.
+            if (session == null || buffer == null || documents == null ||
+                !JavaLspRpc.Connected || cancellationToken.IsCancellationRequested)
+                return null;
 
             var snapshot = buffer.CurrentSnapshot;
             var trigger = session.GetTriggerPoint(snapshot);
@@ -69,23 +72,41 @@ namespace JavaLanguageSupport.Editor.Javadoc
                 position = JavaLspRpc.Position(snapshot, offset)
             };
 
-            JToken hover = await JavaLspRpc.RequestAsync(
-                "textDocument/hover", parameters, cancellationToken).ConfigureAwait(false);
+            // Pack A2: bound the hover request. Native VS is still responsible
+            // for triggering/dismissing Quick Info and managing the LSP client.
+            JToken hover;
+            using (var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                limit.CancelAfter(TimeSpan.FromSeconds(5));
+                try
+                {
+                    hover = await JavaLspRpc.RequestAsync(
+                        "textDocument/hover", parameters, limit.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    return null; // Server busy: a later hover can retry.
+                }
+            }
             cancellationToken.ThrowIfCancellationRequested();
-
-            // Parsing della risposta LSP in background.
-            ClassifiedTextElement content = JavaHoverFormatter.Format(hover);
-            if (content == null) return null;
+            // Do not attach old Javadoc to a symbol after the user has edited it.
+            if (!ReferenceEquals(snapshot, buffer.CurrentSnapshot) || !JavaLspRpc.Connected)
+                return null;
 
             var span = snapshot.CreateTrackingSpan(
                 new Span(start, end - start), SpanTrackingMode.EdgeInclusive);
 
-            // Il rendering WPF e' differito alla factory MEF, sul thread UI.
-            // Non istanziare controlli WPF da GetQuickInfoItemAsync (thread in background).
-            if (IsSimpleMode()) return new QuickInfoItem(span, content);
-            string markdown = JavaHoverLspMarkdown.Read(hover);
-            if (string.IsNullOrWhiteSpace(markdown)) return new QuickInfoItem(span, content);
-            return new QuickInfoItem(span, new JavaHoverWpfContent(markdown));
+            // Avoid formatting the same Javadoc twice. Use the native classified
+            // fallback only in simple mode or if no rich Markdown is available.
+            // WPF controls are created later on the VS UI thread by MEF.
+            if (!IsSimpleMode())
+            {
+                string markdown = JavaHoverLspMarkdown.Read(hover);
+                if (!string.IsNullOrWhiteSpace(markdown))
+                    return new QuickInfoItem(span, new JavaHoverWpfContent(markdown));
+            }
+            ClassifiedTextElement content = JavaHoverFormatter.Format(hover);
+            return content == null ? null : new QuickInfoItem(span, content);
         }
 
         // Creare questo file vuoto per ripristinare immediatamente il popup senza scrollbar:

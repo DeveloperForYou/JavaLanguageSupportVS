@@ -1,13 +1,16 @@
 using System;
 using System.ComponentModel.Composition;
 using System.Diagnostics;
+using System.Threading;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
+using JavaLanguageSupport.Editor.Navigation;
 using Markdig;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
@@ -44,33 +47,54 @@ namespace JavaLanguageSupport.Editor.Javadoc
 
     internal static class JavaHoverLspMarkdown
     {
+        // Pack A2: JDT LS may return very large Javadoc arrays. Bound Markdown
+        // before creating WPF controls, without changing the server response.
+        private const int MaxMarkdownCharacters = 160000;
+        private const int MaxMarkdownParts = 64;
+
         internal static string Read(JToken hover)
         {
             JObject obj = hover as JObject;
             JToken contents = obj == null ? null : obj["contents"];
             if (contents == null || contents.Type == JTokenType.Null) return null;
             var builder = new StringBuilder();
+            bool truncated = false;
             JArray parts = contents as JArray;
             if (parts != null)
             {
-                foreach (JToken item in parts) Append(builder, item);
+                int examined = 0;
+                foreach (JToken item in parts)
+                {
+                    if (++examined > MaxMarkdownParts) { truncated = true; break; }
+                    if (Append(builder, item)) { truncated = true; break; }
+                }
             }
-            else Append(builder, contents);
-            return builder.ToString().Trim();
+            else truncated = Append(builder, contents);
+            string result = builder.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(result)) return null;
+            return truncated ? result + "\n\n… Documentazione abbreviata" : result;
         }
 
-        private static void Append(StringBuilder b, JToken token)
+        private static bool Append(StringBuilder b, JToken token)
         {
-            if (token == null || token.Type == JTokenType.Null) return;
+            if (token == null || token.Type == JTokenType.Null) return false;
             JObject obj = token as JObject;
             string value = token.Type == JTokenType.String ? (string)token :
                 obj == null ? null : (string)obj["value"];
-            if (string.IsNullOrWhiteSpace(value)) return;
+            if (string.IsNullOrWhiteSpace(value)) return false;
             if (obj != null && (string)obj["language"] == "java" &&
                 !value.TrimStart().StartsWith("```", StringComparison.Ordinal))
                 value = "```java\n" + value + "\n```";
             if (b.Length > 0) b.AppendLine().AppendLine();
+            int remaining = MaxMarkdownCharacters - b.Length;
+            if (remaining <= 0) return true;
+            if (value.Length > remaining)
+            {
+                b.Append(value, 0, remaining);
+                return true;
+            }
             b.Append(value);
+            return false;
         }
     }
 
@@ -95,14 +119,29 @@ namespace JavaLanguageSupport.Editor.Javadoc
             {
                 // Non interrompere Quick Info per un errore di rendering Markdown.
                 Debug.WriteLine("Java QuickInfo WPF: " + ex);
+                // Pack A2: the fallback remains readable and scrollable
+                // even when Markdig or an individual WPF element fails.
                 var fallback = new TextBlock
                 {
                     Text = data.Markdown,
                     TextWrapping = TextWrapping.Wrap,
-                    MaxWidth = 700
+                    MaxWidth = 680,
+                    Padding = new Thickness(12)
                 };
-                data.View = fallback;
-                return fallback as TView;
+                fallback.SetResourceReference(TextBlock.ForegroundProperty,
+                    EnvironmentColors.ToolWindowTextBrushKey);
+                var scroller = new ScrollViewer
+                {
+                    Content = fallback,
+                    MaxWidth = 720,
+                    MaxHeight = 480,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto
+                };
+                scroller.SetResourceReference(Control.BackgroundProperty,
+                    EnvironmentColors.ToolWindowBackgroundBrushKey);
+                data.View = scroller;
+                return scroller as TView;
             }
         }
     }
@@ -241,6 +280,29 @@ namespace JavaLanguageSupport.Editor.Javadoc
             };
             Grid.SetRow(viewer, 1);
             grid.Children.Add(viewer);
+
+            // Pack A2-HF1: keep the mouse wheel on the popup instead of the editor.
+            // FlowDocumentScrollViewer contains an internal ScrollViewer; the
+            // internal viewer is created by its control template after Loaded.
+            ScrollViewer documentScroll = null;
+            viewer.Loaded += (sender, args) =>
+                documentScroll = FindScrollViewer(viewer);
+            root.AddHandler(UIElement.PreviewMouseWheelEvent,
+                new MouseWheelEventHandler((sender, args) =>
+                {
+                    if (documentScroll == null)
+                        documentScroll = FindScrollViewer(viewer);
+                    if (documentScroll == null || documentScroll.ScrollableHeight <= 0)
+                        return;
+                    double steps = args.Delta / 120.0;
+                    double amount = Math.Max(1, SystemParameters.WheelScrollLines) * 18.0;
+                    double target = Math.Max(0, Math.Min(documentScroll.ScrollableHeight,
+                        documentScroll.VerticalOffset - steps * amount));
+                    documentScroll.ScrollToVerticalOffset(target);
+                    // Avoid scrolling the underlying Visual Studio editor, even
+                    // when the Javadoc viewer is already at the first/last line.
+                    args.Handled = true;
+                }), true);
             return root;
         }
 
@@ -468,35 +530,25 @@ namespace JavaLanguageSupport.Editor.Javadoc
                 }
                 else if (node is LinkInline link)
                 {
-                    var uri = SafeExternalUri(link.Url);
+                    var uri = SafeJavaDocUri(link.Url);
                     if (uri == null || link.IsImage)
                         AppendInline(link, to, colors);
                     else
                     {
                         var wpfLink = new Hyperlink { NavigateUri = uri, Foreground = colors.Link };
                         AppendInline(link, wpfLink.Inlines, colors);
-                        wpfLink.RequestNavigate += (sender, args) =>
-                        {
-                            try { Process.Start(new ProcessStartInfo(args.Uri.AbsoluteUri) { UseShellExecute = true }); }
-                            catch (Exception ex) { Debug.WriteLine("Java QuickInfo hyperlink: " + ex.Message); }
-                            args.Handled = true;
-                        };
+                        wpfLink.RequestNavigate += OpenJavaDocLink;
                         to.Add(wpfLink);
                     }
                 }
                 else if (node is AutolinkInline auto)
                 {
-                    Uri uri = SafeExternalUri(auto.Url);
+                    Uri uri = SafeJavaDocUri(auto.Url);
                     if (uri == null) to.Add(new Run(auto.Url));
                     else
                     {
                         var wpfLink = new Hyperlink(new Run(auto.Url)) { NavigateUri = uri, Foreground = colors.Link };
-                        wpfLink.RequestNavigate += (sender, args) =>
-                        {
-                            try { Process.Start(new ProcessStartInfo(args.Uri.AbsoluteUri) { UseShellExecute = true }); }
-                            catch (Exception ex) { Debug.WriteLine("Java QuickInfo hyperlink: " + ex.Message); }
-                            args.Handled = true;
-                        };
+                        wpfLink.RequestNavigate += OpenJavaDocLink;
                         to.Add(wpfLink);
                     }
                 }
@@ -514,11 +566,72 @@ namespace JavaLanguageSupport.Editor.Javadoc
             }
         }
 
-        private static Uri SafeExternalUri(string url)
+        // Pack A2-HF1: recognize Java source links returned by JDT LS.
+        // JavaDoc @see and {@link} are emitted as Markdown with file:// or
+        // jdt:// URIs; the previous renderer accepted only http(s).
+        // Never execute arbitrary command://, script, shell, or relative URLs.
+        private static Uri SafeJavaDocUri(string url)
         {
             Uri uri;
-            if (!Uri.TryCreate(url, UriKind.Absolute, out uri)) return null;
-            return uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp ? uri : null;
+            if (string.IsNullOrWhiteSpace(url) ||
+                !Uri.TryCreate(url, UriKind.Absolute, out uri)) return null;
+            if (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+                return uri;
+            if (uri.IsFile && uri.LocalPath.EndsWith(".java", StringComparison.OrdinalIgnoreCase))
+                return uri;
+            if (string.Equals(uri.Scheme, "jdt", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(uri.Host, "contents", StringComparison.OrdinalIgnoreCase) &&
+                (uri.AbsolutePath.IndexOf(".class", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 uri.AbsolutePath.EndsWith(".java", StringComparison.OrdinalIgnoreCase)))
+                return uri;
+            return null;
+        }
+
+        // Pack A2-HF1: route only known Javadoc links, never launch jdt://
+        // with Process.Start. Reuse the already-tested Pack B navigation stack.
+        private static async void OpenJavaDocLink(object sender,
+            System.Windows.Navigation.RequestNavigateEventArgs args)
+        {
+            args.Handled = true;
+            Uri uri = args.Uri;
+            if (uri == null || SafeJavaDocUri(uri.AbsoluteUri) == null) return;
+            try
+            {
+                if (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+                {
+                    Process.Start(new ProcessStartInfo(uri.AbsoluteUri)
+                    { UseShellExecute = true });
+                    return;
+                }
+                // The class source is opened in Visual Studio, not a browser.
+                // Method-specific Javadoc fragments are not interpreted as
+                // line numbers without a documented JDT LS location mapping.
+                await JavaAdvancedNavigation.OpenAsync(new JavaAdvancedLocation
+                {
+                    Uri = uri.AbsoluteUri, Line = 0, Column = 0
+                }, message => Debug.WriteLine("[Java Javadoc] " + message),
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Java QuickInfo hyperlink: " + ex);
+            }
+        }
+
+        private static ScrollViewer FindScrollViewer(DependencyObject node)
+        {
+            if (node == null) return null;
+            var scroll = node as ScrollViewer;
+            if (scroll != null) return scroll;
+            int children;
+            try { children = VisualTreeHelper.GetChildrenCount(node); }
+            catch (InvalidOperationException) { return null; }
+            for (int i = 0; i < children; i++)
+            {
+                var found = FindScrollViewer(VisualTreeHelper.GetChild(node, i));
+                if (found != null) return found;
+            }
+            return null;
         }
     }
 }
