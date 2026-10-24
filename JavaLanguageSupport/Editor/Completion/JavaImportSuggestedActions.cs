@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using JavaLanguageSupport.LanguageServer;
 using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.Shell; // Pack A3: UI-thread-safe import revalidation.
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
@@ -109,6 +110,13 @@ namespace JavaLanguageSupport.Editor.Completion
                 return Enumerable.Empty<SuggestedActionSet>();
             }
             if (matches == null) matches = new List<JObject>();
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            // Pack A3: results returned after an edit, caret move, or closing
+            // the document must never appear as selectable import fixes.
+            if (cancellationToken.IsCancellationRequested || disposed || view.IsClosed ||
+                buffer.CurrentSnapshot.Version.VersionNumber != expectedVersion ||
+                !TryGetImportName(out actualName) || actualName != expectedName)
+                return Enumerable.Empty<SuggestedActionSet>();
             JavaLanguageStatus.LspResponse("java/importChoices", matches.Count, false, false);
 
             var actions = matches.Where(a => a["edit"] is JObject)
@@ -206,12 +214,17 @@ namespace JavaLanguageSupport.Editor.Completion
                 .ConfigureAwait(false);
             lock (sync)
             {
-                if (!disposed && snapshot.Version.VersionNumber == buffer.CurrentSnapshot.Version.VersionNumber)
+                if (!disposed && !token.IsCancellationRequested &&
+                    snapshot.Version.VersionNumber == buffer.CurrentSnapshot.Version.VersionNumber)
                 {
                     cacheKey = key;
                     cachedActions = candidates;
                 }
             }
+            // Pack A3: do not return stale suggestions to the native light-bulb.
+            if (disposed || token.IsCancellationRequested ||
+                !ReferenceEquals(snapshot, buffer.CurrentSnapshot))
+                return empty;
             return candidates;
         }
 
@@ -662,7 +675,12 @@ namespace JavaLanguageSupport.Editor.Completion
             }
             catch (Exception ex)
             {
+                // Pack A3: an explicit import action must never fail silently.
                 JavaLanguageStatus.LspFailure("Java import/applyEdit", ex.Message);
+                System.Diagnostics.Trace.WriteLine("[Java Import] " + ex);
+                System.Windows.MessageBox.Show("Import Java non applicato:\n" + ex.Message,
+                    "Java: Import", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Warning);
             }
         }
 

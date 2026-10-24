@@ -117,6 +117,7 @@ namespace JavaLanguageSupport.LanguageServer
             if (stop != null)
                 await stop.InvokeAsync(this, EventArgs.Empty);
             JavaLspRpc.Detach();
+            JavaDiagnosticsMonitor.Reset(); // Pack A3: prevent fixes from a previous session.
             JavaSemanticLegend.Reset();
             JavaWorkspaceActivity.Stopped();
             JavaLanguageStatus.Stopped();
@@ -194,6 +195,7 @@ namespace JavaLanguageSupport.LanguageServer
                 "JavaLanguageSupportVS", "jdtls", Process.GetCurrentProcess().Id.ToString());
             Directory.CreateDirectory(dataFolder);
             JavaLanguageStatus.Starting(java, launcher, dataFolder);
+            JavaDiagnosticsMonitor.Reset(); // Pack A3: clear stale diagnostics on restart.
             JavaSemanticLegend.Reset();
             JavaWorkspaceActivity.Starting();
 

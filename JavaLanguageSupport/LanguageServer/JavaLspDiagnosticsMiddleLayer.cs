@@ -22,7 +22,10 @@ namespace JavaLanguageSupport.LanguageServer
 
         public bool CanHandle(string methodName)
         {
-            return methodName == "$/progress"
+            return methodName == "textDocument/didOpen"
+                || methodName == "textDocument/didChange"
+                || methodName == "textDocument/didClose"
+                || methodName == "$/progress"
                 || methodName == "language/status"
                 || methodName == "initialize"
                 || methodName == "workspace/executeCommand"
@@ -112,6 +115,16 @@ namespace JavaLanguageSupport.LanguageServer
         public async Task HandleNotificationAsync(string methodName, JToken methodParam,
             Func<JToken, Task> sendNotification)
         {
+            // Pack A3: invalidate the cached quick-fix diagnostics when
+            // the LSP client advances a file version. Never touch the real
+            // didOpen/didChange/didClose notification sent to JDT LS.
+            if (methodName == "textDocument/didOpen" ||
+                methodName == "textDocument/didChange" ||
+                methodName == "textDocument/didClose")
+            {
+                try { JavaDiagnosticsMonitor.ObserveDocumentNotification(methodName, methodParam); }
+                catch (Exception) { /* Monitoring must not break the LSP stream. */ }
+            }
             // Observational only. Do not suppress or mutate server messages.
             if (methodName == "$/progress" || methodName == "language/status")
             {

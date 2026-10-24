@@ -16,12 +16,55 @@ namespace JavaLanguageSupport.LanguageServer
         // Keep only the most recent snapshot per URI; bounded, memory-only cache.
         private static readonly Dictionary<string, JArray> Published =
             new Dictionary<string, JArray>(StringComparer.OrdinalIgnoreCase);
+        // Pack A3: do not reuse diagnostics for an earlier document version.
+        // JDT LS may include publishDiagnostics.version; LSP permits it to be absent.
+        private static readonly Dictionary<string, int> ClientVersions =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static int invalidations;
+        private static int rejectedOldVersions;
         private static int notifications;
         private static int errors;
         private static int warnings;
         private static int info;
         private static string filename = "(nessun documento)";
         private static DateTime lastUtc = DateTime.MinValue;
+
+        // Pack A3: called when the LSP client opens/changes/closes documents.
+        // Invalidation is conservative: missing quick-fix diagnostics are safer
+        // than applying an outdated fix against a newer editor snapshot.
+        internal static void ObserveDocumentNotification(string method, JToken parameters)
+        {
+            string uri = parameters == null ? null :
+                (string)parameters.SelectToken("textDocument.uri");
+            if (string.IsNullOrWhiteSpace(uri)) return;
+            int? version = (int?)parameters.SelectToken("textDocument.version");
+            lock (Sync)
+            {
+                if (Published.Remove(uri)) invalidations++;
+                if (method == "textDocument/didClose")
+                    ClientVersions.Remove(uri);
+                else if (version.HasValue && version.Value >= 0)
+                {
+                    int current;
+                    if (!ClientVersions.TryGetValue(uri, out current) ||
+                        version.Value >= current || method == "textDocument/didOpen")
+                        ClientVersions[uri] = version.Value;
+                }
+            }
+        }
+
+        internal static void Reset()
+        {
+            lock (Sync)
+            {
+                Published.Clear();
+                ClientVersions.Clear();
+                notifications = errors = warnings = info = 0;
+                invalidations = rejectedOldVersions = 0;
+                filename = "(nessun documento)";
+                lastUtc = DateTime.MinValue;
+            }
+        }
 
         internal static void Observe(JToken parameters)
         {
@@ -44,6 +87,18 @@ namespace JavaLanguageSupport.LanguageServer
             {
                 if (!string.IsNullOrWhiteSpace(uri))
                 {
+                    // Pack A3: ignore versioned diagnostics predating the most
+                    // recent client edit. This affects only our cache; native VS
+                    // still receives JDT LS notifications unchanged.
+                    int current;
+                    int? publishedVersion = (int?)parameters["version"];
+                    if (publishedVersion.HasValue &&
+                        ClientVersions.TryGetValue(uri, out current) &&
+                        publishedVersion.Value < current)
+                    {
+                        rejectedOldVersions++;
+                        return;
+                    }
                     if (Published.Count >= 128 && !Published.ContainsKey(uri))
                         Published.Clear();
                     Published[uri] = (JArray)array.DeepClone();
@@ -106,6 +161,8 @@ namespace JavaLanguageSupport.LanguageServer
                     return "notifiche=" + notifications + "; ultima=" + filename +
                         "; errori=" + errors + "; avvisi=" + warnings +
                         "; info=" + info + "; ora=" + lastUtc.ToLocalTime().ToString("HH:mm:ss") +
+                        "; invalidazioni=" + invalidations +
+                        "; risposte obsolete ignorate=" + rejectedOldVersions +
                         " (contatori riferiti soltanto all'ULTIMA notifica, non all'intero progetto)";
                 }
             }

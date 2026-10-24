@@ -254,12 +254,21 @@ namespace JavaLanguageSupport.Editor.Refactoring
             if (original == null || buffer == null || snapshot == null)
                 throw new InvalidOperationException("Azione Java senza documento.");
             var choice = (JObject)original.DeepClone();
+            // Pack A3: command-only and delayed codeAction/resolve MUST obey
+            // the same snapshot safety check already used for WorkspaceEdit.
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+            if (!ReferenceEquals(buffer.CurrentSnapshot, snapshot))
+                throw new InvalidOperationException("Il file Java e' cambiato. Richiama Ctrl + . e riprova.");
             if (choice["edit"] == null && choice["data"] != null)
             {
                 JToken resolved = await JavaLspRpc.RequestAsync("codeAction/resolve",
                     choice.DeepClone(), token).ConfigureAwait(false);
                 if (resolved is JObject) choice = (JObject)resolved;
             }
+            // Pack A3: a resolve may take time while the user keeps editing.
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+            if (!ReferenceEquals(buffer.CurrentSnapshot, snapshot))
+                throw new InvalidOperationException("Il file Java e' cambiato durante l'azione. Riprova.");
             JToken edit = choice["edit"];
             if (edit == null || edit.Type == JTokenType.Null)
             {
