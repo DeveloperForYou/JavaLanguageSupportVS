@@ -242,8 +242,13 @@ namespace JavaLanguageSupport.Editor.Navigation
             display = new string(display.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_').ToArray());
             if (display.Length > 72) display = display.Substring(0, 72);
             string hash;
+            // Include the retrieved source in the cache identity. JDK source
+            // attachments and class files can change after JDK/dependency updates;
+            // an URI-only key would otherwise reopen outdated read-only text.
+            // Existing cached .java files remain untouched (and read-only).
             using (var sha = SHA256.Create())
-                hash = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(address)))
+                hash = BitConverter.ToString(sha.ComputeHash(
+                    Encoding.UTF8.GetBytes(address + "\n" + source)))
                     .Replace("-", "").Substring(0, 16);
             string file = Path.Combine(cacheRoot, display + "_" + hash + ".java");
             Directory.CreateDirectory(cacheRoot);

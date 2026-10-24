@@ -75,18 +75,47 @@ namespace JavaLanguageSupport.Editor.Navigation
 
             var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var found = new List<Result>();
+            // References inside JDK/dependency source can use jdt:// rather than
+            // file://. Resolve each distinct external document just once and cap
+            // requests: a large Find References result must remain responsive.
+            var externalPaths = new Dictionary<string, string>(StringComparer.Ordinal);
+            const int maxExternalSources = 16;
+            int skippedExternal = 0;
             foreach (JToken item in ((JArray)reply).Take(10000))
             {
                 string address = (string)item["uri"] ?? (string)item["targetUri"];
                 JToken range = item["range"] ?? item["targetSelectionRange"] ??
                     item["targetRange"];
                 Uri target;
-                if (!Uri.TryCreate(address, UriKind.Absolute, out target) || !target.IsFile ||
+                if (!Uri.TryCreate(address, UriKind.Absolute, out target) ||
                     range == null || range["start"] == null) continue;
                 int line = (int?)range["start"]["line"] ?? -1;
                 int col = (int?)range["start"]["character"] ?? -1;
                 if (line < 0 || col < 0) continue;
-                string path = Path.GetFullPath(target.LocalPath);
+                string path;
+                if (target.IsFile)
+                    path = target.LocalPath;
+                else if (string.Equals(target.Scheme, "jdt", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!externalPaths.TryGetValue(address, out path))
+                    {
+                        if (externalPaths.Count >= maxExternalSources)
+                        {
+                            skippedExternal++;
+                            continue;
+                        }
+                        path = await JavaNavigation.ResolvePathAsync(address, log, token)
+                            .ConfigureAwait(false);
+                        externalPaths.Add(address, path ?? "");
+                    }
+                    if (string.IsNullOrWhiteSpace(path))
+                    {
+                        skippedExternal++;
+                        continue;
+                    }
+                }
+                else continue;
+                path = Path.GetFullPath(path);
                 if (!unique.Add(path + "|" + line + "|" + col)) continue;
                 found.Add(new Result { Path = path, Line = line, Column = col });
             }
@@ -113,12 +142,19 @@ namespace JavaLanguageSupport.Editor.Navigation
                 snapshot.Length <= 4 * 1024 * 1024)
                 openLines[Path.GetFullPath(sourceUri.LocalPath)] = SplitLines(snapshot.GetText());
             int probed = 0;
+            // Beyond the RDT probe budget we cannot tell whether a document has
+            // unsaved edits. Never display a potentially stale on-disk excerpt.
+            var unverifiedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string path in found.Select(x => x.Path)
                 .Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 if (openLines.ContainsKey(path)) continue;
                 // Avoid thousands of expensive RDT/COM probes on the editor thread.
-                if (++probed > 64) break;
+                if (++probed > 64)
+                {
+                    unverifiedPaths.Add(path);
+                    continue;
+                }
                 string[] lines = TryReadOpenBufferLines(path);
                 if (lines != null) openLines[path] = lines;
             }
@@ -134,6 +170,12 @@ namespace JavaLanguageSupport.Editor.Navigation
                         string[] lines;
                         if (!openLines.TryGetValue(group.Key, out lines))
                         {
+                            if (unverifiedPaths.Contains(group.Key))
+                            {
+                                foreach (Result r in group)
+                                    r.Excerpt = "(anteprima non verificata: aprire il file)";
+                                continue;
+                            }
                             if (new FileInfo(group.Key).Length > 4 * 1024 * 1024)
                             {
                                 foreach (Result r in group)
@@ -165,11 +207,16 @@ namespace JavaLanguageSupport.Editor.Navigation
                     "delle anteprime. Ripetere la ricerca.");
                 return;
             }
-            ShowNativeWindow(found, log, ((JArray)reply).Count > 10000);
+            ShowNativeWindow(found, log, ((JArray)reply).Count > 10000,
+                skippedExternal > 0);
+            if (skippedExternal > 0)
+                log("Java Find References: " + skippedExternal +
+                    " posizioni jdt:// non risolte o oltre il limite di " +
+                    maxExternalSources + " sorgenti esterni; risultati parziali.");
         }
 
         private static void ShowNativeWindow(IList<Result> results, Action<string> log,
-            bool truncated)
+            bool truncated, bool partial)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var service = Package.GetGlobalService(typeof(SVsFindAllReferences))
@@ -181,7 +228,8 @@ namespace JavaLanguageSupport.Editor.Navigation
                     "non e' disponibile.");
                 return;
             }
-            string label = "Java — " + results.Count + " riferimenti";
+            string label = "Java — " + results.Count + " riferimenti" +
+                (partial || truncated ? " (parziali)" : "");
             var window = service.StartSearch(label);
             if (window == null)
             {
@@ -238,7 +286,8 @@ namespace JavaLanguageSupport.Editor.Navigation
 
         // Read the existing VS buffer via the Running Document Table; don't open
         // tabs or save user edits. Called only on the UI thread (VS COM).
-        private static string[] TryReadOpenBufferLines(string path)
+        // Also used by WPF Peek fallback, to show unsaved target documents.
+        internal static string[] TryReadOpenBufferLines(string path)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var running = Package.GetGlobalService(typeof(SVsRunningDocumentTable))

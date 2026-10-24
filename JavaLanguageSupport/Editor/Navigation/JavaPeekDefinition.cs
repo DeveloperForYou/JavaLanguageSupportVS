@@ -25,6 +25,12 @@ namespace JavaLanguageSupport.Editor.Navigation
         {
             object args = JavaAdvancedNavigation.PositionArguments(sourceUri, sourceSnapshot, caret);
             JToken reply = await JavaLspRpc.RequestAsync("textDocument/definition", args, token);
+            token.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(sourceSnapshot, sourceSnapshot.TextBuffer.CurrentSnapshot))
+            {
+                log("Java Peek: documento modificato durante la ricerca. Ripeti ALT+F12.");
+                return;
+            }
             var locations = JavaAdvancedNavigation.Objects(reply)
                 .Select(JavaAdvancedNavigation.Location).Where(x => x != null)
                 .GroupBy(x => x.Uri + ":" + x.Line + ":" + x.Column, StringComparer.OrdinalIgnoreCase)
@@ -51,16 +57,31 @@ namespace JavaLanguageSupport.Editor.Navigation
             string path = await JavaNavigation.ResolvePathAsync(target.Uri, log, token);
             if (string.IsNullOrEmpty(path)) return;
             token.ThrowIfCancellationRequested();
+            // Read unsaved target buffers from VS when available; disk access is
+            // moved off the UI thread. This is the *fallback* WPF Peek only;
+            // native ALT+F12 continues to use the Visual Studio Peek editor.
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
             string[] lines;
-            // The current file may contain unsaved edits: show its live snapshot.
             if (JavaLspRpc.SameUri(sourceUri, target.Uri))
                 lines = sourceSnapshot.GetText().Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
             else
-                lines = File.ReadAllLines(path);
+            {
+                lines = JavaReferenceSearch.TryReadOpenBufferLines(path);
+                if (lines == null)
+                    lines = await Task.Run(() => File.ReadAllLines(path), token)
+                        .ConfigureAwait(false);
+            }
+            token.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(sourceSnapshot, sourceSnapshot.TextBuffer.CurrentSnapshot))
+            {
+                log("Java Peek: documento modificato prima dell'anteprima. Ripeti ALT+F12.");
+                return;
+            }
             if (lines.Length == 0) lines = new[] { "" };
             int first = Math.Max(0, target.Line - 8);
             int last = Math.Min(lines.Length - 1, target.Line + 32);
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+            if (!ReferenceEquals(sourceSnapshot, sourceSnapshot.TextBuffer.CurrentSnapshot)) return;
             Show(target, path, lines, first, last, log);
         }
 
