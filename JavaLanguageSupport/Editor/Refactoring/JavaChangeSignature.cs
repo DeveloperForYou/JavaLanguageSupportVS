@@ -12,6 +12,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using Newtonsoft.Json.Linq;
 
+// PACK C3: refactoring robustness and signature validation.
 namespace JavaLanguageSupport.Editor.Refactoring
 {
     /// <summary>Interactive JDT LS change-signature protocol; the server owns all edits.</summary>
@@ -151,8 +152,19 @@ namespace JavaLanguageSupport.Editor.Refactoring
             var remove = new Button { Content = "Rimuovi", MinWidth = 88, Margin = new Thickness(4) };
             var up = new Button { Content = "↑", MinWidth = 36, Margin = new Thickness(4) };
             var down = new Button { Content = "↓", MinWidth = 36, Margin = new Thickness(4) };
-            add.Click += (s,e) => { var row = new ParameterRow { Type = "Object", Name = "parameter",
-                DefaultValue = "null", OriginalIndex = -1 }; rows.Add(row); table.SelectedItem = row; };
+            add.Click += (s,e) => {
+                // Avoid inserting a duplicate name when the user adds several
+                // parameters before changing their types or descriptions.
+                string nextName = "parameter";
+                int suffix = 2;
+                while (rows.Any(x => string.Equals(x.Name, nextName, StringComparison.Ordinal)))
+                    nextName = "parameter" + suffix++;
+                var row = new ParameterRow { Type = "Object", Name = nextName,
+                    DefaultValue = "null", OriginalIndex = -1 };
+                rows.Add(row);
+                table.SelectedItem = row;
+                table.ScrollIntoView(row);
+            };
             remove.Click += (s,e) => { var row = table.SelectedItem as ParameterRow;
                 if (row != null) rows.Remove(row); };
             up.Click += (s,e) => Move(rows, table, -1);
@@ -199,7 +211,15 @@ namespace JavaLanguageSupport.Editor.Refactoring
             Grid.SetRow(table, 5); form.Children.Add(table);
             Grid.SetRow(controls, 6); form.Children.Add(controls);
             if (!JavaGenerationDialogStyle.Show("Java: Cambia firma metodo", form, 850, 620,
-                () => Validate(name.Text, returnType.Text, rows))) return false;
+                () => {
+                    // Commit active DataGrid cell BEFORE reading the model.
+                    // Otherwise clicking Genera while editing may send the
+                    // previous value to JDT LS, despite the visible new text.
+                    if (!table.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                        !table.CommitEdit(DataGridEditingUnit.Row, true))
+                        return false;
+                    return Validate(name.Text, returnType.Text, rows);
+                })) return false;
             var parameters = new JArray();
             foreach (ParameterRow p in rows)
                 parameters.Add(new JObject {
@@ -235,16 +255,48 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
                 Width = new DataGridLength(weight, DataGridLengthUnitType.Star), MinWidth = 100 });
         }
+        // Java reserved identifiers are invalid for a method or parameter.
+        // Contextual keywords are handled conservatively by JDT LS itself.
+        private static readonly HashSet<string> JavaReserved = new HashSet<string>(
+            StringComparer.Ordinal) {
+                "abstract", "assert", "boolean", "break", "byte", "case", "catch",
+                "char", "class", "const", "continue", "default", "do", "double",
+                "else", "enum", "extends", "final", "finally", "float", "for",
+                "goto", "if", "implements", "import", "instanceof", "int",
+                "interface", "long", "native", "new", "package", "private",
+                "protected", "public", "return", "short", "static", "strictfp",
+                "super", "switch", "synchronized", "this", "throw", "throws",
+                "transient", "try", "void", "volatile", "while", "true", "false",
+                "null", "_"
+            };
+
+        private static bool ValidName(string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate)) return false;
+            string trimmed = candidate.Trim();
+            return !JavaReserved.Contains(trimmed) &&
+                System.Text.RegularExpressions.Regex.IsMatch(trimmed,
+                    @"^[\p{L}_$][\p{L}\p{N}_$]*$");
+        }
+
         private static bool Validate(string name, string returnType,
             System.Collections.ObjectModel.ObservableCollection<ParameterRow> parameters)
         {
-            Func<string, bool> valid = value => !string.IsNullOrWhiteSpace(value) &&
-                System.Text.RegularExpressions.Regex.IsMatch(value.Trim(), @"^[\p{L}_$][\p{L}\p{N}_$]*$");
-            if (!valid(name) || string.IsNullOrWhiteSpace(returnType))
-            { MessageBox.Show("Nome del metodo o tipo restituito non valido."); return false; }
-            if (parameters.Any(x => !valid(x.Name) || string.IsNullOrWhiteSpace(x.Type)) ||
-                parameters.GroupBy(x => x.Name).Any(g => g.Count() > 1))
-            { MessageBox.Show("Controlla nomi e tipi dei parametri (nomi non duplicati)."); return false; }
+            if (!ValidName(name) || string.IsNullOrWhiteSpace(returnType) ||
+                string.Equals(returnType.Trim(), "var", StringComparison.Ordinal))
+            {
+                MessageBox.Show("Nome del metodo o tipo restituito non valido.",
+                    "Java: Cambia firma metodo", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+            if (parameters.Any(x => !ValidName(x.Name) || string.IsNullOrWhiteSpace(x.Type)) ||
+                parameters.GroupBy(x => x.Name.Trim(), StringComparer.Ordinal)
+                    .Any(g => g.Count() > 1))
+            {
+                MessageBox.Show("Controlla nomi e tipi dei parametri (nomi non duplicati).",
+                    "Java: Cambia firma metodo", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
             return true;
         }
         private static async Task Notice(string value, CancellationToken token)

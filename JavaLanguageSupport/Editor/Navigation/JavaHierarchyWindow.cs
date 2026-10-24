@@ -6,6 +6,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
+using System.Windows.Media;
+using Microsoft.VisualStudio.PlatformUI;
 using JavaLanguageSupport.LanguageServer;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
@@ -38,6 +42,82 @@ namespace JavaLanguageSupport.Editor.Navigation
             internal bool Loaded;
             internal HashSet<string> Ancestors;
             internal TreeViewItem View;
+        }
+
+        // B2 hierarchy theme fix: explicit WPF chrome keeps foreground and
+        // background readable in both VS themes, including hover, keyboard
+        // focus, pressed state and inactive focus. Normal colors are dynamic
+        // Visual Studio theme resources.
+        private static void ThemeHierarchyCloseButton(Button button)
+        {
+            button.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            button.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            button.SetResourceReference(Control.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+
+            bool dark = JavaLanguageSupport.Editor.Intelligence.JavaSemanticPalette.DarkTheme;
+            Brush hover = new SolidColorBrush(dark
+                ? Color.FromRgb(0x37, 0x45, 0x55)
+                : Color.FromRgb(0xD8, 0xE9, 0xF7));
+            Brush pressed = new SolidColorBrush(dark
+                ? Color.FromRgb(0x28, 0x4A, 0x66)
+                : Color.FromRgb(0xB9, 0xD8, 0xEF));
+            Brush contrast = dark ? Brushes.White
+                : (Brush)new SolidColorBrush(Color.FromRgb(0x17, 0x2D, 0x42));
+
+            var template = new ControlTemplate(typeof(Button));
+            var frame = new FrameworkElementFactory(typeof(Border));
+            frame.Name = "HierarchyCloseFrame";
+            frame.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            frame.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
+            frame.SetValue(Border.PaddingProperty, new Thickness(12, 5, 12, 5));
+            frame.SetBinding(Border.BackgroundProperty, new Binding("Background") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            frame.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.Name = "HierarchyCloseContent";
+            presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+                HorizontalAlignment.Center);
+            presenter.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            presenter.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+            presenter.SetBinding(TextElement.ForegroundProperty, new Binding("Foreground") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            frame.AppendChild(presenter);
+            template.VisualTree = frame;
+
+            var hoverState = new Trigger {
+                Property = UIElement.IsMouseOverProperty, Value = true };
+            hoverState.Setters.Add(new Setter(Border.BackgroundProperty,
+                hover, "HierarchyCloseFrame"));
+            hoverState.Setters.Add(new Setter(TextElement.ForegroundProperty,
+                contrast, "HierarchyCloseContent"));
+            template.Triggers.Add(hoverState);
+
+            var focusState = new Trigger {
+                Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focusState.Setters.Add(new Setter(Border.BackgroundProperty,
+                hover, "HierarchyCloseFrame"));
+            focusState.Setters.Add(new Setter(TextElement.ForegroundProperty,
+                contrast, "HierarchyCloseContent"));
+            template.Triggers.Add(focusState);
+
+            var pressedState = new Trigger {
+                Property = Button.IsPressedProperty, Value = true };
+            pressedState.Setters.Add(new Setter(Border.BackgroundProperty,
+                pressed, "HierarchyCloseFrame"));
+            pressedState.Setters.Add(new Setter(TextElement.ForegroundProperty,
+                contrast, "HierarchyCloseContent"));
+            template.Triggers.Add(pressedState);
+
+            var disabledState = new Trigger {
+                Property = UIElement.IsEnabledProperty, Value = false };
+            disabledState.Setters.Add(new Setter(UIElement.OpacityProperty, 0.48));
+            template.Triggers.Add(disabledState);
+            button.Template = template;
         }
 
         private JavaHierarchyWindow(JavaHierarchyKind kind, Action<string> log)
@@ -77,6 +157,7 @@ namespace JavaLanguageSupport.Editor.Navigation
                 Padding = new Thickness(12, 5, 12, 5), IsCancel = true,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 Margin = new Thickness(0, 10, 0, 0) };
+            ThemeHierarchyCloseButton(close);
             close.Click += (sender, args) => window.Close();
             Grid.SetRow(close, 2);
             layout.Children.Add(close);
@@ -203,7 +284,8 @@ namespace JavaLanguageSupport.Editor.Navigation
             view.Tag = node;
             if (!node.Loaded)
             {
-                view.Items.Add(new TreeViewItem { Header = "Espandi per caricare..." });
+                view.Items.Add(new TreeViewItem { Header = JavaNavigationWindowStyle.TreeHeader(
+                    "Espandi per caricare...", false) });
                 view.Expanded += async (sender, args) => {
                     if (!ReferenceEquals(args.OriginalSource, view) || node.Loaded) return;
                     node.Loaded = true;
@@ -219,7 +301,8 @@ namespace JavaLanguageSupport.Editor.Navigation
                 ? (node.Incoming ? "callHierarchy/incomingCalls" : "callHierarchy/outgoingCalls")
                 : (node.Incoming ? "typeHierarchy/supertypes" : "typeHierarchy/subtypes");
             node.View.Items.Clear();
-            node.View.Items.Add(new TreeViewItem { Header = "Caricamento..." });
+            node.View.Items.Add(new TreeViewItem { Header = JavaNavigationWindowStyle.TreeHeader(
+                "Caricamento...", false) });
             status.Text = "JDT LS: " + method;
             try
             {
@@ -246,8 +329,9 @@ namespace JavaLanguageSupport.Editor.Navigation
                 }
                 if (node.View.Items.Count == 0)
                     node.View.Items.Add(new TreeViewItem {
-                        Header = response == null ? "Nessun dato (metodo LSP non supportato o errore)" :
-                            "Nessun elemento"
+                        Header = JavaNavigationWindowStyle.TreeHeader(response == null
+                            ? "Nessun dato (metodo LSP non supportato o errore)"
+                            : "Nessun elemento", false)
                     });
                 status.Text = node.View.Items.Count + " elemento/i — " + method;
             }
@@ -256,7 +340,8 @@ namespace JavaLanguageSupport.Editor.Navigation
             {
                 if (!window.IsVisible) return;
                 node.View.Items.Clear();
-                node.View.Items.Add(new TreeViewItem { Header = "Errore: " + ex.Message });
+                node.View.Items.Add(new TreeViewItem { Header = JavaNavigationWindowStyle.TreeHeader(
+                    "Errore: " + ex.Message, false) });
                 status.Text = "Errore durante " + method;
                 log("Java hierarchy: " + ex.Message);
             }

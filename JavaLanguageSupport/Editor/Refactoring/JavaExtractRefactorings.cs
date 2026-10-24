@@ -9,6 +9,7 @@ using Microsoft.VisualStudio.Text;
 using Newtonsoft.Json.Linq;
 using Task = System.Threading.Tasks.Task;
 
+// PACK C3: refactoring robustness and signature validation.
 namespace JavaLanguageSupport.Editor.Refactoring
 {
     /// <summary>
@@ -86,11 +87,53 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 request, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             var array = response as JArray;
-            var choices = array == null ? new List<JObject>() : array.OfType<JObject>()
-                .Where(action => IsMatching(action, operation)).ToList();
+            var choices = FilterUsableActions(array, operation);
+
+            // Selection edges can contain only indentation or a trailing newline.
+            // Some JDT LS builds reject that range: retry ONCE with whitespace
+            // trimmed, without changing the selection displayed in Visual Studio.
+            // Never retry a request whose source snapshot has already changed.
+            if (choices.Count == 0 && needsSelection && end > start &&
+                ReferenceEquals(buffer.CurrentSnapshot, snapshot))
+            {
+                int cleanStart = start, cleanEnd = end;
+                while (cleanStart < cleanEnd && char.IsWhiteSpace(snapshot[cleanStart]))
+                    cleanStart++;
+                while (cleanEnd > cleanStart && char.IsWhiteSpace(snapshot[cleanEnd - 1]))
+                    cleanEnd--;
+                if (cleanEnd > cleanStart && (cleanStart != start || cleanEnd != end))
+                {
+                    var retryRange = new
+                    {
+                        textDocument = new { uri },
+                        range = new {
+                            start = JavaLspRpc.Position(snapshot, cleanStart),
+                            end = JavaLspRpc.Position(snapshot, cleanEnd)
+                        },
+                        context = new { diagnostics }
+                    };
+                    JToken trimmed = await JavaLspRpc.RequestAsync(
+                        "textDocument/codeAction", retryRange, token).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    if (!ReferenceEquals(buffer.CurrentSnapshot, snapshot))
+                    {
+                        Log(log, "Documento modificato durante il refactoring: riprova.");
+                        return;
+                    }
+                    var trimmedArray = trimmed as JArray;
+                    var trimmedChoices = FilterUsableActions(trimmedArray, operation);
+                    if (trimmedChoices.Count > 0)
+                    {
+                        choices = trimmedChoices;
+                        array = trimmedArray;
+                        Log(log, "Java C3: selezione normalizzata per JDT LS.");
+                    }
+                }
+            }
             // Older JDT LS builds may offer inline refactoring at a caret,
             // not a range. Retry with zero-width caret ONLY for explicit Inline.
-            if (choices.Count == 0 && operation == JavaEditorOperation.InlineVariable && end > start)
+            if (choices.Count == 0 && operation == JavaEditorOperation.InlineVariable &&
+                end > start && ReferenceEquals(buffer.CurrentSnapshot, snapshot))
             {
                 var retryRequest = new
                 {
@@ -107,15 +150,19 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 {
                     // Include the results in troubleshooting without guessing
                     // at edits or blindly running unrelated refactorings.
-                    foreach (JObject item in extra.OfType<JObject>())
-                    {
-                        if (IsMatching(item, operation)) choices.Add(item);
-                    }
+                    choices.AddRange(FilterUsableActions(extra, operation));
+                    // Keep one entry per distinct LSP action; same-title
+                    // alternatives with different edits remain selectable.
+                    choices = DistinctActions(choices);
                     if (array == null) array = extra;
                 }
             }
             if (choices.Count == 0)
             {
+                if (array != null && array.OfType<JObject>().Any(a =>
+                    IsMatching(a, operation) && a["disabled"] != null &&
+                    a["disabled"].Type != JTokenType.Null))
+                    Log(log, "JDT LS ha restituito solo refactoring disabilitati per questa posizione.");
                 if (array != null && log != null)
                     log("JDT LS Code Actions disponibili: " + string.Join(" | ",
                         array.OfType<JObject>().Take(25).Select(x =>
@@ -136,6 +183,25 @@ namespace JavaLanguageSupport.Editor.Refactoring
             if (chosen == null) return;
             await JavaEditorLspOperations.ApplySuggestedCodeActionAsync(chosen,
                 buffer, snapshot, uri, log, token);
+        }
+
+        // An action can be disabled by JDT LS even if it has a matching title.
+        // Never synthesize a WorkspaceEdit or execute such commands.
+        private static List<JObject> FilterUsableActions(JArray actions,
+            JavaEditorOperation operation)
+        {
+            if (actions == null) return new List<JObject>();
+            return DistinctActions(actions.OfType<JObject>()
+                .Where(a => (a["disabled"] == null ||
+                             a["disabled"].Type == JTokenType.Null) &&
+                            IsMatching(a, operation)));
+        }
+
+        private static List<JObject> DistinctActions(IEnumerable<JObject> actions)
+        {
+            return actions.GroupBy(a => a.ToString(Newtonsoft.Json.Formatting.None),
+                    StringComparer.Ordinal)
+                .Select(g => g.First()).Take(80).ToList();
         }
 
         private static bool TryIdentifierRange(ITextSnapshot snapshot, int caret,
@@ -201,12 +267,16 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     // Never select a method/field/constant inline action here.
                     bool otherKind = ContainsAny(title, "method", "function", "metodo",
                         "constant", "costante", "field", "campo");
+                    // Generic refactor.inline alone is ambiguous: JDT LS may
+                    // mean a method, field or local. Require a local-variable
+                    // hint rather than accidentally inlining an unrelated symbol.
+                    bool localName = ContainsAny(title,
+                        "inline variable", "inline local variable",
+                        "inline variabile", "incorpora variabile", "inline local",
+                        "inline temporary", "inline temp", "inline '", "inline \"");
                     return !otherKind && (
                         kind.StartsWith("refactor.inline.variable", StringComparison.Ordinal) ||
-                        kind == "refactor.inline" ||
-                        ContainsAny(title, "inline variable", "inline local variable",
-                            "inline variabile", "incorpora variabile", "inline local", 
-                            "inline temporary", "inline temp", "inline '", "inline \""));
+                        localName);
                 default: return false;
             }
         }

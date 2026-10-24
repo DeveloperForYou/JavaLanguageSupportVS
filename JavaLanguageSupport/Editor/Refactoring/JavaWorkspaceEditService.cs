@@ -429,6 +429,50 @@ namespace JavaLanguageSupport.Editor.Refactoring
             button.Template = template;
         }
 
+        // PACK C2 Hotfix: tree labels always use Visual Studio theme foreground.
+        // A TreeViewItem header passed as a plain string inherits WPF's
+        // selection/inactive foreground (black even in VS dark mode).
+        // Local DynamicResource on a TextBlock prevents that mismatch.
+        private static TextBlock ThemedPreviewTreeLabel(string label, bool isFile)
+        {
+            var text = new TextBlock {
+                Text = label ?? string.Empty,
+                TextWrapping = TextWrapping.NoWrap,
+                FontWeight = isFile ? FontWeights.SemiBold : FontWeights.Normal,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(2, 1, 3, 1)
+            };
+            text.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            return text;
+        }
+
+        // PACK C2 Hotfix 2: focus-independent tree selection contrast.
+        // The native WPF TreeViewItem template may draw a PALE inactive
+        // selection background, while our Java-themed label stays WHITE.
+        // Override BOTH active and inactive selection brushes at TreeView
+        // scope, so losing keyboard focus cannot produce white-on-light text.
+        private static void ConfigurePreviewTreeSelection(TreeView tree)
+        {
+            bool dark = JavaLanguageSupport.Editor.Intelligence.JavaSemanticPalette.DarkTheme;
+            Brush selectedBackground = new SolidColorBrush(dark
+                ? Color.FromRgb(0x26, 0x4F, 0x78)
+                : Color.FromRgb(0xC5, 0xDE, 0xF5));
+            Brush selectedForeground = new SolidColorBrush(dark
+                ? Color.FromRgb(0xFF, 0xFF, 0xFF)
+                : Color.FromRgb(0x17, 0x2D, 0x42));
+
+            // These are the resource keys used by the default WPF TreeViewItem
+            // styles in focused and unfocused/disabled-owner selection states.
+            // Scope locally: never change OS colors, editor or other VS windows.
+            tree.Resources[SystemColors.HighlightBrushKey] = selectedBackground;
+            tree.Resources[SystemColors.InactiveSelectionHighlightBrushKey] =
+                selectedBackground;
+            tree.Resources[SystemColors.HighlightTextBrushKey] = selectedForeground;
+            tree.Resources[SystemColors.InactiveSelectionHighlightTextBrushKey] =
+                selectedForeground;
+        }
+
         private static bool ConfirmMultiFile(Plan plan)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -468,12 +512,14 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 EnvironmentColors.ToolWindowTextBrushKey);
             tree.SetResourceReference(Control.BorderBrushProperty,
                 EnvironmentColors.ToolWindowBorderBrushKey);
+            ConfigurePreviewTreeSelection(tree);
             ScrollViewer.SetHorizontalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
             ScrollViewer.SetVerticalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
             foreach (DocumentChange doc in plan.Documents)
             {
                 var parent = new TreeViewItem {
-                    Header = Path.GetFileName(doc.Path) + " - " + doc.Edits.Count + " modifiche",
+                    Header = ThemedPreviewTreeLabel(
+                        Path.GetFileName(doc.Path) + " - " + doc.Edits.Count + " modifiche", true),
                     Tag = new PreviewSelection { Document = doc }, ToolTip = doc.Path,
                     IsExpanded = true };
                 foreach (Change change in doc.Edits.OrderBy(x => x.Start))
@@ -482,7 +528,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
                         Math.Min(change.Start, Math.Max(0, doc.Snapshot.Length - 1))).LineNumber + 1;
                     string old = doc.Before.Substring(change.Start, change.End - change.Start);
                     parent.Items.Add(new TreeViewItem {
-                        Header = "Riga " + row + ": " + Brief(old) + "  →  " + Brief(change.Text),
+                        Header = ThemedPreviewTreeLabel(
+                            "Riga " + row + ": " + Brief(old) + "  →  " + Brief(change.Text), false),
                         Tag = new PreviewSelection { Document = doc, Edit = change },
                         ToolTip = "Modifica JDT LS in " + doc.Path });
                 }
