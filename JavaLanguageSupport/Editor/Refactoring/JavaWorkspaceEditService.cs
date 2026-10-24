@@ -488,12 +488,17 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
             dialog.SetResourceReference(Control.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
-            var layout = new Grid { Margin = new Thickness(10) };
+            // PACK C2 Hotfix 4: footer pinned outside resizeable splitter grid.
+            // The inner Grid contains only title, tree, splitter and code preview.
+            // The DockPanel measures its Bottom child FIRST, reserving fixed
+            // space for Applica tutte/Annulla even when the splitter is dragged.
+            var dialogRoot = new DockPanel { Margin = new Thickness(10),
+                LastChildFill = true };
+            var layout = new Grid { MinHeight = 0 };
             layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2, GridUnitType.Star), MinHeight = 100 });
             layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(6) });
             layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = 115 });
-            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var caption = new TextBlock {
                 Text = plan.EditCount + " modifiche in " + plan.Documents.Count +
                     " file Java. Operazione unica con Undo/Redo collegati. " +
@@ -583,9 +588,13 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }
             apply.Click += (sender, args) => { dialog.DialogResult = true; };
             cancel.Click += (sender, args) => { dialog.DialogResult = false; };
-            Grid.SetRow(actions, 4);
-            layout.Children.Add(actions);
-            dialog.Content = layout;
+            // Footer does NOT participate in GridSplitter row resizing.
+            actions.MinHeight = 37;
+            actions.VerticalAlignment = VerticalAlignment.Bottom;
+            DockPanel.SetDock(actions, Dock.Bottom);
+            dialogRoot.Children.Add(actions);
+            dialogRoot.Children.Add(layout);
+            dialog.Content = dialogRoot;
             dialog.ContentRendered += (sender, args) => {
                 var first = tree.Items.OfType<TreeViewItem>().FirstOrDefault();
                 if (first != null) first.IsSelected = true;
