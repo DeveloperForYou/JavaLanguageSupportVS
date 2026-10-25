@@ -52,6 +52,11 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }
             var selectedFields = fields == null ? new List<string>() : fields.OfType<JObject>()
                 .Select(x => (string)x["type"] ?? "").ToList();
+            // D1: also reject collisions BETWEEN the selected overloads.
+            // Previously only collisions with existing source declarations were
+            // checked, so two selected JDT LS entries with the same signature
+            // could generate a duplicate Java constructor in one operation.
+            var selectedSignatures = new HashSet<string>(StringComparer.Ordinal);
             foreach (JObject ctor in constructors.OfType<JObject>())
             {
                 var types = new List<string>();
@@ -62,6 +67,13 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 var normalized = types.Select(Normalize).ToArray();
                 if (normalized.Any(x => x.Length == 0))
                 { reason = "Il server ha restituito un tipo di parametro non riconosciuto."; return false; }
+                string signatureKey = string.Join("\u001f", normalized);
+                if (!selectedSignatures.Add(signatureKey))
+                {
+                    reason = "Sono stati selezionati piu' costruttori con la stessa firma: " +
+                        name + "(" + string.Join(", ", types) + ").";
+                    return false;
+                }
                 foreach (var other in existing)
                     if (other.Length == normalized.Length && other.Select(Normalize)
                         .SequenceEqual(normalized, StringComparer.Ordinal))

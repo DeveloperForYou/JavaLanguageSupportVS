@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Media;
 using JavaLanguageSupport.Editor.Navigation;
 using Microsoft.VisualStudio.PlatformUI;
@@ -68,6 +69,17 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 EnvironmentColors.ToolWindowBorderBrushKey);
             grid.SetResourceReference(DataGrid.HorizontalGridLinesBrushProperty,
                 EnvironmentColors.ToolWindowBorderBrushKey);
+            // D1: keep selected cells readable even after the DataGrid loses focus.
+            // Constrain the override to the generation table, not the whole IDE.
+            bool darkSelection = JavaLanguageSupport.Editor.Intelligence.JavaSemanticPalette.DarkTheme;
+            Brush selectedBackground = new SolidColorBrush(darkSelection
+                ? Color.FromRgb(0x26, 0x4F, 0x78) : Color.FromRgb(0xC5, 0xDE, 0xF5));
+            Brush selectedText = darkSelection ? Brushes.White :
+                (Brush)new SolidColorBrush(Color.FromRgb(0x17, 0x2D, 0x42));
+            grid.Resources[SystemColors.HighlightBrushKey] = selectedBackground;
+            grid.Resources[SystemColors.InactiveSelectionHighlightBrushKey] = selectedBackground;
+            grid.Resources[SystemColors.HighlightTextBrushKey] = selectedText;
+            grid.Resources[SystemColors.InactiveSelectionHighlightTextBrushKey] = selectedText;
             VirtualizingStackPanel.SetIsVirtualizing(grid, true);
             VirtualizingStackPanel.SetVirtualizationMode(grid, VirtualizationMode.Recycling);
             ScrollViewer.SetCanContentScroll(grid, true);
@@ -186,6 +198,62 @@ namespace JavaLanguageSupport.Editor.Refactoring
             return window.ShowDialog() == true;
         }
 
+        // D1: WPF's stock and VS-themed Button templates may reintroduce
+        // black text over dark backgrounds during hover or keyboard focus.
+        // A local template retains VS dynamic resource brushes while providing
+        // contrast-safe hover, focus and pressed states for the dialog footer.
+        private static void ThemeGenerationButton(Button button)
+        {
+            bool dark = JavaLanguageSupport.Editor.Intelligence.JavaSemanticPalette.DarkTheme;
+            Brush hover = new SolidColorBrush(dark
+                ? Color.FromRgb(0x37, 0x45, 0x55) : Color.FromRgb(0xD8, 0xE9, 0xF7));
+            Brush pressed = new SolidColorBrush(dark
+                ? Color.FromRgb(0x28, 0x4A, 0x66) : Color.FromRgb(0xB9, 0xD8, 0xEF));
+            Brush contrast = dark ? Brushes.White :
+                (Brush)new SolidColorBrush(Color.FromRgb(0x17, 0x2D, 0x42));
+            var template = new ControlTemplate(typeof(System.Windows.Controls.Button));
+            var frame = new FrameworkElementFactory(typeof(Border));
+            frame.Name = "GenerationButtonFrame";
+            frame.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            frame.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
+            frame.SetValue(Border.PaddingProperty, new Thickness(12, 5, 12, 5));
+            frame.SetBinding(Border.BackgroundProperty, new Binding("Background") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            frame.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.Name = "GenerationButtonContent";
+            content.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+                HorizontalAlignment.Center);
+            content.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+            content.SetBinding(TextElement.ForegroundProperty, new Binding("Foreground") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            frame.AppendChild(content);
+            template.VisualTree = frame;
+            var over = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            over.Setters.Add(new Setter(Border.BackgroundProperty, hover, "GenerationButtonFrame"));
+            over.Setters.Add(new Setter(TextElement.ForegroundProperty, contrast,
+                "GenerationButtonContent"));
+            template.Triggers.Add(over);
+            var focus = new Trigger {
+                Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focus.Setters.Add(new Setter(Border.BackgroundProperty, hover, "GenerationButtonFrame"));
+            focus.Setters.Add(new Setter(TextElement.ForegroundProperty, contrast,
+                "GenerationButtonContent"));
+            template.Triggers.Add(focus);
+            var down = new Trigger { Property = System.Windows.Controls.Button.IsPressedProperty, Value = true };
+            down.Setters.Add(new Setter(Border.BackgroundProperty, pressed, "GenerationButtonFrame"));
+            down.Setters.Add(new Setter(TextElement.ForegroundProperty, contrast,
+                "GenerationButtonContent"));
+            template.Triggers.Add(down);
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.48));
+            template.Triggers.Add(disabled);
+            button.Template = template;
+        }
+
         private static Button Button(string label, bool isDefault, bool isCancel)
         {
             var button = new Button { Content = label, MinWidth = 106,
@@ -199,6 +267,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 EnvironmentColors.ToolWindowTextBrushKey);
             button.SetResourceReference(Control.BorderBrushProperty,
                 EnvironmentColors.ToolWindowBorderBrushKey);
+            ThemeGenerationButton(button);
             return button;
         }
 

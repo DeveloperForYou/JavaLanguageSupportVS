@@ -282,8 +282,11 @@ namespace JavaLanguageSupport.Editor.Refactoring
             foreach (JObject method in methods.OfType<JObject>())
             {
                 string sourceType = (string)method["declaringClass"] ?? "(tipo sconosciuto)";
+                // JDT LS versions may report either fully-qualified or
+                // simple Object. Never preselect those common helper methods.
                 bool fromJavaObject = string.Equals(sourceType.Trim(), "java.lang.Object",
-                    StringComparison.Ordinal);
+                    StringComparison.Ordinal) ||
+                    string.Equals(sourceType.Trim(), "Object", StringComparison.Ordinal);
                 rows.Add(new OverrideRow
                 {
                     Source = (JObject)method.DeepClone(),
@@ -314,8 +317,16 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 "(escluso java.lang.Object).", true);
             Grid.SetRow(label, 0); body.Children.Add(label);
             Grid.SetRow(table, 1); body.Children.Add(table);
+            // D1: keep the modal open if every method is unchecked.
             if (!JavaGenerationDialogStyle.Show(
-                "Java: Override/Implement metodi", body, 900, 580)) return false;
+                "Java: Override/Implement metodi", body, 900, 580, () =>
+                {
+                    if (rows.Any(r => r.Include)) return true;
+                    MessageBox.Show("Seleziona almeno un metodo da generare.",
+                        "Java: Override/Implement", MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return false;
+                })) return false;
 
             foreach (OverrideRow row in rows)
                 if (row.Include) chosenMethods.Add(row.Source.DeepClone());

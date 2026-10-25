@@ -173,8 +173,18 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 "getter/setter gia' presenti o non consentiti (es. campo final).");
             Grid.SetRow(note, 0); body.Children.Add(note);
             Grid.SetRow(table, 1); body.Children.Add(table);
-            if (!JavaGenerationDialogStyle.Show("Java: Genera getter/setter", body))
-                return null;
+            // D1: don't close the dialog when every eligible checkbox is
+            // cleared. The user can correct the selection without reopening it.
+            if (!JavaGenerationDialogStyle.Show("Java: Genera getter/setter", body,
+                790, 580, () =>
+                {
+                    if (rows.Any(r => (r.CanGetter && r.GenerateGetter) ||
+                                      (r.CanSetter && r.GenerateSetter))) return true;
+                    MessageBox.Show("Seleziona almeno un getter o setter.",
+                        "Java: Genera getter/setter", MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return false;
+                })) return null;
 
             var result = new JArray();
             foreach (AccessorRow row in rows)
