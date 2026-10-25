@@ -57,13 +57,14 @@ namespace JavaLanguageSupport.Editor.Intelligence
             : base(view, documents) { }
 
         protected override string MethodName => "textDocument/codeLens";
-        // Keep already rendered CodeLens rows stable while editing. Refresh
-        // counters only after the user has stopped typing for 10 seconds.
+        // Keep CodeLens above declarations stable while typing. Refresh
+        // after a short idle period, and promptly after structural edits.
+        // Workspace-idle signals also refresh counters when OTHER Java
+        // files change (for example after a multi-file refactoring).
         protected override bool PreserveAdornmentsOnEdit => true;
-        protected override int RefreshDelayMilliseconds => HasPublishedTags ? 10000 : 800;
-        // Progress notifications from JDT LS may come in bursts; do not use
-        // each one to re-query references and implementations during typing.
-        protected override bool RefreshOnWorkspaceIdle => !HasPublishedTags;
+        protected override int RefreshDelayMilliseconds => HasPublishedTags ? 3200 : 800;
+        protected override bool RefreshOnWorkspaceIdle => true;
+        protected override int WorkspaceIdleThrottleMilliseconds => 4500;
         protected override int StructuralRefreshDelayMilliseconds => 900;
 
         protected override bool IsStructuralEdit(TextContentChangedEventArgs change)
@@ -96,8 +97,10 @@ namespace JavaLanguageSupport.Editor.Intelligence
             var items = response as JArray ?? new JArray();
 
             var lines = new Dictionary<int, List<Link>>();
-            int count = 0;
-            foreach (var item in items.OfType<JObject>().Take(100))
+            int resolveCount = 0;
+            // Bound the number of server-side resolves. Already-resolved
+            // native CodeLens entries do not consume this budget.
+            foreach (var item in items.OfType<JObject>().Take(120))
             {
                 token.ThrowIfCancellationRequested();
                 int line = (int?)item.SelectToken("range.start.line") ?? -1;
@@ -105,14 +108,14 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 if (line < 0 || line >= snapshot.LineCount) continue;
 
                 JObject command = item["command"] as JObject;
-                if (command == null && count < 25)
+                if (command == null && resolveCount < 32)
                 {
+                    resolveCount++;
                     // JDT LS often resolves CodeLens commands lazily.
                     var resolved = await JavaLspRpc.RequestAsync("codeLens/resolve",
                         item.DeepClone(), token) as JObject;
                     command = resolved == null ? null : resolved["command"] as JObject;
                 }
-                count++;
                 if (command == null) continue;
                 string title = (string)command["title"];
                 if (string.IsNullOrWhiteSpace(title)) continue;
@@ -134,7 +137,12 @@ namespace JavaLanguageSupport.Editor.Intelligence
 
             foreach (var group in lines.OrderBy(x => x.Key))
             {
-                var links = group.Value.Take(4).ToList();
+                // Native and fallback entries can report the same category
+                // at the same declaration; show each action only once.
+                var links = group.Value
+                    .GroupBy(x => x.Kind ?? "title:" + x.Title,
+                        StringComparer.OrdinalIgnoreCase)
+                    .Select(x => x.First()).Take(4).ToList();
                 if (links.Count == 0) continue;
                 var row = snapshot.GetLineFromLineNumber(group.Key);
                 // Align CodeLens with the declaration's first non-whitespace character.
@@ -154,9 +162,26 @@ namespace JavaLanguageSupport.Editor.Intelligence
             return result;
         }
 
-        // This is deliberately limited to top-level interfaces. We ask JDT LS
-        // for the identifier range, not a regex-based guess about Java syntax.
-        // A short per-document limit bounds the extra indexing/search work.
+        // DocumentSymbol can contain nested Java interfaces inside classes.
+        // Iterate its hierarchy with a hard cap; never infer symbols from
+        // text/regex and never issue unbounded semantic searches.
+        private static IEnumerable<JObject> NestedSymbols(JArray symbols)
+        {
+            var pending = new Stack<JObject>(symbols.OfType<JObject>().Reverse());
+            int visited = 0;
+            while (pending.Count > 0 && ++visited <= 128)
+            {
+                JObject symbol = pending.Pop();
+                yield return symbol;
+                var children = symbol["children"] as JArray;
+                if (children != null)
+                    foreach (JObject child in children.OfType<JObject>().Reverse())
+                        pending.Push(child);
+            }
+        }
+
+        // When the native JDT server omits an interface heading,
+        // use semantic LSP locations as a bounded fallback.
         private static async Task AddMissingInterfaceLensesAsync(
             string uri, ITextSnapshot snapshot, Dictionary<int, List<Link>> lines,
             CancellationToken token)
@@ -166,7 +191,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             if (symbols == null) return;
 
             int checkedInterfaces = 0;
-            foreach (JObject symbol in symbols.OfType<JObject>())
+            foreach (JObject symbol in NestedSymbols(symbols))
             {
                 token.ThrowIfCancellationRequested();
                 // LSP SymbolKind.Interface = 11. Method declarations are left to
@@ -189,11 +214,16 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 List<Link> existing;
                 if (!lines.TryGetValue(line, out existing))
                     lines[line] = existing = new List<Link>();
+                // Use the authoritative interface identifier also for
+                // native CodeLens. Its range.start may point at the
+                // declaration keyword instead of the symbol itself.
+                int offset = row.Start.Position + column;
+                foreach (Link link in existing)
+                    if (link.Kind == "references" ||
+                        link.Kind == "implementations") link.Offset = offset;
                 bool needReferences = !existing.Any(x => x.Kind == "references");
                 bool needImplementations = !existing.Any(x => x.Kind == "implementations");
                 if (!needReferences && !needImplementations) continue;
-
-                int offset = row.Start.Position + column;
                 var requestPosition = new { line, character = column };
                 // Send independent searches together; only the LSP server does
                 // symbol resolution, and this code never scans the filesystem.
@@ -233,7 +263,15 @@ namespace JavaLanguageSupport.Editor.Intelligence
             if (response == null || response.Type == JTokenType.Null) return null;
             JArray array = response as JArray;
             if (array == null)
-                return response is JObject ? (int?)1 : null;
+            {
+                // LSP also permits a single Location/LocationLink.
+                // Do not interpret arbitrary JSON objects as a match.
+                var single = response as JObject;
+                if (single == null ||
+                    (single["uri"] == null && single["targetUri"] == null))
+                    return null;
+                array = new JArray(single.DeepClone());
+            }
             // Location and LocationLink can both appear. Ignore duplicate
             // locations, for example when the server reports one target twice.
             var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -273,11 +311,16 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 if (i > 0) text.Inlines.Add(new Run("   ·   ") { Foreground = blue });
                 var link = links[i];
                 if (link.Kind == null)
-                    text.Inlines.Add(new Run(link.Title) { Foreground = blue });
+                    // An unknown JDT LS command is informational, not a
+                    // fake clickable link that silently does nothing.
+                    text.Inlines.Add(new Run(link.Title));
                 else
                 {
                     var hyperlink = new Hyperlink(new Run(link.Title)) {
-                        Foreground = blue, TextDecorations = TextDecorations.Underline };
+                        Foreground = blue, TextDecorations = TextDecorations.Underline,
+                        ToolTip = link.Kind == "references"
+                            ? "Java: Trova tutti i riferimenti"
+                            : "Java: Vai alle implementazioni" };
                     hyperlink.Click += (sender, args) => {
                         args.Handled = true;
                         Navigate(link);

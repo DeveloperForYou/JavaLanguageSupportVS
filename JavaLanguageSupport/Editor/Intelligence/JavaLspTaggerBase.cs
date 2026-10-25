@@ -29,6 +29,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
         private int requestGeneration;
         private bool forceRefreshAfterStructuralEdit;
         private int lastStart = -1, lastEnd = -1, lastVersion = -1;
+        private DateTime lastWorkspaceIdleRefreshUtc = DateTime.MinValue;
 
         protected JavaLspTaggerBase(IWpfTextView view, ITextDocumentFactoryService documents)
         {
@@ -58,6 +59,8 @@ namespace JavaLanguageSupport.Editor.Intelligence
         protected virtual int RefreshDelayMilliseconds => 500;
         protected virtual bool PreserveAdornmentsOnEdit => false;
         protected virtual bool RefreshOnWorkspaceIdle => true;
+        // Optional per-tagger throttle (CodeLens searches can be expensive).
+        protected virtual int WorkspaceIdleThrottleMilliseconds => 0;
         // Inter-line CodeLens must not be shifted across a structural rewrite:
         // moving a method can make an old counter point to a different symbol.
         protected virtual bool IsStructuralEdit(TextContentChangedEventArgs change) => false;
@@ -123,7 +126,19 @@ namespace JavaLanguageSupport.Editor.Intelligence
         private void OnLegendChanged(object sender, EventArgs e) { InvalidateOnDispatcher(); }
         private void OnIndexIdle(object sender, EventArgs e)
         {
-            if (RefreshOnWorkspaceIdle) InvalidateOnDispatcher();
+            if (!RefreshOnWorkspaceIdle || disposed) return;
+            Action refresh = () =>
+            {
+                if (disposed || View.IsClosed) return;
+                DateTime now = DateTime.UtcNow;
+                if ((now - lastWorkspaceIdleRefreshUtc).TotalMilliseconds <
+                    WorkspaceIdleThrottleMilliseconds) return;
+                lastWorkspaceIdleRefreshUtc = now;
+                lastVersion = -1;
+                Schedule();
+            };
+            if (View.VisualElement.Dispatcher.CheckAccess()) refresh();
+            else View.VisualElement.Dispatcher.BeginInvoke(refresh);
         }
         private void OnLayout(object sender, TextViewLayoutChangedEventArgs e)
         {

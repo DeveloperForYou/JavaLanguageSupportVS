@@ -11,9 +11,12 @@ ed apri `Formatter.java` e `AbstractFormatter.java`.
 4. Modifica `UpperFormatter`, salva, controlla che i CodeLens vengano aggiornati.
 5. Cambia tema e focus: i link sono blu sottolineati, senza etichette nere illeggibili.
 
-NOTA: questa prima implementazione mostra CodeLens **inline all'inizio della riga**,
-non ancora come una riga dedicata sopra la dichiarazione. JDT LS può non produrre
-CodeLens per tutti i simboli. I suoi conteggi restano quelli restituiti dal server.
+**Pack E1:** CodeLens occupa una **riga separata sopra** la dichiarazione
+(InterLineAdornmentTag), senza inserire testo nel file Java. Le categorie
+native restano autorevoli; per le interfacce senza CodeLens nativo è
+previsto un fallback semantico con limiti di ricerca. Dopo una modifica
+locale, attendere alcuni secondi; dopo l'indicizzazione o un refactoring
+multi-file, controllare che i conteggi si aggiornino.
 
 Compilazione: `javac -d out src/main/java/lenscheck/*.java` e
 `java -cp out lenscheck.CodeLensMain`.
