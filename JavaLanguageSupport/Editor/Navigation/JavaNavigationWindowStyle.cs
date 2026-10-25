@@ -2,6 +2,8 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -149,6 +151,83 @@ namespace JavaLanguageSupport.Editor.Navigation
             internal Brush Background;
             internal Brush Foreground;
             internal Brush Border;
+        }
+
+        // Action buttons in Java navigation dialogs must not rely on the
+        // implicit WPF/VS default-button template: IsDefault can paint a very
+        // light blue background while the Java dark-theme Foreground is white.
+        // This explicit chrome keeps the text readable in either VS theme,
+        // including default, mouse-over, keyboard focus and pressed states.
+        internal static void ThemeNavigationActionButton(Button button)
+        {
+            ThemeControl(button);
+            button.SetResourceReference(Control.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+
+            bool dark = JavaSemanticPaletteDark();
+            Brush hover = new SolidColorBrush(dark
+                ? Color.FromRgb(0x37, 0x45, 0x55)
+                : Color.FromRgb(0xD8, 0xE9, 0xF7));
+            Brush pressed = new SolidColorBrush(dark
+                ? Color.FromRgb(0x28, 0x4A, 0x66)
+                : Color.FromRgb(0xB9, 0xD8, 0xEF));
+            Brush readableText = dark ? Brushes.White
+                : (Brush)new SolidColorBrush(Color.FromRgb(0x17, 0x2D, 0x42));
+
+            var template = new ControlTemplate(typeof(Button));
+            var border = new FrameworkElementFactory(typeof(Border));
+            border.Name = "NavigationActionFrame";
+            border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
+            border.SetValue(Border.PaddingProperty, new Thickness(10, 2, 10, 2));
+            border.SetBinding(Border.BackgroundProperty, new Binding("Background") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            border.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush") {
+                RelativeSource = RelativeSource.TemplatedParent });
+
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.Name = "NavigationActionContent";
+            content.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+                HorizontalAlignment.Center);
+            content.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+            content.SetBinding(TextElement.ForegroundProperty, new Binding("Foreground") {
+                RelativeSource = RelativeSource.TemplatedParent });
+            border.AppendChild(content);
+            template.VisualTree = border;
+
+            var over = new Trigger {
+                Property = UIElement.IsMouseOverProperty, Value = true };
+            over.Setters.Add(new Setter(Border.BackgroundProperty,
+                hover, "NavigationActionFrame"));
+            over.Setters.Add(new Setter(TextElement.ForegroundProperty,
+                readableText, "NavigationActionContent"));
+            template.Triggers.Add(over);
+
+            var focused = new Trigger {
+                Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focused.Setters.Add(new Setter(Border.BackgroundProperty,
+                hover, "NavigationActionFrame"));
+            focused.Setters.Add(new Setter(TextElement.ForegroundProperty,
+                readableText, "NavigationActionContent"));
+            template.Triggers.Add(focused);
+
+            var down = new Trigger {
+                Property = Button.IsPressedProperty, Value = true };
+            down.Setters.Add(new Setter(Border.BackgroundProperty,
+                pressed, "NavigationActionFrame"));
+            down.Setters.Add(new Setter(TextElement.ForegroundProperty,
+                readableText, "NavigationActionContent"));
+            template.Triggers.Add(down);
+
+            var disabled = new Trigger {
+                Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.48));
+            template.Triggers.Add(disabled);
+
+            button.Template = template;
+            // IsDefault and IsCancel still retain native Enter/Esc semantics.
         }
 
         private static void InstallReadableButtons(System.Windows.Window window)

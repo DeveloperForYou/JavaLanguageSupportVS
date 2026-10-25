@@ -329,8 +329,10 @@ namespace JavaLanguageSupport.Editor.Navigation
             var cancel = new Button { Content = "Annulla", MinWidth = 90,
                 IsCancel = true, Margin = new Thickness(8, 0, 0, 0),
                 Padding = new Thickness(8, 4, 8, 4) };
-            JavaNavigationWindowStyle.ThemeControl(ok);
-            JavaNavigationWindowStyle.ThemeControl(cancel);
+            // Explicit navigation-button template: contrast remains readable
+            // even when WPF paints the IsDefault button.
+            JavaNavigationWindowStyle.ThemeNavigationActionButton(ok);
+            JavaNavigationWindowStyle.ThemeNavigationActionButton(cancel);
             var actions = new StackPanel { Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right };
             actions.Children.Add(ok);
