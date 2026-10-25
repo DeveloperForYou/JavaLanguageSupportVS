@@ -21,8 +21,6 @@ namespace JavaLanguageSupport.Editor.Refactoring
 {
     internal enum JavaEditorOperation
     {
-        FormatDocument,
-        FormatSelection,
         OrganizeImports,
         RenameSymbol,
         CodeActions,
@@ -126,19 +124,6 @@ namespace JavaLanguageSupport.Editor.Refactoring
             string method;
             switch (operation)
             {
-                case JavaEditorOperation.FormatDocument:
-                    method = "textDocument/formatting";
-                    args = new { textDocument = new { uri },
-                        options = new { tabSize = 4, insertSpaces = true } };
-                    break;
-                case JavaEditorOperation.FormatSelection:
-                    if (selected.IsEmpty) { log("Seleziona il codice Java da formattare."); return; }
-                    method = "textDocument/rangeFormatting";
-                    args = new { textDocument = new { uri },
-                        range = new { start = JavaLspRpc.Position(snapshot, selected.Start.Position),
-                            end = JavaLspRpc.Position(snapshot, selected.End.Position) },
-                        options = new { tabSize = 4, insertSpaces = true } };
-                    break;
                 case JavaEditorOperation.OrganizeImports:
                 case JavaEditorOperation.CodeActions:
                     method = "textDocument/codeAction";

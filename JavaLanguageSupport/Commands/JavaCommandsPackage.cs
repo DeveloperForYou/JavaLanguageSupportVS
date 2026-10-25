@@ -36,8 +36,6 @@ namespace JavaLanguageSupport.Commands
         private const int TestId = 0x0102;
         private const int StatusId = 0x0103;
 
-        private const int FormatId = 0x0110;
-        private const int FormatSelectionId = 0x0111;
         private const int OrganizeImportsId = 0x0112;
         private const int RenameId = 0x0113;
         
@@ -71,10 +69,6 @@ namespace JavaLanguageSupport.Commands
             service.AddCommand(new MenuCommand((s, e) => ShowIntelliSenseStatus(),
                 new CommandID(CommandSet, StatusId)));
 
-            service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.FormatDocument),
-                new CommandID(CommandSet, FormatId)));
-            service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.FormatSelection),
-                new CommandID(CommandSet, FormatSelectionId)));
             service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.OrganizeImports),
                 new CommandID(CommandSet, OrganizeImportsId)));
             AddJavaContextCommand(service, RenameId, JavaEditorOperation.RenameSymbol);

@@ -20,7 +20,7 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | Estrai metodo/variabile/costante, Inline variabile, Cambia firma | **Pack C3 collaudato**; risultati e proposte forniti da JDT LS |
 | Genera costruttori, getter/setter, Override/Implement | Comandi e finestre presenti; **stabilizzazione Pack D1 da completare** |
 | Completamento di `()`, `[]`, `{}`, virgolette e Javadoc | Gestori presenti; **verifiche Pack D2 da completare** |
-| Formatta documento / selezione, organizza import | Comandi presenti; **stabilizzazione formattazione Pack D3 da completare** |
+| Formattazione documento / selezione e commenti Java | **Pack D3 da collaudare**: comandi nativi Visual Studio Ctrl+K,D/F/C/U; organizza import resta nel menu Strumenti |
 | CodeLens, Inlay Hints e document highlight | Componenti già presenti; **stabilizzazione/performance Pack E da completare** |
 | Compilazione, esecuzione e test | Comandi **Strumenti → Java** per JDK, Maven e Gradle |
 | Project System Java (`.javaproj`) in Esplora soluzioni | **Non implementato** |
@@ -89,7 +89,16 @@ Lo script verifica i prerequisiti; **non** conferma da solo che la sessione LSP 
 
 ### Comandi dell'editor
 
-Nel menu **Strumenti** sono presenti, tra gli altri, **Java: Stato IntelliSense**, **Java: Formatta documento**, **Java: Formatta selezione**, **Java: Organizza import**, **Java: Compila progetto**, **Java: Esegui progetto** e **Java: Esegui test**.
+| Operazione nel file Java | Scorciatoia nativa Visual Studio |
+| --- | --- |
+| Formatta documento | **Ctrl+K, Ctrl+D** |
+| Formatta selezione | **Ctrl+K, Ctrl+F** |
+| Commenta selezione (righe `//`) | **Ctrl+K, Ctrl+C** |
+| Decommenta selezione | **Ctrl+K, Ctrl+U** |
+
+La formattazione usa JDT LS e modifica il buffer aperto **senza salvataggio automatico**. I comandi commenta/decommenta funzionano anche senza connessione LSP; tutte le operazioni supportano Undo/Redo. Le scorciatoie dipendono dalla mappatura standard della tastiera di Visual Studio.
+
+Nel menu **Strumenti** sono presenti, tra gli altri, **Java: Stato IntelliSense**, **Java: Organizza import**, **Java: Compila progetto**, **Java: Esegui progetto** e **Java: Esegui test**. Le due voci Java di formattazione sono state rimosse: il Pack D3 usa i comandi standard di Visual Studio.
 
 Nel menu contestuale dei file Java sono presenti **Java: Rinomina simbolo nel progetto**, **Java: Gerarchia chiamate**, **Java: Gerarchia tipi**, **Java: Estrai metodo**, **Java: Estrai variabile**, **Java: Estrai costante**, **Java: Inline variabile**, **Java: Cambia firma metodo**, **Java: Genera costruttore**, **Java: Genera getter/setter** e **Java: Override/Implement metodi**. La disponibilità dipende dal contesto e dalle capacità di JDT LS.
 
@@ -204,7 +213,7 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 | **C (C1–C3)** | Rinomina, WorkspaceEdit multi-file e refactoring avanzati | ✅ Collaudata |
 | **D1** | Generazione costruttori, getter/setter, Override/Implement | 🔜 Prossimo |
 | **D2** | Parentesi, virgolette, commenti e completamento Javadoc | ⏳ Da stabilizzare |
-| **D3** | Formattazione del documento e della selezione | ⏳ Da stabilizzare |
+| **D3** | Formattazione e commenti con scorciatoie native di Visual Studio | 🧪 Da collaudare |
 | **E** | CodeLens, Inlay Hints, affidabilità e prestazioni | ⏳ Da stabilizzare |
 | **Integrazione IDE** | Runner, Project System Java, debugger, JUnit/TestNG | 📋 Evoluzione futura |
 | **Designer visuale** | Swing prima, quindi AWT e JavaFX | 📋 Evoluzione futura |
