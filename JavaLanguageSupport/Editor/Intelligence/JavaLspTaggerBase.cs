@@ -90,6 +90,40 @@ namespace JavaLanguageSupport.Editor.Intelligence
         }
         protected bool HasPublishedTags => current.Count != 0;
 
+        // If the first LSP response was incomplete, try again without making
+        // the user close/reopen the Java tab. A document snapshot is retried
+        // at most twice; edits or a closed view invalidate pending callbacks.
+        private ITextSnapshot delayedRetrySnapshot;
+        private int delayedRetryAttempts;
+
+        protected void RequestBoundedRetry(ITextSnapshot snapshot)
+        {
+            if (disposed || View.IsClosed || snapshot == null) return;
+            if (!ReferenceEquals(delayedRetrySnapshot, snapshot))
+            {
+                delayedRetrySnapshot = snapshot;
+                delayedRetryAttempts = 0;
+            }
+            if (delayedRetryAttempts >= 2) return;
+            int delay = 2600 + delayedRetryAttempts * 2200;
+            delayedRetryAttempts++;
+            var ignored = RetryLaterAsync(snapshot, delay);
+        }
+
+        private async Task RetryLaterAsync(ITextSnapshot snapshot, int milliseconds)
+        {
+            await Task.Delay(milliseconds).ConfigureAwait(false);
+            if (disposed || View.IsClosed ||
+                View.VisualElement.Dispatcher.HasShutdownStarted) return;
+            View.VisualElement.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (disposed || View.IsClosed ||
+                    !ReferenceEquals(View.TextBuffer.CurrentSnapshot, snapshot)) return;
+                lastVersion = -1;
+                Schedule();
+            }));
+        }
+
         // Only classification taggers opt in. Inlay Hints and CodeLens must
         // continue discarding stale adornments immediately after an edit.
         protected virtual List<ITagSpan<TTag>> BuildImmediateTags(ITextSnapshot snapshot)

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -48,6 +49,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
         {
             internal string Title;
             internal string Kind;
+            internal bool Field;
             internal int Offset;
             internal string Uri;
             internal ITextSnapshot Snapshot;
@@ -117,7 +119,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
                     command = resolved == null ? null : resolved["command"] as JObject;
                 }
                 if (command == null) continue;
-                string title = (string)command["title"];
+                string title = ItalianCodeLensTitle((string)command["title"]);
                 if (string.IsNullOrWhiteSpace(title)) continue;
                 var row = snapshot.GetLineFromLineNumber(line);
                 int safeOffset = row.Start.Position + Math.Max(0, Math.Min(col, row.Length));
@@ -129,18 +131,21 @@ namespace JavaLanguageSupport.Editor.Intelligence
                     Offset = safeOffset, Uri = uri, Snapshot = snapshot });
             }
 
-            // JDT LS does not always return CodeLens commands on interface
-            // declarations, even when implementationCodeLens is enabled.
-            // Complete only the missing categories using semantic LSP queries.
-            // The existing CodeLens (when present) remains authoritative.
-            await AddMissingInterfaceLensesAsync(uri, snapshot, lines, token);
+            // Native JDT CodeLens is authoritative. Add only missing
+            // semantic references for fields and interface headings.
+            // Retry a temporarily empty server response (at most twice).
+            bool incomplete = await AddMissingInterfaceLensesAsync(
+                uri, snapshot, lines, token);
+            if (incomplete || items.Count == 0) RequestBoundedRetry(snapshot);
 
             foreach (var group in lines.OrderBy(x => x.Key))
             {
                 // Native and fallback entries can report the same category
                 // at the same declaration; show each action only once.
                 var links = group.Value
-                    .GroupBy(x => x.Kind ?? "title:" + x.Title,
+                    .GroupBy(x => x.Field && x.Kind == "references"
+                        ? "field:" + x.Offset.ToString()
+                        : x.Kind ?? "title:" + x.Title,
                         StringComparer.OrdinalIgnoreCase)
                     .Select(x => x.First()).Take(4).ToList();
                 if (links.Count == 0) continue;
@@ -180,27 +185,98 @@ namespace JavaLanguageSupport.Editor.Intelligence
             }
         }
 
-        // When the native JDT server omits an interface heading,
-        // use semantic LSP locations as a bounded fallback.
-        private static async Task AddMissingInterfaceLensesAsync(
+        // Pack E1 fields/interfaces hotfix: query only semantic DocumentSymbol
+        // identifiers (never guessed text positions). A bounded number of
+        // requests complete missing field reference counts and interface lenses.
+        private sealed class SemanticLensCandidate
+        {
+            internal int Line;
+            internal int Column;
+            internal int Offset;
+            internal string Name;
+            internal bool Field;
+            internal bool NeedReferences;
+            internal bool NeedImplementations;
+        }
+
+        private sealed class SemanticLensResult
+        {
+            internal SemanticLensCandidate Candidate;
+            internal int? References;
+            internal int? Implementations;
+        }
+
+        private static async Task<SemanticLensResult> QueryCandidateAsync(
+            string uri, SemanticLensCandidate candidate, SemaphoreSlim limit,
+            CancellationToken token)
+        {
+            await limit.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                var position = new { line = candidate.Line, character = candidate.Column };
+                Task<JToken> references = candidate.NeedReferences
+                    ? JavaLspRpc.RequestAsync("textDocument/references",
+                        new { textDocument = new { uri }, position,
+                              context = new { includeDeclaration = false } }, token)
+                    : Task.FromResult<JToken>(null);
+                Task<JToken> implementations = candidate.NeedImplementations
+                    ? JavaLspRpc.RequestAsync("textDocument/implementation",
+                        new { textDocument = new { uri }, position }, token)
+                    : Task.FromResult<JToken>(null);
+                await Task.WhenAll(references, implementations).ConfigureAwait(false);
+                return new SemanticLensResult {
+                    Candidate = candidate,
+                    References = candidate.NeedReferences
+                        ? CountLocations(references.Result) : null,
+                    Implementations = candidate.NeedImplementations
+                        ? CountLocations(implementations.Result) : null
+                };
+            }
+            finally { limit.Release(); }
+        }
+
+        // True means the server returned a transient incomplete response.
+        // The caller schedules up to two bounded retries without requiring the
+        // user to close/reopen the interface document.
+        private static async Task<bool> AddMissingInterfaceLensesAsync(
             string uri, ITextSnapshot snapshot, Dictionary<int, List<Link>> lines,
             CancellationToken token)
         {
             JArray symbols = await JavaLspRpc.RequestAsync("textDocument/documentSymbol",
                 new { textDocument = new { uri } }, token) as JArray;
-            if (symbols == null) return;
+            if (symbols == null || symbols.Count == 0) return true;
 
-            int checkedInterfaces = 0;
+            const int maxInterfaces = 12;
+            const int maxFields = 32;
+            int seenInterfaces = 0, seenFields = 0;
+            // Distinguish two fields declared on one line: one native
+            // reference lens cannot stand for both of them.
+            var fieldsPerLine = new Dictionary<int, int>();
+            foreach (JObject symbol in NestedSymbols(symbols))
+            {
+                int symbolKind = (int?)symbol["kind"] ?? -1;
+                if (symbolKind != 8 && symbolKind != 22) continue;
+                JToken at = symbol.SelectToken("selectionRange.start") ??
+                    symbol.SelectToken("location.range.start") ??
+                    symbol.SelectToken("range.start");
+                int lineNumber = (int?)at?["line"] ?? -1;
+                if (lineNumber < 0 || lineNumber >= snapshot.LineCount) continue;
+                int previous;
+                fieldsPerLine.TryGetValue(lineNumber, out previous);
+                fieldsPerLine[lineNumber] = previous + 1;
+            }
+            var candidates = new List<SemanticLensCandidate>();
             foreach (JObject symbol in NestedSymbols(symbols))
             {
                 token.ThrowIfCancellationRequested();
-                // LSP SymbolKind.Interface = 11. Method declarations are left to
-                // native JDT CodeLens; the fallback targets interface headings.
-                if ((int?)symbol["kind"] != 11) continue;
-                if (++checkedInterfaces > 12) break;
+                int kind = (int?)symbol["kind"] ?? -1;
+                bool isInterface = kind == 11; // LSP SymbolKind.Interface
+                bool isField = kind == 8 || kind == 22; // Field / EnumMember
+                if (!isInterface && !isField) continue;
+                if (isInterface && ++seenInterfaces > maxInterfaces) continue;
+                if (isField && ++seenFields > maxFields) continue;
 
-                // DocumentSymbol.selectionRange denotes the identifier. A
-                // SymbolInformation location is supported as a fallback.
                 JToken position = symbol.SelectToken("selectionRange.start") ??
                     symbol.SelectToken("location.range.start") ??
                     symbol.SelectToken("range.start");
@@ -210,52 +286,84 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 if (line < 0 || line >= snapshot.LineCount) continue;
                 ITextSnapshotLine row = snapshot.GetLineFromLineNumber(line);
                 if (column < 0 || column > row.Length) continue;
+                int offset = row.Start.Position + column;
 
                 List<Link> existing;
                 if (!lines.TryGetValue(line, out existing))
                     lines[line] = existing = new List<Link>();
-                // Use the authoritative interface identifier also for
-                // native CodeLens. Its range.start may point at the
-                // declaration keyword instead of the symbol itself.
-                int offset = row.Start.Position + column;
-                foreach (Link link in existing)
-                    if (link.Kind == "references" ||
-                        link.Kind == "implementations") link.Offset = offset;
-                bool needReferences = !existing.Any(x => x.Kind == "references");
-                bool needImplementations = !existing.Any(x => x.Kind == "implementations");
-                if (!needReferences && !needImplementations) continue;
-                var requestPosition = new { line, character = column };
-                // Send independent searches together; only the LSP server does
-                // symbol resolution, and this code never scans the filesystem.
-                Task<JToken> referencesTask = needReferences
-                    ? JavaLspRpc.RequestAsync("textDocument/references",
-                        new { textDocument = new { uri }, position = requestPosition,
-                              context = new { includeDeclaration = false } }, token)
-                    : Task.FromResult<JToken>(null);
-                Task<JToken> implementationsTask = needImplementations
-                    ? JavaLspRpc.RequestAsync("textDocument/implementation",
-                        new { textDocument = new { uri }, position = requestPosition }, token)
-                    : Task.FromResult<JToken>(null);
-                await Task.WhenAll(referencesTask, implementationsTask);
-                if (needReferences)
+
+                int fieldsOnThisLine;
+                fieldsPerLine.TryGetValue(line, out fieldsOnThisLine);
+                bool nativeReferences = isInterface
+                    ? existing.Any(x => x.Kind == "references" && !x.Field)
+                    : existing.Any(x => x.Kind == "references" &&
+                        (x.Field ? x.Offset == offset : fieldsOnThisLine == 1));
+                bool nativeImplementations = isInterface &&
+                    existing.Any(x => x.Kind == "implementations");
+                if (isInterface || (isField && fieldsOnThisLine == 1))
                 {
-                    int? count = CountLocations(referencesTask.Result);
-                    if (count.HasValue)
-                        existing.Add(new Link {
-                            Title = count.Value + (count.Value == 1 ? " riferimento" : " riferimenti"),
-                            Kind = "references", Offset = offset,
-                            Uri = uri, Snapshot = snapshot });
+                    // Native ranges may point at a keyword/field modifier,
+                    // not the identifier. Rebase only the matching heading.
+                    foreach (Link link in existing)
+                        if (!link.Field && (link.Kind == "references" ||
+                            (isInterface && link.Kind == "implementations")))
+                            link.Offset = offset;
                 }
-                if (needImplementations)
+                var candidate = new SemanticLensCandidate {
+                    Line = line, Column = column, Offset = offset,
+                    Field = isField, Name = (string)symbol["name"] ?? "campo",
+                    NeedReferences = !nativeReferences,
+                    NeedImplementations = isInterface && !nativeImplementations
+                };
+                if (candidate.NeedReferences || candidate.NeedImplementations)
+                    candidates.Add(candidate);
+            }
+
+            bool incomplete = false;
+            // Limit concurrent JDT LS work to avoid flooding large Java classes.
+            using (var limit = new SemaphoreSlim(4, 4))
+            {
+                var tasks = candidates.Select(x => QueryCandidateAsync(uri, x, limit, token))
+                    .ToArray();
+                SemanticLensResult[] results = await Task.WhenAll(tasks);
+                token.ThrowIfCancellationRequested();
+                foreach (SemanticLensResult result in results)
                 {
-                    int? count = CountLocations(implementationsTask.Result);
-                    if (count.HasValue)
-                        existing.Add(new Link {
-                            Title = count.Value + (count.Value == 1 ? " implementazione" : " implementazioni"),
-                            Kind = "implementations", Offset = offset,
-                            Uri = uri, Snapshot = snapshot });
+                    var candidate = result.Candidate;
+                    List<Link> existing = lines[candidate.Line];
+                    if (candidate.NeedReferences)
+                    {
+                        if (!result.References.HasValue) incomplete = true;
+                        else
+                        {
+                            if (result.References.Value == 0 && JavaWorkspaceActivity.IsBusy)
+                                incomplete = true;
+                            existing.Add(new Link {
+                                Title = 
+                                    result.References.Value + (result.References.Value == 1
+                                    ? " riferimento" : " riferimenti"),
+                                Kind = "references", Field = candidate.Field,
+                                Offset = candidate.Offset, Uri = uri, Snapshot = snapshot });
+                        }
+                    }
+                    if (candidate.NeedImplementations)
+                    {
+                        if (!result.Implementations.HasValue) incomplete = true;
+                        else
+                        {
+                            if (result.Implementations.Value == 0 && JavaWorkspaceActivity.IsBusy)
+                                incomplete = true;
+                            existing.Add(new Link {
+                                Title = result.Implementations.Value +
+                                    (result.Implementations.Value == 1
+                                    ? " implementazione" : " implementazioni"),
+                                Kind = "implementations", Offset = candidate.Offset,
+                                Uri = uri, Snapshot = snapshot });
+                        }
+                    }
                 }
             }
+            return incomplete;
         }
 
         private static int? CountLocations(JToken response)
@@ -288,6 +396,27 @@ namespace JavaLanguageSupport.Editor.Intelligence
                     unique.Add(uri + "|" + line + "|" + col);
             }
             return unique.Count;
+        }
+
+        // JDT LS returns some native CodeLens labels in English even when
+        // Visual Studio uses Italian. Only recognized count labels change;
+        // commands, navigation, positions and numerical counts are unchanged.
+        private static string ItalianCodeLensTitle(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title)) return title;
+            // Handles "1 reference", "0 implementations", "field: 2 references".
+            Match match = Regex.Match(title,
+                @"^(?<prefix>.*?)(?<count>[0-9]+)\s+(?<kind>references?|implementations?)(?<suffix>\s*)$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!match.Success) return title;
+            string count = match.Groups["count"].Value;
+            bool singular = count.TrimStart('0') == "1";
+            string kind = match.Groups["kind"].Value.StartsWith(
+                "reference", StringComparison.OrdinalIgnoreCase)
+                ? (singular ? "riferimento" : "riferimenti")
+                : (singular ? "implementazione" : "implementazioni");
+            return match.Groups["prefix"].Value + count + " " + kind +
+                match.Groups["suffix"].Value;
         }
 
         private static string ActionKind(string title, string command)
