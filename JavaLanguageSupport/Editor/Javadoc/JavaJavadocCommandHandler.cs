@@ -335,9 +335,19 @@ namespace JavaLanguageSupport.Editor.Javadoc
                 string accumulated = builder.ToString();
                 // Do not mistake @Annotation(value) for the method declaration.
                 string withoutAnnotations = RemoveLeadingAnnotations(accumulated);
+                // D2: annotation-only lines (e.g. @SuppressWarnings("x"))
+                // may contain parentheses; do not treat their argument list as
+                // the following method signature.
+                if (string.IsNullOrWhiteSpace(withoutAnnotations)) continue;
                 int open = withoutAnnotations.IndexOf('(');
                 if (open >= 0 && FindMatchingParen(withoutAnnotations, open) >= 0)
-                    return accumulated;
+                {
+                    // D2: a Java method/constructor declaration has a name
+                    // before its argument list. Incomplete annotation payloads
+                    // must not cause false @param/@return tags.
+                    string head = withoutAnnotations.Substring(0, open).TrimEnd();
+                    if (IdentifierAtEnd.IsMatch(head)) return accumulated;
+                }
                 if (open < 0 && (part.IndexOf('{') >= 0 || part.IndexOf(';') >= 0))
                     return accumulated;
             }

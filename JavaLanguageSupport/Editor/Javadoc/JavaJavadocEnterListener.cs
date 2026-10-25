@@ -30,7 +30,10 @@ namespace JavaLanguageSupport.Editor.Javadoc
             {
                 if (e.Handled || (e.Key != Key.Return && e.Key != Key.Enter))
                     return;
-                if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Windows)) != 0)
+                // D2: reserve modified Enter combinations (including
+                // Shift+Enter) for Visual Studio/editor commands.
+                if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt |
+                    ModifierKeys.Windows | ModifierKeys.Shift)) != 0)
                     return;
                 try
                 {
@@ -83,6 +86,10 @@ namespace JavaLanguageSupport.Editor.Javadoc
                 var replacement = new StringBuilder();
                 replacement.Append(indent).Append("/**").Append(newline)
                     .Append(indent).Append(" * ");
+                // D2: match the ReturnKey command handler's layout: keep a
+                // blank Javadoc paragraph between summary and generated tags.
+                if (tags.Count > 0)
+                    replacement.Append(newline).Append(indent).Append(" *");
                 foreach (string tag in tags)
                     replacement.Append(newline).Append(indent).Append(" * ").Append(tag);
                 replacement.Append(newline).Append(indent).Append(" */");

@@ -17,6 +17,11 @@ namespace JavaLanguageSupport.Editor.Braces
     [BracePair('{', '}')]
     [BracePair('(', ')')]
     [BracePair('[', ']')]
+    // D2: native sessions implement skip-over/backspace for quotes.
+    // JavaAutoPairCommandHandler supplies a guarded fallback if VS does not
+    // start a native quote session for this Java content type.
+    [BracePair('"', '"')]
+    [BracePair('\'', '\'')]
     internal sealed class JavaBraceCompletionProvider : IBraceCompletionDefaultProvider
     {
     }

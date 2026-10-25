@@ -36,7 +36,12 @@ namespace JavaLanguageSupport.Editor.Braces
             CommandExecutionContext executionContext)
         {
             char typed = args.TypedChar;
-            bool relevant = typed == '(' || typed == '[' || typed == '{' || typed == '*';
+            // D2: quote pairing is a fallback only. VS native brace completion
+            // and the language configuration are still preferred and must not
+            // result in a second closing quote.
+            bool quote = typed == '\"' || typed == '\'';
+            bool relevant = typed == '(' || typed == '[' || typed == '{' ||
+                typed == '*' || quote;
             bool selected = !args.TextView.Selection.IsEmpty;
 
             // Il comando base deve inserire prima il carattere digitato.
@@ -71,10 +76,20 @@ namespace JavaLanguageSupport.Editor.Braces
                     case '(': suffix = ")"; break;
                     case '[': suffix = "]"; break;
                     case '{': suffix = "}"; break;
+                    case '\"': suffix = "\""; break;
+                    case '\'': suffix = "'"; break;
                 }
             }
 
             if (suffix == null || buffer.IsReadOnly(position))
+                return;
+
+            // D2: do not insert a closing quote in the middle of an identifier
+            // during an edit. Keep Java strings/chars, // comments, /* comments */
+            // and text blocks excluded by the lexical IsCodeAt check above.
+            if (quote && position < snapshot.Length &&
+                (char.IsLetterOrDigit(snapshot[position]) ||
+                 snapshot[position] == '_' || snapshot[position] == '$'))
                 return;
 
             // Se una chiusura e' stata gia' inserita da Visual Studio, non duplicarla.
