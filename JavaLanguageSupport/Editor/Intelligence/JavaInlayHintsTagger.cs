@@ -46,8 +46,10 @@ namespace JavaLanguageSupport.Editor.Intelligence
         // an obvious constructor call (e.g. new Customer(...)).  For that *only*,
         // the constructor's explicit, non-generic type can be displayed safely.
         // No guesses are made for diamond operators, lambdas or method returns.
+        // Pack E2: intentionally anchored to an entire Java local-variable
+        // declaration. Never guess a type for a general expression.
         private static readonly Regex ExplicitConstructorVar = new Regex(
-            @"\bvar[ \t]+(?<name>[\p{L}_$][\p{L}\p{Nd}_$]*)[ \t]*=[ \t]*new[ \t]+(?<type>[\p{L}_$][\p{L}\p{Nd}_$]*(?:\.[\p{L}_$][\p{L}\p{Nd}_$]*)*)[ \t]*\(",
+            @"^[ \t]*(?:final[ \t]+)?var[ \t]+(?<name>[\p{L}_$][\p{L}\p{Nd}_$]*)[ \t]*=[ \t]*new[ \t]+(?<type>[\p{L}_$][\p{L}\p{Nd}_$]*(?:\.[\p{L}_$][\p{L}\p{Nd}_$]*)*)[ \t]*\(",
             RegexOptions.Compiled);
 
         internal JavaInlayHintsTagger(IWpfTextView view, ITextDocumentFactoryService documents)
@@ -55,6 +57,9 @@ namespace JavaLanguageSupport.Editor.Intelligence
 
         protected override string MethodName => "textDocument/inlayHint";
         protected override bool NeedsVisibleRange => true;
+        // Pack E2: debounce input/scroll while keeping hints responsive.
+        protected override int RefreshDelayMilliseconds => 650;
+        protected override int WorkspaceIdleThrottleMilliseconds => 1500;
         protected override bool Allowed => base.Allowed && FeatureEnabled("disable-inlay-hints.flag");
 
         protected override async Task<List<ITagSpan<IntraTextAdornmentTag>>> FetchAsync(
@@ -68,11 +73,19 @@ namespace JavaLanguageSupport.Editor.Intelligence
                               end = JavaLspRpc.Position(snapshot, end) }
             };
             var response = await JavaLspRpc.RequestAsync(MethodName, parameters, token) as JArray;
+            token.ThrowIfCancellationRequested();
+            // During initial import JDT LS may temporarily return no hints.
+            // The shared E1 retry guard limits retries per document snapshot.
+            if ((response == null || response.Count == 0) && JavaWorkspaceActivity.IsBusy)
+                RequestBoundedRetry(snapshot);
             if (response == null) response = new JArray();
 
-            var distinct = new HashSet<string>(StringComparer.Ordinal);
+            // Exactly one adornment per document offset. Native semantic hints
+            // always take precedence over the conservative local fallback.
+            var occupied = new HashSet<int>();
             foreach (var hint in response.OfType<JObject>().Take(180))
             {
+                token.ThrowIfCancellationRequested();
                 // Keep parameter hints AND inferred Java var types. Some JDT LS
                 // versions omit kind (but provide a label like ": List<String>").
                 // Unrelated type hints are not enabled by our client configuration.
@@ -92,17 +105,21 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 if (string.IsNullOrWhiteSpace(label)) continue;
                 // Remove JDT LS's leading colon ONLY for inferred-type
                 // hints on `var` declarations, not parameter/lambda hints.
-                bool varType = (hintKind == 1 || !hintKind.HasValue) &&
+                label = label.Replace("\r", " ").Replace("\n", " ").Trim();
+                bool semanticType = hintKind == 1 ||
+                    (!hintKind.HasValue && label.StartsWith(":", StringComparison.Ordinal));
+                bool varType = semanticType &&
                     VarBeforeHint.IsMatch(row.GetText().Substring(0, character));
-                if (varType)
-                {
-                    label = label.Trim();
-                    if (label.StartsWith(":", StringComparison.Ordinal))
-                        label = label.Substring(1).TrimStart();
-                }
+                if (varType && label.StartsWith(":", StringComparison.Ordinal))
+                    label = label.Substring(1).TrimStart();
+                // Parameter labels from JDT LS may include the colon
+                // already; normalize only explicit parameter hints.
+                if (hintKind == 2 && label.Length != 0 &&
+                    !label.EndsWith(":", StringComparison.Ordinal))
+                    label += ":";
                 if (string.IsNullOrWhiteSpace(label)) continue;
                 if (label.Length > 80) label = label.Substring(0, 79) + "…";
-                if (!distinct.Add(offset + ":" + label)) continue;
+                if (!occupied.Add(offset)) continue;
                 var ui = MakeLabel(label, varType);
                 var span = new SnapshotSpan(snapshot, offset, 0);
                 result.Add(new TagSpan<IntraTextAdornmentTag>(span,
@@ -124,15 +141,17 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 if (lineText.Length > 2000) continue;
                 var match = ExplicitConstructorVar.Match(lineText);
                 if (!match.Success) continue;
-                string prefix = lineText.Substring(0, match.Index).Trim();
-                if (prefix.Length != 0 && prefix != "final") continue;
-                // Do not mislabel an anonymous subclass using the declared base name.
+                // Comments, complex expressions and anonymous classes are
+                // intentionally left to semantic hints from JDT LS.
+                if (lineText.IndexOf("/*", StringComparison.Ordinal) >= 0 ||
+                    lineText.IndexOf("*/", StringComparison.Ordinal) >= 0 ||
+                    lineText.TrimStart().StartsWith("//", StringComparison.Ordinal)) continue;
                 string tail = lineText.Substring(match.Index + match.Length);
-                if (Regex.IsMatch(tail, @"\)\s*\{")) continue;
+                if (tail.IndexOf('{') >= 0 || tail.IndexOf('}') >= 0 ||
+                    !Regex.IsMatch(tail, @"\)\s*;\s*(?://.*)?$")) continue;
                 int position = line.Start.Position + match.Groups["name"].Index +
                     match.Groups["name"].Length;
-                if (position < start || position > end ||
-                    result.Any(x => x.Span.Start.Position == position)) continue;
+                if (position < start || position > end || occupied.Contains(position)) continue;
                 string qualified = match.Groups["type"].Value;
                 string label = qualified.Substring(qualified.LastIndexOf('.') + 1);
                 // The type is *not* written into the source buffer.
@@ -140,6 +159,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 result.Add(new TagSpan<IntraTextAdornmentTag>(span,
                     new IntraTextAdornmentTag(MakeLabel(label, true), null,
                         PositionAffinity.Predecessor)));
+                occupied.Add(position);
                 extra++;
             }
             return result;
@@ -151,7 +171,9 @@ namespace JavaLanguageSupport.Editor.Intelligence
             if (value.Type == JTokenType.String) return (string)value;
             var segments = value as JArray;
             if (segments != null)
-                return string.Concat(segments.Select(x => (string)x["value"] ?? ""));
+                return string.Concat(segments.Select(x =>
+                    x.Type == JTokenType.String ? (string)x :
+                    x is JObject ? (string)x["value"] ?? "" : ""));
             return null;
         }
 
@@ -160,28 +182,26 @@ namespace JavaLanguageSupport.Editor.Intelligence
             // Keep a small VS-like type chip on the SAME line, with spacing
             // from the identifier and '='; parameter hints keep prior spacing.
             var text = new TextBlock { Text = label, FontSize = 10.5,
-                Opacity = varType ? 0.82 : 1.0,
+                Opacity = 1.0, MaxWidth = 240,
                 TextWrapping = TextWrapping.NoWrap,
-                FontStyle = FontStyles.Italic, VerticalAlignment = VerticalAlignment.Center };
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                FontStyle = varType ? FontStyles.Italic : FontStyles.Normal,
+                VerticalAlignment = VerticalAlignment.Center };
             text.SetResourceReference(TextBlock.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
             var border = new Border { Child = text, CornerRadius = new CornerRadius(3),
                 Padding = varType ? new Thickness(5, 1, 5, 1) : new Thickness(2, 0, 2, 0),
                 Margin = varType ? new Thickness(7, 0, 7, 0) : new Thickness(1, 0, 1, 0),
                 VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+            // Theme resources are dynamic, unlike a fixed semi-transparent
+            // brush that can become unreadable after switching VS themes.
+            border.SetResourceReference(Border.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
             if (varType)
             {
-                // A subtle background plus VS-themed border distinguishes the
-                // inferred type from actual Java source in light and dark themes.
-                border.Background = new SolidColorBrush(Color.FromArgb(27, 125, 135, 145));
-                border.BorderThickness = new Thickness(0.6);
+                border.BorderThickness = new Thickness(1);
                 border.SetResourceReference(Border.BorderBrushProperty,
                     EnvironmentColors.ToolWindowBorderBrushKey);
-            }
-            else
-            {
-                border.SetResourceReference(Border.BackgroundProperty,
-                    EnvironmentColors.ToolWindowBackgroundBrushKey);
             }
             border.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             return border;
