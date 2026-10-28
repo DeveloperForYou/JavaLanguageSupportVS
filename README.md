@@ -2,7 +2,7 @@
 
 Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 2026** (non Visual Studio Code). Le funzionalità semantiche si basano su [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls) tramite **Language Server Protocol (LSP)**; compilazione, esecuzione e test utilizzano JDK, Maven o Gradle.
 
-> **Stato del progetto (ottobre 2026):** le fasi di stabilizzazione dell'editor **A1–A3, B1–B2 e C1–C3 sono state collaudate manualmente in Visual Studio 2026 Experimental**. L'estensione rimane sperimentale: generazione codice, comportamento dell'editor e formattazione richiedono ulteriori test (Pack D), seguiti da CodeLens, Inlay Hints e prestazioni (Pack E). Non sono ancora presenti un Project System Java nativo, il debug Java integrato o l'integrazione JUnit/TestNG con Test Explorer. I collaudi manuali non equivalgono a una garanzia di compatibilità generale.
+> **Stato del progetto (ottobre 2026):** i Pack **A1–A3, B1–B2, C1–C3, D1–D3, E1 (CodeLens) ed E2 (Inlay Hints)** sono stati **collaudati manualmente in Visual Studio 2026 Experimental**, inclusi gli hotfix degli Inlay Hints per `var`. Resta da completare il **Pack E3**, dedicato a indicizzazione JDT LS, prestazioni e perdita intermittente dei colori semantici (talvolta recuperabili solo riaprendo il documento). L'estensione rimane sperimentale: non sono ancora presenti un Project System Java nativo, il debug Java integrato o l'integrazione JUnit/TestNG con Test Explorer. I collaudi manuali non equivalgono a una garanzia di compatibilità generale.
 
 ## Funzionalità
 
@@ -18,10 +18,10 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | Rinomina di simboli, classi e file `.java` | **Pack C1 collaudato**: anteprima, selezione delle modifiche, salvataggio e Undo/Redo |
 | Modifiche LSP a più file (`WorkspaceEdit`) | **Pack C2 collaudato**: anteprima, applicazione coordinata, salvataggio e Undo/Redo collegati |
 | Estrai metodo/variabile/costante, Inline variabile, Cambia firma | **Pack C3 collaudato**; risultati e proposte forniti da JDT LS |
-| Genera costruttori, getter/setter, Override/Implement | Comandi e finestre presenti; **stabilizzazione Pack D1 da completare** |
-| Completamento di `()`, `[]`, `{}`, virgolette e Javadoc | Gestori presenti; **verifiche Pack D2 da completare** |
-| Formattazione documento / selezione e commenti Java | **Pack D3 da collaudare**: comandi nativi Visual Studio Ctrl+K,D/F/C/U; organizza import resta nel menu Strumenti |
-| CodeLens, Inlay Hints e document highlight | Componenti già presenti; **stabilizzazione/performance Pack E da completare** |
+| Genera costruttori, getter/setter, Override/Implement | **Pack D1 collaudato**: comandi e finestre di generazione codice |
+| Completamento di `()`, `[]`, `{}`, virgolette e Javadoc | **Pack D2 collaudato** |
+| Formattazione documento / selezione e commenti Java | **Pack D3 collaudato**: comandi nativi Visual Studio Ctrl+K,D/F/C/U; organizza import resta nel menu Strumenti |
+| CodeLens, Inlay Hints e document highlight | **Pack E1 (CodeLens) ed E2 (Inlay Hints) collaudati**; document highlight presente; indicizzazione/prestazioni e stabilità della colorazione da consolidare nel **Pack E3** |
 | Compilazione, esecuzione e test | Comandi **Strumenti → Java** per JDK, Maven e Gradle |
 | Project System Java (`.javaproj`) in Esplora soluzioni | **Non implementato** |
 | Debug Java integrato (F5/F9/F10/F11) | **Non implementato** |
@@ -40,10 +40,16 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | **C1** | Rinomina simboli e file Java | ✅ Collaudato |
 | **C2** | WorkspaceEdit multi-file, anteprima e Undo/Redo | ✅ Collaudato |
 | **C3** | Refactoring avanzati | ✅ Collaudato |
-| **D1–D3** | Generazione, editing automatico e formattazione | 🔜 Prossima fase |
-| **E** | CodeLens, Inlay Hints e prestazioni | ⏳ Da stabilizzare |
+| **D1–D3** | Generazione, editing automatico e formattazione | ✅ Collaudati |
+| **E1** | CodeLens, riferimenti e implementazioni | ✅ Collaudato (con hotfix) |
+| **E2** | Inlay Hints di parametri e tipi `var` | ✅ Collaudato (con hotfix) |
+| **E3** | Indicizzazione JDT LS, stabilità dei colori e prestazioni | ⏳ Da implementare |
 
-Le indicazioni *collaudato* si riferiscono ai test manuali svolti nell'istanza Experimental del progetto; non sono test automatici eseguiti su ogni versione di JDT LS o di Visual Studio. I comandi di generazione e formattazione **esistono già**: i Pack D non partono da zero, ma ne verificano e consolidano il comportamento.
+### Pack E2 — Inlay Hints (collaudato)
+
+Il **Pack E2** è stato collaudato nell'istanza Visual Studio 2026 Experimental. Gli hint dei **nomi dei parametri** sono ricavati da JDT LS; quelli dei **tipi inferiti con `var`** usano la risposta semantica di JDT LS e, per casi non restituiti dal server, fallback locali limitati e controllati. Sono stati verificati i casi con stringhe (`var text = "Hello"`), costruttori generici (`new ArrayList<String>()`), array (`new String[] { "A" }`) e diamond (`new ArrayList<>()`, tipo `ArrayList<Object>` nel caso verificato). Gli hint sono solo elementi dell'editor: **non vengono inseriti nel file `.java`**. Il progetto di prova è `Examples/InlayHintsAcceptance/`.
+
+Le indicazioni *collaudato* si riferiscono ai test manuali svolti nell'istanza Experimental del progetto; non sono test automatici eseguiti su ogni versione di JDT LS o di Visual Studio. Il Pack E3 deve ancora affrontare le anomalie intermittenti di indicizzazione e colorazione; il collaudo di E1/E2 non implica che questi problemi siano risolti.
 
 ## Prerequisiti
 
@@ -120,7 +126,8 @@ Aprire **una cartella di esempio alla volta** e attendere l'indicizzazione inizi
 | `AdvancedRefactoringAcceptance/` | Estrai metodo/variabile/costante e Inline variabile |
 | `SignatureThemeAcceptance/` | Cambia firma metodo, parametri e aggiornamento chiamate |
 | `MemberGenerationAcceptance/`, `MemberUIAcceptance/` | Costruttori, getter/setter, Override/Implement |
-| `CodeLensAcceptance/`, `InlayHintsAcceptance/` | CodeLens e suggerimenti inline |
+| `CodeLensAcceptance/`, `CodeLensInterfaceAcceptance/` | CodeLens (Pack E1): riferimenti, implementazioni e interfacce |
+| `InlayHintsAcceptance/` | Inlay Hints (Pack E2): parametri e tipi dedotti da `var`, inclusi i casi degli hotfix |
 | `MavenHello/`, `GradleHello/` | Compilazione/esecuzione Maven e Gradle |
 
 I progetti di accettazione contengono spesso un proprio `README.md` con istruzioni dettagliate. **Alcuni README degli esempi più vecchi possono descrivere comportamenti anteriori agli hotfix**: per lo stato più recente fare riferimento a questa pagina e ai sorgenti correnti.
@@ -183,13 +190,13 @@ I file `JavaLanguageSupport.csproj` e `source.extension.vsixmanifest` restano ne
 
 **IntelliSense incompleto o refactoring non disponibile:** aprire una *cartella* di progetto Java (non soltanto un file isolato), attendere l'importazione e controllare `textDocument/completion`, `textDocument/hover`, `textDocument/codeAction` e l'attività del workspace. Alcune azioni dipendono da Java, classpath, versione di JDT LS, selezione e indicizzazione.
 
-**Le parentesi o i commenti non si completano:** controllare le opzioni dell'editor, il Content Type `java` e i gestori in `Editor/Braces` e `Editor/Javadoc`. Questi componenti rientrano nella successiva stabilizzazione **Pack D2**.
+**Le parentesi o i commenti non si completano:** controllare le opzioni dell'editor, il Content Type `java` e i gestori in `Editor/Braces` e `Editor/Javadoc`. Il **Pack D2 è stato collaudato**; eventuali regressioni vanno verificate nell'istanza Experimental.
 
 **Import ambigui:** posizionare il cursore sul nome del tipo e usare **Ctrl + .**. Le alternative dipendono dal classpath indicizzato; ad esempio `List` può riferirsi a `java.util.List` o `java.awt.List`.
 
 **Anteprima multi-file e Undo/Redo:** le operazioni C1/C2 sono state collaudate nell'istanza Experimental, ma il salvataggio può includere **modifiche preesistenti non salvate** nei documenti coinvolti. È consigliato fare una copia o usare Git prima dei refactoring rilevanti. L'esecutore `WorkspaceEdit` condiviso accetta modifiche testuali su file locali `.java` esistenti; le operazioni generiche di creazione, eliminazione o rinomina di risorse non sono supportate lì. La rinomina del file di una classe usa invece il flusso dedicato C1.
 
-**Gerarchie, CodeLens e Inlay Hints incompleti:** queste funzioni mostrano i risultati realmente forniti da JDT LS; il numero di risultati e la disponibilità cambiano con la versione del server e lo stato dell'indicizzazione.
+**Gerarchie, CodeLens e Inlay Hints incompleti:** le funzioni semantiche dipendono da JDT LS e dal suo stato di indicizzazione. **E1 ed E2 sono collaudati**, ma la presenza e la completezza dei risultati dipendono dalla versione e dalla risposta del server. E2 include anche fallback locali controllati per alcuni tipi `var` (stringhe, costruttori generici, array e `new ArrayList<>()`), senza alterare il codice Java.
 
 **Comandi Java non visibili:** assicurarsi di usare l'**istanza sperimentale**, verificare l'attivazione della VSIX in **Estensioni → Gestisci estensioni**, poi controllare `ActivityLog.xml` se l'estensione non si carica.
 
@@ -199,7 +206,8 @@ I log locali e i workspace temporanei di JDT LS **non devono essere aggiunti al 
 
 - Il progetto **non** fornisce ancora un Project System Java con integrazione `.javaproj` in Esplora soluzioni.
 - Il debugging Java con i comandi nativi dell'IDE e l'integrazione con Test Explorer sono **futuri**.
-- Alcune caratteristiche già implementate (generazione, auto-pair, formattazione, CodeLens e Inlay Hints) richiedono **collaudi ulteriori** prima di considerarle stabilizzate.
+- **Pack E2 (Inlay Hints) collaudato manualmente**, inclusi gli hotfix per stringhe, generici espliciti, array e diamond `<>`; possono restare limitazioni nei casi di inferenza che dipendono da JDT LS.
+- **Pack E3 ancora da completare:** durante l'uso, l'indicizzazione del progetto può essere lenta o ripetersi e la colorazione semantica talvolta scompare finché non si riapre il documento Java.
 - La semantica, la navigazione e i refactoring dipendono dalle funzionalità e dalle risposte del server JDT LS; non vengono inventati riferimenti o modifiche quando il server non restituisce risultati.
 
 ## Roadmap
@@ -211,10 +219,12 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 | **A (A1–A3)** | IntelliSense, Quick Info/Javadoc, diagnostica, Quick Actions e import | ✅ Collaudata |
 | **B (B1–B2)** | Navigazione, riferimenti, Peek e sorgenti JDK | ✅ Collaudata |
 | **C (C1–C3)** | Rinomina, WorkspaceEdit multi-file e refactoring avanzati | ✅ Collaudata |
-| **D1** | Generazione costruttori, getter/setter, Override/Implement | 🔜 Prossimo |
-| **D2** | Parentesi, virgolette, commenti e completamento Javadoc | ⏳ Da stabilizzare |
-| **D3** | Formattazione e commenti con scorciatoie native di Visual Studio | 🧪 Da collaudare |
-| **E** | CodeLens, Inlay Hints, affidabilità e prestazioni | ⏳ Da stabilizzare |
+| **D1** | Generazione costruttori, getter/setter, Override/Implement | ✅ Collaudato |
+| **D2** | Parentesi, virgolette, commenti e completamento Javadoc | ✅ Collaudato |
+| **D3** | Formattazione e commenti con scorciatoie native di Visual Studio | ✅ Collaudato |
+| **E1** | CodeLens, riferimenti e implementazioni | ✅ Collaudato (con hotfix) |
+| **E2** | Inlay Hints dei parametri e tipi `var` (incluse stringhe, array, generici e `<>`) | ✅ Collaudato (con hotfix) |
+| **E3** | Indicizzazione JDT LS, prestazioni e ripristino automatico dei colori semantici | ⏳ Da implementare |
 | **Integrazione IDE** | Runner, Project System Java, debugger, JUnit/TestNG | 📋 Evoluzione futura |
 | **Designer visuale** | Swing prima, quindi AWT e JavaFX | 📋 Evoluzione futura |
 
