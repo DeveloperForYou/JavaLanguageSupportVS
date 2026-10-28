@@ -6,6 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 using JavaLanguageSupport.LanguageServer;
@@ -91,15 +93,7 @@ namespace JavaLanguageSupport.Editor.Navigation
                 Margin = new Thickness(8, 0, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
             state.SetResourceReference(TextBlock.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
-            var refresh = new Button { Content = "↻", MinWidth = 28, Width = 28, Height = 23,
-                Margin = new Thickness(5, 0, 0, 0), Padding = new Thickness(0),
-                ToolTip = "Aggiorna i simboli Java" };
-            refresh.SetResourceReference(Control.BackgroundProperty,
-                EnvironmentColors.ToolWindowBackgroundBrushKey);
-            refresh.SetResourceReference(Control.ForegroundProperty,
-                EnvironmentColors.ToolWindowTextBrushKey);
-            refresh.SetResourceReference(Control.BorderBrushProperty,
-                EnvironmentColors.ToolWindowBorderBrushKey);
+            var refresh = MakeRefreshButton();
             var row = new DockPanel { LastChildFill = true };
             DockPanel.SetDock(types, Dock.Left);
             DockPanel.SetDock(members, Dock.Left);
@@ -120,6 +114,84 @@ namespace JavaLanguageSupport.Editor.Navigation
             view.Closed += OnClosed;
             JavaWorkspaceActivity.BecameIdle += OnIdle;
             Schedule(700);
+        }
+
+        // The stock WPF Button template uses a pale-blue hover/pressed brush.
+        // In Visual Studio's dark theme it retains the light navigation glyph,
+        // making the refresh command nearly invisible. Keep the icon and chrome
+        // themed together; the WPF overlay reads dynamic VS brushes, so it also
+        // adapts when the IDE theme changes without recreating the margin.
+        private static Button MakeRefreshButton()
+        {
+            var refresh = new Button { Content = "↻", MinWidth = 28, Width = 28, Height = 23,
+                Margin = new Thickness(5, 0, 0, 0), Padding = new Thickness(0),
+                ToolTip = "Aggiorna i simboli Java" };
+            refresh.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            refresh.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            refresh.SetResourceReference(Control.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+
+            var template = new ControlTemplate(typeof(Button));
+            var layers = new FrameworkElementFactory(typeof(Grid));
+
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
+            chrome.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            chrome.SetBinding(Border.BackgroundProperty,
+                new Binding("Background") { RelativeSource = RelativeSource.TemplatedParent });
+            chrome.SetBinding(Border.BorderBrushProperty,
+                new Binding("BorderBrush") { RelativeSource = RelativeSource.TemplatedParent });
+            layers.AppendChild(chrome);
+
+            // A VS-themed border-color overlay is legible both on the dark
+            // and the light palette; unlike the system Button template it never
+            // switches the background to a light blue with a white glyph.
+            var hover = new FrameworkElementFactory(typeof(Border));
+            hover.Name = "JavaNavigationRefreshHover";
+            hover.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
+            hover.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            hover.SetValue(UIElement.IsHitTestVisibleProperty, false);
+            hover.SetValue(UIElement.OpacityProperty, 0.75);
+            hover.SetResourceReference(Border.BackgroundProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            layers.AppendChild(hover);
+
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+                HorizontalAlignment.Center);
+            content.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            content.SetValue(UIElement.IsHitTestVisibleProperty, false);
+            content.SetBinding(TextElement.ForegroundProperty,
+                new Binding("Foreground") { RelativeSource = RelativeSource.TemplatedParent });
+            layers.AppendChild(content);
+            template.VisualTree = layers;
+
+            var mouseOver = new Trigger {
+                Property = UIElement.IsMouseOverProperty, Value = true };
+            mouseOver.Setters.Add(new Setter(UIElement.VisibilityProperty,
+                Visibility.Visible, "JavaNavigationRefreshHover"));
+            template.Triggers.Add(mouseOver);
+
+            var keyboardFocus = new Trigger {
+                Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            keyboardFocus.Setters.Add(new Setter(UIElement.VisibilityProperty,
+                Visibility.Visible, "JavaNavigationRefreshHover"));
+            template.Triggers.Add(keyboardFocus);
+
+            var pressed = new Trigger { Property = Button.IsPressedProperty, Value = true };
+            pressed.Setters.Add(new Setter(UIElement.OpacityProperty,
+                1.0, "JavaNavigationRefreshHover"));
+            template.Triggers.Add(pressed);
+
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.45));
+            template.Triggers.Add(disabled);
+
+            refresh.Template = template;
+            return refresh;
         }
 
         private static ComboBox MakeCombo(string tip, double width)
