@@ -17,7 +17,10 @@ public final class VarHintsDemo {
         var joined = String.join("-", customer.getName(), other.getName());
         System.out.println(joined);
         // Not code: var ignored = new Customer("comment");
-        String text = "var insideString = new Customer(\"literal\");";
+        var text = "var insideString = new Customer(\"literal\");";
+        var arr = new Customer[] { new Customer("literal") };
+		var string = list.stream().findAny();
+        var obj = new ArrayList<>();
         System.out.println(text);
     }
 }
