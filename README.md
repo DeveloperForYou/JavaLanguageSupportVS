@@ -23,6 +23,8 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | Formattazione documento / selezione e commenti Java | **Pack D3 collaudato**: comandi nativi Visual Studio Ctrl+K,D/F/C/U; organizza import resta nel menu Strumenti |
 | CodeLens, Inlay Hints e document highlight | **Pack E1 (CodeLens) ed E2 (Inlay Hints) collaudati**; document highlight presente; indicizzazione/prestazioni e stabilità della colorazione da consolidare nel **Pack E3** |
 | Compilazione, esecuzione e test | Comandi **Strumenti → Java** per JDK, Maven e Gradle |
+| Progetti Spring Boot | **Supporto dedicato pianificato**; i comandi Maven/Gradle esistenti possono essere usati con progetti Spring Boot compatibili, ma non includono ancora funzionalità specifiche del framework |
+| Traduzione dell'interfaccia dell'estensione (localizzazione) | **Pianificata**: separazione delle stringhe dell'interfaccia e scelta della lingua, a partire da italiano e inglese |
 | Project System Java (`.javaproj`) in Esplora soluzioni | **Non implementato** |
 | Debug Java integrato (F5/F9/F10/F11) | **Non implementato** |
 | JUnit/TestNG in Test Explorer | **Non implementato** |
@@ -44,6 +46,8 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | **E1** | CodeLens, riferimenti e implementazioni | ✅ Collaudato (con hotfix) |
 | **E2** | Inlay Hints di parametri e tipi `var` | ✅ Collaudato (con hotfix) |
 | **E3** | Indicizzazione JDT LS, stabilità dei colori e prestazioni | ⏳ Da implementare |
+| **Spring Boot** | Integrazione dedicata ai progetti Spring Boot | 📋 Pianificata |
+| **Localizzazione** | Interfaccia multilingua dell'estensione (italiano/inglese) | 📋 Pianificata |
 
 ### Pack E2 — Inlay Hints (collaudato)
 
@@ -206,6 +210,8 @@ I log locali e i workspace temporanei di JDT LS **non devono essere aggiunti al 
 
 - Il progetto **non** fornisce ancora un Project System Java con integrazione `.javaproj` in Esplora soluzioni.
 - Il debugging Java con i comandi nativi dell'IDE e l'integrazione con Test Explorer sono **futuri**.
+- Non è ancora presente un'integrazione specifica per **Spring Boot**: il supporto Maven/Gradle è generico e non equivale a un riconoscimento o un avvio dedicato delle applicazioni Spring Boot.
+- Non è ancora presente un sistema completo di **localizzazione dell'estensione**: molte etichette dei menu, finestre e messaggi sono attualmente definite in italiano nei sorgenti.
 - **Pack E2 (Inlay Hints) collaudato manualmente**, inclusi gli hotfix per stringhe, generici espliciti, array e diamond `<>`; possono restare limitazioni nei casi di inferenza che dipendono da JDT LS.
 - **Pack E3 ancora da completare:** durante l'uso, l'indicizzazione del progetto può essere lenta o ripetersi e la colorazione semantica talvolta scompare finché non si riapre il documento Java.
 - La semantica, la navigazione e i refactoring dipendono dalle funzionalità e dalle risposte del server JDT LS; non vengono inventati riferimenti o modifiche quando il server non restituisce risultati.
@@ -225,6 +231,8 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 | **E1** | CodeLens, riferimenti e implementazioni | ✅ Collaudato (con hotfix) |
 | **E2** | Inlay Hints dei parametri e tipi `var` (incluse stringhe, array, generici e `<>`) | ✅ Collaudato (con hotfix) |
 | **E3** | Indicizzazione JDT LS, prestazioni e ripristino automatico dei colori semantici | ⏳ Da implementare |
+| **Spring Boot** | Riconoscimento progetti, strumenti Spring e avvio dell'applicazione | 📋 Pianificato |
+| **Localizzazione** | Risorse testuali traducibili, italiano/inglese e selezione della lingua | 📋 Pianificata |
 | **Integrazione IDE** | Runner, Project System Java, debugger, JUnit/TestNG | 📋 Evoluzione futura |
 | **Designer visuale** | Swing prima, quindi AWT e JavaFX | 📋 Evoluzione futura |
 
@@ -235,6 +243,14 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 3. Integrare **debug Java** (breakpoint, step, variabili) con il flusso IDE.
 4. Integrare **JUnit/TestNG** nel Test Explorer.
 5. Progettare un **Designer Swing/AWT/JavaFX** con toolbox, proprietà, gerarchia componenti, anteprima e generazione/sincronizzazione del codice. Nessun designer visuale è attualmente disponibile.
+6. Integrare **Spring Boot**: identificare progetti Maven/Gradle con dipendenze Spring Boot, offrire comandi dedicati di avvio/arresto e configurazione, e valutare il supporto a `application.properties`/`application.yml`, annotazioni e Spring Initializr. Queste integrazioni sono **proposte**, non funzionalità già disponibili.
+7. Rendere l'estensione **traducibile**: spostare stringhe di comandi, menu, finestre WPF, notifiche ed errori in risorse localizzabili (ad esempio `.resx`), introdurre italiano e inglese, prevedere una lingua di fallback e valutare un'impostazione per scegliere la lingua senza alterare le preferenze di Visual Studio. La localizzazione completa è **pianificata**, non ancora implementata.
+
+### Spring Boot e localizzazione — obiettivi futuri
+
+**Spring Boot:** oggi l'estensione usa JDT LS e gli strumenti Java/Maven/Gradle esistenti, quindi può aprire e lavorare con codice Java appartenente a progetti Spring Boot compatibili. Non include però un'esperienza Spring Boot dedicata (rilevamento del framework, profili Spring, Spring Initializr, comandi di avvio/arresto specifici o assistenza specializzata per le proprietà di configurazione). Il supporto specifico sarà progettato in una fase successiva alla stabilizzazione dell'editor.
+
+**Traduzione dell'estensione:** l'obiettivo è permettere la localizzazione dell'**interfaccia della VSIX**, non tradurre automaticamente il codice Java dell'utente. La prima coppia di lingue prevista è **italiano/inglese**; successivamente potranno essere aggiunte altre traduzioni tramite file di risorse, senza duplicare la logica dell'estensione. I nomi tecnici delle API, i comandi standard di Visual Studio e le risposte di JDT LS non sono necessariamente traducibili dall'estensione.
 
 ## Riferimenti
 
