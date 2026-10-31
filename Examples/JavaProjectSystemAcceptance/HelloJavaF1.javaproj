@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pack F1 CPS acceptance. The .javaproj is optional VS-only metadata.
+     pom.xml remains the authoritative portable Maven project. -->
+<Project ToolsVersion="Current" DefaultTargets="Build">
+  <Import Project="JavaProject.props" />
+
+  <PropertyGroup>
+    <JavaBuildSystem>Maven</JavaBuildSystem>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="src\**\*.*" Exclude="**\bin\**;**\obj\**;**\target\**;**\build\**" />
+    <None Include="pom.xml" />
+    <None Include="README.md" Condition="Exists('README.md')" />
+  </ItemGroup>
+
+  <Import Project="JavaProject.targets" />
+</Project>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Java CPS project bootstrap. Copied next to every .javaproj by project template.
+     Only the optional Visual Studio project metadata uses these files.
+     Maven/Gradle remain independent and continue working without them. -->
+<Project>
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
+          Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
+    <Platform Condition="'$(Platform)' == ''">AnyCPU</Platform>
+    <JavaBuildSystem Condition="'$(JavaBuildSystem)' == ''">Maven</JavaBuildSystem>
+    <ProjectSystemBase>$(MSBuildThisFileDirectory)</ProjectSystemBase>
+  </PropertyGroup>
+</Project>

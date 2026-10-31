@@ -28,6 +28,7 @@
     <PackageReference Include="Microsoft.VisualStudio.LanguageServer.Client" Version="17.14.60" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.5.38461" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.Workspace.VSIntegration" Version="17.12.19" />
+    <PackageReference Include="Microsoft.VisualStudio.ProjectSystem.SDK" Version="17.9.380" />
     <Reference Include="System.Xaml" />
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
@@ -76,4 +77,16 @@
            Text="VsixColorCompiler.exe non trovato. VSInstallDir puo' essere vuoto nei progetti SDK-style. Installare il workload 'Sviluppo di estensioni di Visual Studio', oppure impostare /p:JavaVsixColorCompiler=PATH_COMPLETO. Vedere la guida ZIP." />
     <Exec Command="&quot;$(JavaVsixColorCompiler)&quot; &quot;$(MSBuildProjectDirectory)\Configuration\JavaThemeColors.xml&quot; &quot;$(MSBuildProjectDirectory)\Configuration\JavaThemeColors.pkgdef&quot; /noLogo" />
   </Target>
+  <!-- Pack F1: provide build-system template files in the EXISTING VSIX.
+       Java projects copy these two files alongside their optional .javaproj. -->
+  <ItemGroup>
+    <Content Include="ProjectSystem\BuildSystem\JavaProject.props">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="ProjectSystem\BuildSystem\JavaProject.targets">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
 </Project>

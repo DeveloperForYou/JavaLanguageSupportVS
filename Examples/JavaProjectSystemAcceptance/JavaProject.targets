@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Minimal custom CPS Java project model. No Microsoft.NET.Sdk or C# targets.
+     This file must be imported near the end of .javaproj. -->
+<Project>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|AnyCPU">
+      <Configuration>Debug</Configuration>
+      <Platform>AnyCPU</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|AnyCPU">
+      <Configuration>Release</Configuration>
+      <Platform>AnyCPU</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectCapability Include="JavaLanguageSupportCps" />
+    <ProjectCapability Include="CPS" />
+    <ProjectCapability Include="UseFileGlobs" />
+    <ProjectCapability Include="OpenProjectFile" />
+    <ProjectCapability Include="ProjectConfigurationsDeclaredAsItems" />
+    <ProjectCapability Include="UserSourceItems" />
+  </ItemGroup>
+
+  <Import Project="$(MSBuildToolsPath)\Microsoft.Common.targets" />
+
+  <!-- F1 intentionally does not compile Java via MSBuild. Use Maven/Gradle
+       independently. The Visual Studio Build integration belongs to F4. -->
+  <Target Name="Build">
+    <Error Condition="'$(DesignTimeBuild)' != 'true'"
+           Text="Pack F1: Java Build di Visual Studio non ancora implementato. Usa Maven (mvn package) o Java: Compila progetto." />
+  </Target>
+  <Target Name="Clean" />
+  <Target Name="Rebuild" DependsOnTargets="Clean;Build" />
+</Project>
