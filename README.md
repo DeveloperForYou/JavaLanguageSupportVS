@@ -2,7 +2,7 @@
 
 Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 2026** (non Visual Studio Code). Le funzionalità semantiche si basano su [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls) tramite **Language Server Protocol (LSP)**; compilazione, esecuzione e test utilizzano JDK, Maven o Gradle.
 
-> **Stato del progetto (ottobre 2026):** i Pack **A1–A3, B1–B2, C1–C3, D1–D3, E1 (CodeLens) ed E2 (Inlay Hints)** sono stati **collaudati manualmente in Visual Studio 2026 Experimental**, inclusi gli hotfix degli Inlay Hints per `var`. Resta da completare il **Pack E3**, dedicato a indicizzazione JDT LS, prestazioni e perdita intermittente dei colori semantici (talvolta recuperabili solo riaprendo il documento). L'estensione rimane sperimentale: non sono ancora presenti un Project System Java nativo, il debug Java integrato o l'integrazione JUnit/TestNG con Test Explorer. I collaudi manuali non equivalgono a una garanzia di compatibilità generale.
+> **Stato del progetto (ottobre 2026):** le fasi di stabilizzazione dell'editor **A1–A3, B1–B2, C1–C3, D1–D3, E1 (CodeLens), E2 (Inlay Hints) ed E3 (indicizzazione, colorazione e prestazioni)** sono state **collaudate manualmente in Visual Studio 2026 Experimental**. Nel collaudo finale E3 la colorazione è rimasta stabile, l'editor è risultato responsivo, Navigation Bar, CodeLens e Inlay Hints hanno recuperato i risultati attesi e non sono stati osservati errori nei log. Il supporto rimane sperimentale: questi risultati non garantiscono l'assenza di anomalie con tutti i workspace e le versioni di JDT LS. Non sono ancora presenti un Project System Java nativo, il debug Java integrato o l'integrazione JUnit/TestNG con Test Explorer.
 
 ## Funzionalità
 
@@ -21,7 +21,7 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | Genera costruttori, getter/setter, Override/Implement | **Pack D1 collaudato**: comandi e finestre di generazione codice |
 | Completamento di `()`, `[]`, `{}`, virgolette e Javadoc | **Pack D2 collaudato** |
 | Formattazione documento / selezione e commenti Java | **Pack D3 collaudato**: comandi nativi Visual Studio Ctrl+K,D/F/C/U; organizza import resta nel menu Strumenti |
-| CodeLens, Inlay Hints e document highlight | **Pack E1 (CodeLens) ed E2 (Inlay Hints) collaudati**; document highlight presente; indicizzazione/prestazioni e stabilità della colorazione da consolidare nel **Pack E3** |
+| CodeLens, Inlay Hints e document highlight | **Pack E1 (CodeLens), E2 (Inlay Hints) ed E3 (stabilità e indicizzazione) collaudati**; document highlight presente |
 | Compilazione, esecuzione e test | Comandi **Strumenti → Java** per JDK, Maven e Gradle |
 | Progetti Spring Boot | **Supporto dedicato pianificato**; i comandi Maven/Gradle esistenti possono essere usati con progetti Spring Boot compatibili, ma non includono ancora funzionalità specifiche del framework |
 | Traduzione dell'interfaccia dell'estensione (localizzazione) | **Pianificata**: separazione delle stringhe dell'interfaccia e scelta della lingua, a partire da italiano e inglese |
@@ -45,7 +45,7 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | **D1–D3** | Generazione, editing automatico e formattazione | ✅ Collaudati |
 | **E1** | CodeLens, riferimenti e implementazioni | ✅ Collaudato (con hotfix) |
 | **E2** | Inlay Hints di parametri e tipi `var` | ✅ Collaudato (con hotfix) |
-| **E3** | Indicizzazione JDT LS, stabilità dei colori e prestazioni | ⏳ Da implementare |
+| **E3** | Indicizzazione JDT LS, stabilità dei colori e prestazioni | ✅ Collaudato (con hotfix) |
 | **Spring Boot** | Integrazione dedicata ai progetti Spring Boot | 📋 Pianificata |
 | **Localizzazione** | Interfaccia multilingua dell'estensione (italiano/inglese) | 📋 Pianificata |
 
@@ -53,7 +53,22 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 
 Il **Pack E2** è stato collaudato nell'istanza Visual Studio 2026 Experimental. Gli hint dei **nomi dei parametri** sono ricavati da JDT LS; quelli dei **tipi inferiti con `var`** usano la risposta semantica di JDT LS e, per casi non restituiti dal server, fallback locali limitati e controllati. Sono stati verificati i casi con stringhe (`var text = "Hello"`), costruttori generici (`new ArrayList<String>()`), array (`new String[] { "A" }`) e diamond (`new ArrayList<>()`, tipo `ArrayList<Object>` nel caso verificato). Gli hint sono solo elementi dell'editor: **non vengono inseriti nel file `.java`**. Il progetto di prova è `Examples/InlayHintsAcceptance/`.
 
-Le indicazioni *collaudato* si riferiscono ai test manuali svolti nell'istanza Experimental del progetto; non sono test automatici eseguiti su ogni versione di JDT LS o di Visual Studio. Il Pack E3 deve ancora affrontare le anomalie intermittenti di indicizzazione e colorazione; il collaudo di E1/E2 non implica che questi problemi siano risolti.
+### Pack E3 — Indicizzazione, colorazione e prestazioni (collaudato)
+
+Il **Pack E3** e i successivi hotfix di indicizzazione sono stati collaudati manualmente in **Visual Studio 2026 Experimental**. Nel test finale l'apertura dell'editor è risultata responsiva, i colori Java non sono più scomparsi, i simboli della **Navigation Bar**, i conteggi **CodeLens** e gli **Inlay Hints** sono comparsi correttamente; nei log esaminati durante l'ultimo test non sono stati osservati errori.
+
+Le principali misure di stabilizzazione sono:
+
+- **Cache persistente di JDT LS:** i dati dell'indice vengono riutilizzati fra le sessioni. Quando Visual Studio fornisce la cartella *Open Folder*, la cache è separata per percorso del workspace; un blocco esclusivo impedisce a istanze simultanee di usare la stessa directory `-data`.
+- **Colorazione semantica:** classificazione lessicale immediata durante l'attesa dei token JDT LS, riuso della scansione sulla stessa versione del documento, pubblicazione dei risultati solo per snapshot validi e tentativi limitati in caso di richieste transitorie fallite.
+- **Navigation Bar e CodeLens:** attesa limitata durante l'indicizzazione segnalata da JDT LS, serializzazione delle richieste `textDocument/documentSymbol`, minore concorrenza nelle ricerche dei riferimenti e aggiornamenti quando il workspace torna inattivo.
+- **Diagnostica:** in **Strumenti → Java: Stato IntelliSense** sono consultabili stato LSP, attività del workspace, percorso della cache, stato dei Semantic Tokens e informazioni di **Colorazione Java E3**.
+
+I dati della cache risiedono sotto `%LOCALAPPDATA%\JavaLanguageSupportVS\jdtls\persistent\` (con sottocartelle `ws-...`, `slot-...` o fallback `unscoped` se l'identità della cartella non è disponibile). **Non** sono file del progetto e non devono essere aggiunti a Git. Al primo avvio con una nuova cache JDT LS può dover reimportare il progetto; non bisogna considerare `initialize` una prova del completamento dell'indicizzazione.
+
+**Verifica manuale consigliata:** aprire una cartella Java con **File → Apri → Cartella**, attendere l'importazione, controllare colori, Navigation Bar, riferimenti CodeLens e Inlay Hints; poi chiudere e riaprire Visual Studio Experimental con lo stesso workspace e ripetere le prove. Controllare il log JDT LS e **Java: Stato IntelliSense**. Eventuali errori di risorse interne `jdt.ls-java-project` durante l'importazione vanno distinti dai malfunzionamenti persistenti: l'ultimo collaudo è risultato pulito, ma una regressione in altri workspace o versioni di JDT LS resta possibile.
+
+Le indicazioni *collaudato* si riferiscono a verifiche **manuali**, non a test automatici su tutte le versioni di Visual Studio o JDT LS; non costituiscono una garanzia di assenza di regressioni.
 
 ## Prerequisiti
 
@@ -132,6 +147,7 @@ Aprire **una cartella di esempio alla volta** e attendere l'indicizzazione inizi
 | `MemberGenerationAcceptance/`, `MemberUIAcceptance/` | Costruttori, getter/setter, Override/Implement |
 | `CodeLensAcceptance/`, `CodeLensInterfaceAcceptance/` | CodeLens (Pack E1): riferimenti, implementazioni e interfacce |
 | `InlayHintsAcceptance/` | Inlay Hints (Pack E2): parametri e tipi dedotti da `var`, inclusi i casi degli hotfix |
+| `SemanticTokensAcceptance/`, `NavigationBarAcceptance/`, `EditorReliabilityAcceptance/` | Stabilità della colorazione, recupero dei simboli e verifica dell'editor (Pack E3); ripetere anche dopo il riavvio di VS Experimental |
 | `MavenHello/`, `GradleHello/` | Compilazione/esecuzione Maven e Gradle |
 
 I progetti di accettazione contengono spesso un proprio `README.md` con istruzioni dettagliate. **Alcuni README degli esempi più vecchi possono descrivere comportamenti anteriori agli hotfix**: per lo stato più recente fare riferimento a questa pagina e ai sorgenti correnti.
@@ -194,6 +210,8 @@ I file `JavaLanguageSupport.csproj` e `source.extension.vsixmanifest` restano ne
 
 **IntelliSense incompleto o refactoring non disponibile:** aprire una *cartella* di progetto Java (non soltanto un file isolato), attendere l'importazione e controllare `textDocument/completion`, `textDocument/hover`, `textDocument/codeAction` e l'attività del workspace. Alcune azioni dipendono da Java, classpath, versione di JDT LS, selezione e indicizzazione.
 
+**Navigation Bar, riferimenti o colori temporaneamente mancanti all'avvio:** JDT LS può essere ancora in fase di importazione Maven/Gradle. Verificare l'avanzamento in **Java: Stato IntelliSense**, attendere il caricamento e controllare che le informazioni compaiano senza riaprire il documento. Il Pack E3 migliora il recupero automatico; per errori persistenti, annotare workspace, versione di JDT LS e messaggi del log prima di valutare un reset della cache.
+
 **Le parentesi o i commenti non si completano:** controllare le opzioni dell'editor, il Content Type `java` e i gestori in `Editor/Braces` e `Editor/Javadoc`. Il **Pack D2 è stato collaudato**; eventuali regressioni vanno verificate nell'istanza Experimental.
 
 **Import ambigui:** posizionare il cursore sul nome del tipo e usare **Ctrl + .**. Le alternative dipendono dal classpath indicizzato; ad esempio `List` può riferirsi a `java.util.List` o `java.awt.List`.
@@ -213,7 +231,7 @@ I log locali e i workspace temporanei di JDT LS **non devono essere aggiunti al 
 - Non è ancora presente un'integrazione specifica per **Spring Boot**: il supporto Maven/Gradle è generico e non equivale a un riconoscimento o un avvio dedicato delle applicazioni Spring Boot.
 - Non è ancora presente un sistema completo di **localizzazione dell'estensione**: molte etichette dei menu, finestre e messaggi sono attualmente definite in italiano nei sorgenti.
 - **Pack E2 (Inlay Hints) collaudato manualmente**, inclusi gli hotfix per stringhe, generici espliciti, array e diamond `<>`; possono restare limitazioni nei casi di inferenza che dipendono da JDT LS.
-- **Pack E3 ancora da completare:** durante l'uso, l'indicizzazione del progetto può essere lenta o ripetersi e la colorazione semantica talvolta scompare finché non si riapre il documento Java.
+- **Pack E3 collaudato manualmente:** la perdita intermittente dei colori e le anomalie transitorie di recupero di simboli/riferimenti non sono riapparse nell'ultimo collaudo; la prima indicizzazione di progetti nuovi può comunque richiedere tempo e il risultato può variare in base al workspace, a Maven/Gradle e alla versione di JDT LS.
 - La semantica, la navigazione e i refactoring dipendono dalle funzionalità e dalle risposte del server JDT LS; non vengono inventati riferimenti o modifiche quando il server non restituisce risultati.
 
 ## Roadmap
@@ -230,7 +248,7 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 | **D3** | Formattazione e commenti con scorciatoie native di Visual Studio | ✅ Collaudato |
 | **E1** | CodeLens, riferimenti e implementazioni | ✅ Collaudato (con hotfix) |
 | **E2** | Inlay Hints dei parametri e tipi `var` (incluse stringhe, array, generici e `<>`) | ✅ Collaudato (con hotfix) |
-| **E3** | Indicizzazione JDT LS, prestazioni e ripristino automatico dei colori semantici | ⏳ Da implementare |
+| **E3** | Indicizzazione JDT LS, prestazioni e ripristino automatico dei colori semantici | ✅ Collaudato (con hotfix) |
 | **Spring Boot** | Riconoscimento progetti, strumenti Spring e avvio dell'applicazione | 📋 Pianificato |
 | **Localizzazione** | Risorse testuali traducibili, italiano/inglese e selezione della lingua | 📋 Pianificata |
 | **Integrazione IDE** | Runner, Project System Java, debugger, JUnit/TestNG | 📋 Evoluzione futura |
