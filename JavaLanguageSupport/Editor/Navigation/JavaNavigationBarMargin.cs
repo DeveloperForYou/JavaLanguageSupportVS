@@ -75,6 +75,9 @@ namespace JavaLanguageSupport.Editor.Navigation
         private bool disposed;
         private int generation;
         private int pendingSymbolRetries;
+        // E3 Indexing Hotfix: refresh a potentially partial outline
+        // when JDT LS reports a subsequent idle transition.
+        private DateTime lastIdleRefreshUtc = DateTime.MinValue;
 
         internal JavaNavigationBarMargin(IWpfTextView view, ITextDocumentFactoryService documents)
         {
@@ -240,9 +243,12 @@ namespace JavaLanguageSupport.Editor.Navigation
             Action refresh = () =>
             {
                 if (disposed) return;
+                DateTime now = DateTime.UtcNow;
                 if (typeSymbols.Count == 0 ||
-                    !ReferenceEquals(symbolSnapshot, view.TextBuffer.CurrentSnapshot))
+                    !ReferenceEquals(symbolSnapshot, view.TextBuffer.CurrentSnapshot) ||
+                    (now - lastIdleRefreshUtc).TotalMilliseconds >= 3000)
                 {
+                    lastIdleRefreshUtc = now;
                     // A completed Maven/Gradle import can arrive much later
                     // than the first documentSymbol response.
                     pendingSymbolRetries = 0;
@@ -289,6 +295,21 @@ namespace JavaLanguageSupport.Editor.Navigation
             active = source;
             try
             {
+                // E3 Indexing Hotfix: don't ask for outline while Eclipse is
+                // rebuilding linked resources. Retry after the import settles.
+                if (JavaWorkspaceActivity.IsBusy)
+                {
+                    await JavaWorkspaceActivity.WaitIfBusyAsync(2200, source.Token);
+                    if (JavaWorkspaceActivity.IsBusy)
+                    {
+                        if (!disposed && !view.IsClosed && version == generation)
+                        {
+                            state.Text = "Indicizzazione Java in corso…";
+                            Schedule(1300);
+                        }
+                        return;
+                    }
+                }
                 JToken response = await JavaLspRpc.RequestAsync("textDocument/documentSymbol",
                     new { textDocument = new { uri } }, source.Token);
                 if (disposed || view.IsClosed || source.IsCancellationRequested ||

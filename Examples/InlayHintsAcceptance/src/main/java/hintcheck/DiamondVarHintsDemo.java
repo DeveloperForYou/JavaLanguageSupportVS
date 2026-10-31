@@ -10,7 +10,7 @@ public final class DiamondVarHintsDemo {
         var qualified = new java.util.ArrayList<>();
         var typed = new ArrayList<String>();
         // Must not be treated as executable Java:
-        String literal = "var fake = new ArrayList<>();";
+        var literal = "var fake = new ArrayList<>();";
         // var ignored = new ArrayList<>();
         obj.add("ok");
         other.add(7);

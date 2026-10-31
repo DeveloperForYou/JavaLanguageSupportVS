@@ -13,6 +13,11 @@ namespace JavaLanguageSupport.LanguageServer
     internal static class JavaLspRpc
     {
         private static JsonRpc rpc;
+        // E3 Indexing Hotfix: documentSymbol is also used by CodeLens and
+        // Navigation Bar. Serialize those requests to avoid racing Eclipse's
+        // linked-resource creation during import. Never block the UI thread.
+        private static readonly SemaphoreSlim DocumentSymbolsGate =
+            new SemaphoreSlim(1, 1);
         internal static bool Connected => Volatile.Read(ref rpc) != null;
 
         internal static void Attach(JsonRpc value) => Volatile.Write(ref rpc, value);
@@ -23,6 +28,9 @@ namespace JavaLanguageSupport.LanguageServer
             var current = Volatile.Read(ref rpc);
             if (current == null) return null;
             JavaLanguageStatus.LspRequest(method);
+            bool gated = string.Equals(method, "textDocument/documentSymbol",
+                StringComparison.Ordinal);
+            if (gated) await DocumentSymbolsGate.WaitAsync(token).ConfigureAwait(false);
             try
             {
                 // Usare lo stesso JsonRpc fornito da ILanguageClientCustomMessage2.
@@ -43,6 +51,10 @@ namespace JavaLanguageSupport.LanguageServer
                 if (string.Equals(method, "textDocument/rename", StringComparison.Ordinal))
                     throw;
                 return null;
+            }
+            finally
+            {
+                if (gated) DocumentSymbolsGate.Release();
             }
         }
 

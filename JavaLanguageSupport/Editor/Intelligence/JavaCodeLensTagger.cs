@@ -66,6 +66,8 @@ namespace JavaLanguageSupport.Editor.Intelligence
         protected override bool PreserveAdornmentsOnEdit => true;
         protected override int RefreshDelayMilliseconds => HasPublishedTags ? 3200 : 800;
         protected override bool RefreshOnWorkspaceIdle => true;
+        // E3 Indexing Hotfix: avoid reference searches during classpath import.
+        protected override bool DeferWhileIndexing => true;
         protected override int WorkspaceIdleThrottleMilliseconds => 4500;
         protected override int StructuralRefreshDelayMilliseconds => 900;
 
@@ -321,7 +323,9 @@ namespace JavaLanguageSupport.Editor.Intelligence
 
             bool incomplete = false;
             // Limit concurrent JDT LS work to avoid flooding large Java classes.
-            using (var limit = new SemaphoreSlim(4, 4))
+            // Small bounded fanout: avoid racing JDT LS fake compilation
+            // units and expensive reference indexing across many fields.
+            using (var limit = new SemaphoreSlim(2, 2))
             {
                 var tasks = candidates.Select(x => QueryCandidateAsync(uri, x, limit, token))
                     .ToArray();

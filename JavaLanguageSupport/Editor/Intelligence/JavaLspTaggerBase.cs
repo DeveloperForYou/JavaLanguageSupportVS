@@ -61,6 +61,9 @@ namespace JavaLanguageSupport.Editor.Intelligence
         protected virtual bool RefreshOnWorkspaceIdle => true;
         // Only opt-in taggers (semantic colors) retry a timed-out LSP query.
         protected virtual bool RetryTransientFailures => false;
+        // E3 Indexing Hotfix: semantic-only consumers can defer LSP queries
+        // while JDT LS is actively importing a Java project.
+        protected virtual bool DeferWhileIndexing => false;
         // Optional per-tagger throttle (CodeLens searches can be expensive).
         protected virtual int WorkspaceIdleThrottleMilliseconds => 0;
         // Inter-line CodeLens must not be shifted across a structural rewrite:
@@ -301,6 +304,19 @@ namespace JavaLanguageSupport.Editor.Intelligence
                     lastEnd = end;
                     Publish(snapshot, empty);
                     return;
+                }
+                if (DeferWhileIndexing && JavaWorkspaceActivity.IsBusy)
+                {
+                    // Keep any previously published CodeLens/inline adornments.
+                    // An empty response here would erase valid reference counts.
+                    await JavaWorkspaceActivity.WaitIfBusyAsync(2200, token);
+                    if (JavaWorkspaceActivity.IsBusy)
+                    {
+                        if (generation == requestGeneration &&
+                            ReferenceEquals(snapshot, View.TextBuffer.CurrentSnapshot))
+                            RequestBoundedRetry(snapshot);
+                        return;
+                    }
                 }
                 ITextDocument document;
                 if (documents == null || !documents.TryGetTextDocument(View.TextBuffer, out document))

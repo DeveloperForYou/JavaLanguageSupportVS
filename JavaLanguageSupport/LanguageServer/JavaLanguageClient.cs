@@ -4,10 +4,13 @@ using System.ComponentModel.Composition;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.LanguageServer.Client;
 using Microsoft.VisualStudio.Threading;
+using Microsoft.VisualStudio.Workspace.VSIntegration.Contracts;
 using Microsoft.VisualStudio.Utilities;
 
 namespace JavaLanguageSupport.LanguageServer
@@ -21,6 +24,9 @@ namespace JavaLanguageSupport.LanguageServer
     [ContentType("java")]
     public sealed class JavaLanguageClient : ILanguageClient, ILanguageClientCustomMessage2
     {
+        // E3 Indexing Hotfix: root Open Folder (MEF import facoltativo).
+        [Import(AllowDefault = true)]
+        internal IVsFolderWorkspaceService FolderWorkspace = null;
         private Process serverProcess;
         // E3: keep one JDT LS data cache across VS restarts. The lease
         // stays open for this VS process, preventing concurrent use.
@@ -125,6 +131,13 @@ namespace JavaLanguageSupport.LanguageServer
             JavaSemanticLegend.Reset();
             JavaWorkspaceActivity.Stopped();
             JavaLanguageStatus.Stopped();
+            // Release the JDT LS cache after the language server is stopped.
+            if (workspaceLease != null)
+            {
+                workspaceLease.Dispose();
+                workspaceLease = null;
+                reusableWorkspace = null;
+            }
         }
 
         public Task OnServerInitializedAsync()
@@ -163,15 +176,43 @@ namespace JavaLanguageSupport.LanguageServer
             }
         }
 
-        // E3: stable cache slots, protected against simultaneous VS instances.
-        // A PID-only directory made every IDE launch perform a cold import.
-        // Do not delete or rebuild JDT LS metadata to force indexing.
+        // E3 Indexing Hotfix: per-Open-Folder cache. Never reuse an Eclipse
+        // metadata directory belonging to an unrelated Java workspace.
+        private string WorkspaceCacheScope()
+        {
+            string folder = null;
+            try
+            {
+                var workspace = FolderWorkspace == null ? null : FolderWorkspace.CurrentWorkspace;
+                folder = workspace == null ? null : workspace.Location;
+            }
+            catch (Exception) { /* Open Folder service may be unavailable. */ }
+            if (string.IsNullOrWhiteSpace(folder)) return "unscoped";
+            try
+            {
+                string canonical = Path.GetFullPath(folder).TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .ToUpperInvariant();
+                using (var sha = SHA256.Create())
+                {
+                    byte[] bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(canonical));
+                    // Compact stable ID, no user path embedded in folder name.
+                    return "ws-" + BitConverter.ToString(bytes, 0, 16)
+                        .Replace("-", "").ToLowerInvariant();
+                }
+            }
+            catch (Exception) { return "unscoped"; }
+        }
+
+        // E3 Indexing Hotfix: lease remains open until StopServerAsync;
+        // concurrent VS instances NEVER use the same JDT LS -data path.
         private string AcquireReusableWorkspace()
         {
-            if (workspaceLease != null) return reusableWorkspace;
+            if (workspaceLease != null && !string.IsNullOrEmpty(reusableWorkspace))
+                return reusableWorkspace;
             string root = Path.Combine(Environment.GetFolderPath(
                 Environment.SpecialFolder.LocalApplicationData),
-                "JavaLanguageSupportVS", "jdtls", "persistent");
+                "JavaLanguageSupportVS", "jdtls", "persistent", WorkspaceCacheScope());
             Directory.CreateDirectory(root);
             for (int slot = 0; slot < 8; slot++)
             {
@@ -179,8 +220,6 @@ namespace JavaLanguageSupport.LanguageServer
                 Directory.CreateDirectory(folder);
                 try
                 {
-                    // Share.None holds the VSIX lease until devenv.exe exits.
-                    // Another VS instance selects a different cache slot.
                     FileStream lease = new FileStream(Path.Combine(folder,
                         ".java-vsix-lease"), FileMode.OpenOrCreate,
                         FileAccess.ReadWrite, FileShare.None);
@@ -188,16 +227,15 @@ namespace JavaLanguageSupport.LanguageServer
                     reusableWorkspace = folder;
                     return folder;
                 }
-                catch (IOException)
-                {
-                    // Another VS instance currently owns this slot.
-                }
+                catch (IOException) { /* Another VS owns this cache. */ }
             }
-            // Rare case: all slots occupied. Still use isolated data, never
-            // point two JDT LS processes at the same -data directory.
+            // Last resort: isolated per-process cache, never shared.
             string isolated = Path.Combine(root,
                 "process-" + Process.GetCurrentProcess().Id);
             Directory.CreateDirectory(isolated);
+            workspaceLease = new FileStream(Path.Combine(isolated,
+                ".java-vsix-lease"), FileMode.OpenOrCreate,
+                FileAccess.ReadWrite, FileShare.None);
             reusableWorkspace = isolated;
             return isolated;
         }
