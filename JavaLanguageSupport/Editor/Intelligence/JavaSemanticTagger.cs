@@ -38,6 +38,20 @@ namespace JavaLanguageSupport.Editor.Intelligence
     internal sealed class JavaSemanticTagger : JavaLspTaggerBase<IClassificationTag>
     {
         private readonly IClassificationTypeRegistryService classifications;
+        // E3: the immediate and LSP passes share a single lexical scan for
+        // the exact same editor snapshot. Avoid scanning every character twice.
+        private ITextSnapshot lexicalSnapshot;
+        private List<ITagSpan<IClassificationTag>> lexicalTags;
+
+        private List<ITagSpan<IClassificationTag>> GetLexicalTags(ITextSnapshot snapshot)
+        {
+            if (ReferenceEquals(lexicalSnapshot, snapshot) && lexicalTags != null)
+                return lexicalTags;
+            var tags = JavaLexicalSemanticFallback.Scan(snapshot, classifications, null);
+            lexicalSnapshot = snapshot;
+            lexicalTags = tags;
+            return tags;
+        }
 
         internal JavaSemanticTagger(IWpfTextView view, ITextDocumentFactoryService documents,
             IClassificationTypeRegistryService registry) : base(view, documents)
@@ -57,6 +71,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
         // Even if JDT LS does not advertise semanticTokens, Java identifiers
         // should retain useful, readable colors via the lexical fallback.
         protected override bool Allowed => FeatureEnabled("disable-semantic-tags.flag");
+        protected override bool RetryTransientFailures => true;
 
         // Refresh syntax colors on the editing thread without waiting
         // for JDT LS. The full semantic response later replaces this provisional
@@ -65,7 +80,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
             ITextSnapshot snapshot)
         {
             if (!Allowed || classifications == null) return null;
-            return JavaLexicalSemanticFallback.Scan(snapshot, classifications, null);
+            return GetLexicalTags(snapshot);
         }
 
         protected override async Task<List<ITagSpan<IClassificationTag>>> FetchAsync(
@@ -76,8 +91,7 @@ namespace JavaLanguageSupport.Editor.Intelligence
 
             // Start with complete local colorization; server tokens are a
             // refinement, not a reason to discard local method-call colors.
-            List<ITagSpan<IClassificationTag>> lexical =
-                JavaLexicalSemanticFallback.Scan(snapshot, classifications, null);
+            List<ITagSpan<IClassificationTag>> lexical = GetLexicalTags(snapshot);
             var lexicalMethodStarts = new HashSet<int>();
             foreach (ITagSpan<IClassificationTag> candidate in lexical)
             {
@@ -99,13 +113,29 @@ namespace JavaLanguageSupport.Editor.Intelligence
                     javaKeywordStarts.Add(candidate.Span.Start.Position);
             }
             var semanticPositions = new HashSet<int>();
-            if (JavaLspRpc.Connected && JavaSemanticLegend.Available)
+            bool semanticReady = JavaLspRpc.Connected && JavaSemanticLegend.Available;
+            JArray serverData = null;
+            if (semanticReady)
             {
                 JToken response = await JavaLspRpc.RequestAsync(MethodName,
                     new { textDocument = new { uri } }, token);
-                var data = response == null ? null : response["data"] as JArray;
-                if (data != null)
-                {
+                serverData = response == null ? null : response["data"] as JArray;
+            }
+            if (!semanticReady || serverData == null ||
+                (serverData.Count == 0 && JavaWorkspaceActivity.IsBusy) ||
+                (serverData != null && serverData.Count % 5 != 0))
+            {
+                // JDT LS can initially return null/empty tokens during import,
+                // or a transient transport failure. Keep lexical colors and
+                // retry automatically, never forcing the user to reopen Java.
+                RequestBoundedRetry(snapshot);
+            }
+            JavaLanguageStatus.SemanticTokensUpdated(snapshot.Version.VersionNumber,
+                serverData == null ? -1 : serverData.Count / 5,
+                serverData == null ? "solo fallback locale" : "risposta JDT LS");
+            if (serverData != null)
+            {
+                var data = serverData;
                     int line = 0, col = 0;
                     int count = Math.Min(data.Count / 5, 25000);
                     for (int i = 0; i < count; i++)
@@ -145,7 +175,6 @@ namespace JavaLanguageSupport.Editor.Intelligence
                         var span = new SnapshotSpan(snapshot, offset, length);
                         tags.Add(new TagSpan<IClassificationTag>(span, new ClassificationTag(type)));
                     }
-                }
             }
             // Preserve lexical tags for every location not classified by JDT
             // LS. In particular, a resolved token never erases an unrelated

@@ -59,6 +59,8 @@ namespace JavaLanguageSupport.Editor.Intelligence
         protected virtual int RefreshDelayMilliseconds => 500;
         protected virtual bool PreserveAdornmentsOnEdit => false;
         protected virtual bool RefreshOnWorkspaceIdle => true;
+        // Only opt-in taggers (semantic colors) retry a timed-out LSP query.
+        protected virtual bool RetryTransientFailures => false;
         // Optional per-tagger throttle (CodeLens searches can be expensive).
         protected virtual int WorkspaceIdleThrottleMilliseconds => 0;
         // Inter-line CodeLens must not be shifted across a structural rewrite:
@@ -282,20 +284,24 @@ namespace JavaLanguageSupport.Editor.Intelligence
             if (generation != requestGeneration) return;
             if (lastVersion == snapshot.Version.VersionNumber && lastStart == start && lastEnd == end)
                 return;
-            lastVersion = snapshot.Version.VersionNumber;
-            lastStart = start;
-            lastEnd = end;
-            if (active != null) { active.Dispose(); active = null; }
-            active = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            var token = active.Token;
+            // E3: do NOT mark this version as successfully processed until
+            // the LSP result has actually been published. A timeout previously
+            // prevented the same Java document from ever recovering its colors.
+            if (active != null) { active.Cancel(); active.Dispose(); active = null; }
+            var source = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            active = source;
+            var token = source.Token;
             var empty = new List<ITagSpan<TTag>>();
-            if (!Allowed)
-            {
-                Publish(snapshot, empty);
-                return;
-            }
             try
             {
+                if (!Allowed)
+                {
+                    lastVersion = snapshot.Version.VersionNumber;
+                    lastStart = start;
+                    lastEnd = end;
+                    Publish(snapshot, empty);
+                    return;
+                }
                 ITextDocument document;
                 if (documents == null || !documents.TryGetTextDocument(View.TextBuffer, out document))
                     return;
@@ -306,12 +312,31 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 if (!disposed && !View.IsClosed && !token.IsCancellationRequested &&
                     generation == requestGeneration &&
                     ReferenceEquals(snapshot, View.TextBuffer.CurrentSnapshot))
+                {
+                    lastVersion = snapshot.Version.VersionNumber;
+                    lastStart = start;
+                    lastEnd = end;
                     Publish(snapshot, tags ?? empty);
+                }
             }
-            catch (OperationCanceledException) { /* Content changed or bounded request timed out. */ }
+            catch (OperationCanceledException)
+            {
+                // An actual timeout (not a newer edit) gets a bounded retry.
+                if (RetryTransientFailures && generation == requestGeneration &&
+                    ReferenceEquals(snapshot, View.TextBuffer.CurrentSnapshot))
+                    RequestBoundedRetry(snapshot);
+            }
             catch (Exception ex)
             {
                 JavaLanguageStatus.LspFailure(MethodName, ex.GetType().Name + ": " + ex.Message);
+                if (RetryTransientFailures && generation == requestGeneration &&
+                    ReferenceEquals(snapshot, View.TextBuffer.CurrentSnapshot))
+                    RequestBoundedRetry(snapshot);
+            }
+            finally
+            {
+                if (ReferenceEquals(active, source)) active = null;
+                source.Dispose();
             }
         }
 

@@ -35,6 +35,11 @@ namespace JavaLanguageSupport.LanguageServer
         private static int completionIncompleteSamples;
         private static int completionLastItemCount;
         private static int completionLastResolved;
+        // E3: semantic diagnostics contain counts and version only, never source text.
+        private static int semanticVersion = -1;
+        private static int semanticTokens = -1;
+        private static int semanticUpdates;
+        private static string semanticMode = "non ancora calcolata";
 
         internal static void Starting(string javaExe, string launcher, string workspace)
         {
@@ -59,6 +64,10 @@ namespace JavaLanguageSupport.LanguageServer
                 completionIncompleteSamples = 0;
                 completionLastItemCount = 0;
                 completionLastResolved = 0;
+                semanticVersion = -1;
+                semanticTokens = -1;
+                semanticUpdates = 0;
+                semanticMode = "non ancora calcolata";
                 initializationSummary = "Initialize non intercettato";
                 codeActionSummary = "Nessuna Code Action registrata";
                 executeCommandSummary = "Nessun comando LSP eseguito";
@@ -169,6 +178,18 @@ namespace JavaLanguageSupport.LanguageServer
             }
         }
 
+        internal static void SemanticTokensUpdated(int documentVersion,
+            int tokenCount, string mode)
+        {
+            lock (Sync)
+            {
+                semanticVersion = documentVersion;
+                semanticTokens = tokenCount;
+                semanticMode = mode ?? "sconosciuto";
+                semanticUpdates++;
+            }
+        }
+
         // LSP initialize: diagnostica del contratto client/server, senza alterarlo.
         internal static void LspInitialize(JToken parameters, JToken result)
         {
@@ -234,6 +255,10 @@ namespace JavaLanguageSupport.LanguageServer
                 result.AppendLine("Diagnostica Java (publishDiagnostics): " +
                     JavaDiagnosticsMonitor.Summary);
                 result.AppendLine("Semantic Tokens JDT LS: " + (JavaSemanticLegend.Available ? "legend negoziata" : "non annunciati / server in avvio"));
+                result.AppendLine("Colorazione Java E3: " + semanticMode +
+                    "; versione documento=" + (semanticVersion < 0 ? "-" : semanticVersion.ToString()) +
+                    "; token server=" + (semanticTokens < 0 ? "n/d" : semanticTokens.ToString()) +
+                    "; aggiornamenti=" + semanticUpdates);
                 result.AppendLine("--- Capabilities negoziate LSP ---");
                 result.AppendLine(initializationSummary);
                 result.AppendLine("--- Prestazioni completamento Java (diagnostica) ---");

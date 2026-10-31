@@ -22,6 +22,10 @@ namespace JavaLanguageSupport.LanguageServer
     public sealed class JavaLanguageClient : ILanguageClient, ILanguageClientCustomMessage2
     {
         private Process serverProcess;
+        // E3: keep one JDT LS data cache across VS restarts. The lease
+        // stays open for this VS process, preventing concurrent use.
+        private FileStream workspaceLease;
+        private string reusableWorkspace;
 
         public string Name => "Java Language Support (JDT LS)";
         public bool ShowNotificationOnInitializeFailed => true;
@@ -159,6 +163,45 @@ namespace JavaLanguageSupport.LanguageServer
             }
         }
 
+        // E3: stable cache slots, protected against simultaneous VS instances.
+        // A PID-only directory made every IDE launch perform a cold import.
+        // Do not delete or rebuild JDT LS metadata to force indexing.
+        private string AcquireReusableWorkspace()
+        {
+            if (workspaceLease != null) return reusableWorkspace;
+            string root = Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData),
+                "JavaLanguageSupportVS", "jdtls", "persistent");
+            Directory.CreateDirectory(root);
+            for (int slot = 0; slot < 8; slot++)
+            {
+                string folder = Path.Combine(root, "slot-" + slot);
+                Directory.CreateDirectory(folder);
+                try
+                {
+                    // Share.None holds the VSIX lease until devenv.exe exits.
+                    // Another VS instance selects a different cache slot.
+                    FileStream lease = new FileStream(Path.Combine(folder,
+                        ".java-vsix-lease"), FileMode.OpenOrCreate,
+                        FileAccess.ReadWrite, FileShare.None);
+                    workspaceLease = lease;
+                    reusableWorkspace = folder;
+                    return folder;
+                }
+                catch (IOException)
+                {
+                    // Another VS instance currently owns this slot.
+                }
+            }
+            // Rare case: all slots occupied. Still use isolated data, never
+            // point two JDT LS processes at the same -data directory.
+            string isolated = Path.Combine(root,
+                "process-" + Process.GetCurrentProcess().Id);
+            Directory.CreateDirectory(isolated);
+            reusableWorkspace = isolated;
+            return isolated;
+        }
+
         private Connection StartJdtLs(CancellationToken cancellationToken)
         {
             string jdtlsHome = Environment.GetEnvironmentVariable("JDTLS_HOME");
@@ -188,12 +231,9 @@ namespace JavaLanguageSupport.LanguageServer
                     throw new FileNotFoundException("java.exe non trovato in JAVA_HOME: " + java);
             }
 
-            // Workspace interno isolato: piu' istanze di Visual Studio non
-            // devono condividere contemporaneamente la stessa cartella -data.
-            string dataFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "JavaLanguageSupportVS", "jdtls", Process.GetCurrentProcess().Id.ToString());
-            Directory.CreateDirectory(dataFolder);
+            // Reuse on-disk JDT LS metadata between IDE launches without
+            // sharing a live workspace between simultaneous VS processes.
+            string dataFolder = AcquireReusableWorkspace();
             JavaLanguageStatus.Starting(java, launcher, dataFolder);
             JavaDiagnosticsMonitor.Reset(); // Pack A3: clear stale diagnostics on restart.
             JavaSemanticLegend.Reset();
