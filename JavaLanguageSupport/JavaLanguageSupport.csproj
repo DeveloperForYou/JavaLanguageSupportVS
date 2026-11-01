@@ -105,4 +105,14 @@
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
   </ItemGroup>
+  <!-- Java CPS F2A: VSIX native item templates -->
+  <ItemGroup>
+    <!-- Evita l'item None implicito degli SDK-style .csproj. -->
+    <None Remove="ProjectSystem\Templates\ItemTemplates\Java\1033\*.zip" />
+    <Content Include="ProjectSystem\Templates\ItemTemplates\Java\1033\*.zip">
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSubPath>ItemTemplates\Java\1033</VSIXSubPath>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

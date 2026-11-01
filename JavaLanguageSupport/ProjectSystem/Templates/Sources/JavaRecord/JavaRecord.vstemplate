@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>Record Java</Name>
+    <Description>Crea un record Java (Java 16+).</Description>
+    <ProjectType>Java</ProjectType>
+    <AppliesTo>JavaLanguageSupportCps</AppliesTo>
+    <DefaultName>Record.java</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <SortOrder>50</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">Record.java</ProjectItem>
+  </TemplateContent>
+</VSTemplate>

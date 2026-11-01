@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>File Java vuoto</Name>
+    <Description>Crea un file sorgente Java.</Description>
+    <ProjectType>Java</ProjectType>
+    <AppliesTo>JavaLanguageSupportCps</AppliesTo>
+    <DefaultName>NewFile.java</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <SortOrder>70</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">NewFile.java</ProjectItem>
+  </TemplateContent>
+</VSTemplate>

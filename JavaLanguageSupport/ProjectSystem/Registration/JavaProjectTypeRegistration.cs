@@ -1,4 +1,5 @@
 using System.ComponentModel.Composition;
+using Microsoft.VisualStudio.Shell;
 using JavaLanguageSupport.Commands;
 using Microsoft.VisualStudio.ProjectSystem;
 using Microsoft.VisualStudio.ProjectSystem.VS;
@@ -12,6 +13,7 @@ namespace JavaLanguageSupport.ProjectSystem.Registration
     /// </summary>
     [Export]
     [AppliesTo(UniqueCapability)]
+    [ProvideProjectItem(ProjectTypeGuid, "Java", @"ItemTemplates\Java", 500)]
     [ProjectTypeRegistration(
     ProjectTypeGuid,
     "Java Project",

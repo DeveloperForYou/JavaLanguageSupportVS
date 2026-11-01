@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>Enum Java</Name>
+    <Description>Crea una enumerazione Java.</Description>
+    <ProjectType>Java</ProjectType>
+    <AppliesTo>JavaLanguageSupportCps</AppliesTo>
+    <DefaultName>Enum.java</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <SortOrder>40</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">Enum.java</ProjectItem>
+  </TemplateContent>
+</VSTemplate>
