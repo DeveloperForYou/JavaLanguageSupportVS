@@ -1,6 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Minimal custom CPS Java project model. No Microsoft.NET.Sdk or C# targets.
-     This file must be imported near the end of .javaproj. -->
 <Project>
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|AnyCPU">
@@ -14,27 +12,43 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectCapability Include="JavaLanguageSupportCps" />
-    <ProjectCapability Include="CPS" />
     <ProjectCapability Include="UseFileGlobs" />
     <ProjectCapability Include="OpenProjectFile" />
+    <ProjectCapability Include="HandlesOwnReload" />
     <ProjectCapability Include="ProjectConfigurationsDeclaredAsItems" />
+    <ProjectCapability Include="DeclaredSourceItems" />
     <ProjectCapability Include="UserSourceItems" />
   </ItemGroup>
-
-  <Import Project="$(MSBuildToolsPath)\Microsoft.Common.targets" />
-
-  <!-- F1 intentionally does not compile Java via MSBuild. Use Maven/Gradle
-       independently. The Visual Studio Build integration belongs to F4. -->
+  <ItemGroup>
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)JavaProject.BrowseObject.xaml">
+      <Context>BrowseObject</Context>
+    </PropertyPageSchema>
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)JavaProject.Items.xaml" />
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)JavaProject.None.xaml">
+      <Context>File;BrowseObject</Context>
+    </PropertyPageSchema>
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)JavaProject.JavaCompile.xaml">
+      <Context>File;BrowseObject</Context>
+    </PropertyPageSchema>
+  </ItemGroup>
+  <!-- F1 non compila Java via MSBuild: eseguire Maven/Gradle o comandi Java esistenti. -->
+  <!-- Java CPS F1: file del progetto inclusi automaticamente (disattivabile con EnableDefaultJavaItems=false). -->
+  <PropertyGroup>
+    <JavaDefaultItemExcludes>$(JavaDefaultItemExcludes);**\bin\**;**\obj\**;**\target\**;**\build\**;**\out\**;**\.git\**;**\.vs\**;**\.idea\**;**\.gradle\**;**\node_modules\**;**\*.class;**\*.javaproj;**\*.javaproj.user;**\*.suo;**\JavaProject.props;**\JavaProject.targets;**\JavaProject.*.xaml;**\*.before-cps-fulltree.bak;**\*.f1-visibility.bak</JavaDefaultItemExcludes>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(EnableDefaultJavaItems)' == 'true'">
+    <!-- JavaCompile viene incluso per primo, affinche' None escluda i sorgenti Java. -->
+    <JavaCompile Include="**\*.java"
+                 Exclude="$(DefaultItemExcludes);$(DefaultExcludesInProjectFolder);$(JavaDefaultItemExcludes);@(JavaCompile);@(None)" />
+    <!-- Include pom.xml, Gradle, README, properties, resources, manifest, wrapper e altri file. -->
+    <None Include="**\*"
+          Exclude="$(DefaultItemExcludes);$(DefaultExcludesInProjectFolder);$(JavaDefaultItemExcludes);**\*.java;@(JavaCompile);@(None)" />
+  </ItemGroup>
+  <!-- Fine Java CPS F1: elementi predefiniti. -->
   <Target Name="Build">
     <Error Condition="'$(DesignTimeBuild)' != 'true'"
            Text="Pack F1: Java Build di Visual Studio non ancora implementato. Usa Maven (mvn package) o Java: Compila progetto." />
   </Target>
   <Target Name="Clean" />
   <Target Name="Rebuild" DependsOnTargets="Clean;Build" />
-  <!-- CPS: schema del nodo principale del progetto Java -->
-  <ItemGroup>
-    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)JavaProject.BrowseObject.xaml">
-      <Context>BrowseObject</Context>
-    </PropertyPageSchema>
-  </ItemGroup>
 </Project>

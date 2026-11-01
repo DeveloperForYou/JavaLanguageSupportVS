@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Rule Name="JavaCompile" DisplayName="Sorgente Java" PageTemplate="generic"
+      xmlns="http://schemas.microsoft.com/build/2009/properties">
+  <Rule.DataSource>
+    <DataSource Persistence="ProjectFile" ItemType="JavaCompile" HasConfigurationCondition="False" />
+  </Rule.DataSource>
+  <StringProperty Name="Identity" DisplayName="Nome" ReadOnly="True">
+    <StringProperty.DataSource>
+      <DataSource Persistence="Intrinsic" ItemType="JavaCompile" PersistedName="Identity" />
+    </StringProperty.DataSource>
+  </StringProperty>
+  <BoolProperty Name="Visible" Visible="False" />
+  <StringProperty Name="DependentUpon" Visible="False" />
+  <StringProperty Name="Link" Visible="False" />
+</Rule>
