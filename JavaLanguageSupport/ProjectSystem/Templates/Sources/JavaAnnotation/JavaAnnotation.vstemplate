@@ -8,6 +8,7 @@
     <DefaultName>Annotation.java</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <SortOrder>60</SortOrder>
+    <TemplateID>{9d6dd8c0-cfad-4969-b2f3-9976c875fb89}</TemplateID>
   </TemplateData>
   <TemplateContent>
     <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">Annotation.java</ProjectItem>

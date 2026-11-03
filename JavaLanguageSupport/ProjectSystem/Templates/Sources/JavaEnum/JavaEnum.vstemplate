@@ -8,6 +8,7 @@
     <DefaultName>Enum.java</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <SortOrder>40</SortOrder>
+    <TemplateID>{81af306a-16f8-416b-9484-1f4e9b8d6b2f}</TemplateID>
   </TemplateData>
   <TemplateContent>
     <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">Enum.java</ProjectItem>

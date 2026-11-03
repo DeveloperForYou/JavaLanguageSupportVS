@@ -13,7 +13,7 @@ namespace JavaLanguageSupport.ProjectSystem.Registration
     /// </summary>
     [Export]
     [AppliesTo(UniqueCapability)]
-    [ProvideProjectItem(ProjectTypeGuid, "Java", @"ItemTemplates\Java", 500)]
+    [ProvideProjectItem(ProjectTypeGuid, "Java", @"ItemTemplates\Java\1033", 500)]
     [ProjectTypeRegistration(
     ProjectTypeGuid,
     "Java Project",

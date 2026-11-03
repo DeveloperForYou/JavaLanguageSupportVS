@@ -8,6 +8,7 @@
     <DefaultName>Interface.java</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <SortOrder>30</SortOrder>
+    <TemplateID>{bf3d4942-2473-4f1e-9403-9f7157bcedbc}</TemplateID>
   </TemplateData>
   <TemplateContent>
     <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">Interface.java</ProjectItem>

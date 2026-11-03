@@ -8,6 +8,7 @@
     <DefaultName>Class.java</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <SortOrder>10</SortOrder>
+    <TemplateID>{a5a9a39e-85c8-4efe-8c7c-5c22f49f62a1}</TemplateID>
   </TemplateData>
   <TemplateContent>
     <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">Class.java</ProjectItem>

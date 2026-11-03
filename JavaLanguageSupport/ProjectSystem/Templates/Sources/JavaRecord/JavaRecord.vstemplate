@@ -8,6 +8,7 @@
     <DefaultName>Record.java</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <SortOrder>50</SortOrder>
+    <TemplateID>{4569ea73-a9fa-4529-aa0f-8fa05cfeef3b}</TemplateID>
   </TemplateData>
   <TemplateContent>
     <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">Record.java</ProjectItem>

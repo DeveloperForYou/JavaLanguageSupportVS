@@ -8,6 +8,7 @@
     <DefaultName>AbstractClass.java</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <SortOrder>20</SortOrder>
+    <TemplateID>{ed6fd307-5781-478f-ab55-52236a6ddc4e}</TemplateID>
   </TemplateData>
   <TemplateContent>
     <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">AbstractClass.java</ProjectItem>
