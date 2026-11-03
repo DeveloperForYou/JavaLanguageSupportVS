@@ -7,6 +7,29 @@
     <String Name="Resources" Value="/JavaLanguageSupport;Component/ProjectSystem/Icons" />
     <Guid Name="JavaProjectIconsGuid" Value="{d203fa12-c9a4-47a1-8f62-39afba8d2fa0}" />
     <ID Name="JavaProjectRoot" Value="0" />
+    <!-- F2D-ITEM-IDS-BEGIN -->
+    <ID Name="JavaSource" Value="10" />
+    <ID Name="JavaTest" Value="11" />
+    <ID Name="Maven" Value="12" />
+    <ID Name="MavenWrapper" Value="13" />
+    <ID Name="Gradle" Value="14" />
+    <ID Name="GradleKotlin" Value="15" />
+    <ID Name="GradleWrapper" Value="16" />
+    <ID Name="Properties" Value="17" />
+    <ID Name="Yaml" Value="18" />
+    <ID Name="Ide" Value="19" />
+    <ID Name="Archive" Value="20" />
+    <ID Name="Manifest" Value="21" />
+    <ID Name="Docs" Value="22" />
+    <ID Name="Git" Value="23" />
+    <ID Name="Kotlin" Value="24" />
+    <ID Name="Groovy" Value="25" />
+    <ID Name="Bytecode" Value="26" />
+    <ID Name="XmlConfig" Value="27" />
+    <ID Name="EditorConfig" Value="28" />
+    <ID Name="Toml" Value="29" />
+    <ID Name="Docker" Value="30" />
+    <!-- F2D-ITEM-IDS-END -->
   </Symbols>
   <Images>
     <Image Guid="$(JavaProjectIconsGuid)" ID="$(JavaProjectRoot)" AllowColorInversion="false">
@@ -17,6 +40,197 @@
       <Source Uri="$(Resources)/JavaProject.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
       <Source Uri="$(Resources)/JavaProject.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
     </Image>
+    <!-- F2D-ITEM-IMAGES-BEGIN -->
+    <!-- Sorgente Java -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(JavaSource)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/JavaSource.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/JavaSource.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/JavaSource.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/JavaSource.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/JavaSource.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/JavaSource.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Test Java -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(JavaTest)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/JavaTest.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/JavaTest.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/JavaTest.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/JavaTest.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/JavaTest.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/JavaTest.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Maven POM -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Maven)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Maven.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Maven.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Maven.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Maven.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Maven.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Maven.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Maven Wrapper -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(MavenWrapper)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/MavenWrapper.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/MavenWrapper.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/MavenWrapper.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/MavenWrapper.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/MavenWrapper.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/MavenWrapper.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Gradle Groovy DSL -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Gradle)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Gradle.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Gradle.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Gradle.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Gradle.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Gradle.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Gradle.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Gradle Kotlin DSL -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(GradleKotlin)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/GradleKotlin.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/GradleKotlin.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/GradleKotlin.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/GradleKotlin.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/GradleKotlin.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/GradleKotlin.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Gradle Wrapper -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(GradleWrapper)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/GradleWrapper.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/GradleWrapper.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/GradleWrapper.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/GradleWrapper.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/GradleWrapper.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/GradleWrapper.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Properties -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Properties)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Properties.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Properties.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Properties.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Properties.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Properties.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Properties.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- YAML -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Yaml)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Yaml.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Yaml.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Yaml.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Yaml.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Yaml.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Yaml.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Metadati IDE -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Ide)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Ide.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Ide.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Ide.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Ide.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Ide.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Ide.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Archivio JAR/WAR/EAR -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Archive)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Archive.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Archive.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Archive.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Archive.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Archive.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Archive.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Manifest JVM -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Manifest)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Manifest.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Manifest.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Manifest.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Manifest.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Manifest.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Manifest.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Documentazione -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Docs)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Docs.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Docs.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Docs.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Docs.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Docs.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Docs.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Git -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Git)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Git.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Git.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Git.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Git.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Git.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Git.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Kotlin -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Kotlin)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Kotlin.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Kotlin.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Kotlin.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Kotlin.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Kotlin.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Kotlin.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Groovy -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Groovy)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Groovy.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Groovy.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Groovy.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Groovy.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Groovy.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Groovy.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Bytecode .class -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Bytecode)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Bytecode.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Bytecode.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Bytecode.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Bytecode.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Bytecode.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Bytecode.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Configurazione XML -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(XmlConfig)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/XmlConfig.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/XmlConfig.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/XmlConfig.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/XmlConfig.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/XmlConfig.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/XmlConfig.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- EditorConfig -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(EditorConfig)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/EditorConfig.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/EditorConfig.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/EditorConfig.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/EditorConfig.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/EditorConfig.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/EditorConfig.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Version catalog TOML -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Toml)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Toml.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Toml.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Toml.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Toml.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Toml.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Toml.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- Docker -->
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(Docker)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/Files/Docker.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Docker.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Docker.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Docker.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/Files/Docker.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/Files/Docker.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+    <!-- F2D-ITEM-IMAGES-END -->
   </Images>
   <ImageLists />
 </ImageManifest>

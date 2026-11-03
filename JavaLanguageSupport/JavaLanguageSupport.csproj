@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <!-- F2C: compila le immagini CPS come risorse WPF (JavaLanguageSupport.g.resources). -->
@@ -130,4 +130,10 @@
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
   </ItemGroup>
+  <!-- F2D-ITEM-ICONS-BEGIN -->
+  <!-- 84 PNG come risorse WPF, *non* altre 84 asset VSIX. -->
+  <ItemGroup>
+    <Resource Include="ProjectSystem\Icons\Files\*.png" />
+  </ItemGroup>
+  <!-- F2D-ITEM-ICONS-END -->
 </Project>

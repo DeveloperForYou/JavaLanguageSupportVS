@@ -31,6 +31,22 @@ namespace JavaLanguageSupport.ProjectSystem.Icons
                 return;
             }
 
+            // F2D-ITEM-ICON-HOOK-BEGIN
+            // La precedenza resta al moniker del nodo progetto (gestito sopra).
+            if (propertyValues.Flags.Contains(ProjectTreeFlags.Common.FileOnDisk) &&
+                !propertyValues.Flags.Contains(ProjectTreeFlags.Common.Folder) &&
+                !string.IsNullOrEmpty(propertyContext.ItemName))
+            {
+                ImageMoniker fileMoniker;
+                if (JavaProjectItemIcons.TryGetMoniker(propertyContext.ItemName, out fileMoniker))
+                {
+                    var customImage = fileMoniker.ToProjectSystemType();
+                    propertyValues.Icon = customImage;
+                    propertyValues.ExpandedIcon = customImage;
+                    return;
+                }
+            }
+            // F2D-ITEM-ICON-HOOK-END
             // Non sovrascrive cartelle, file esclusi o altri formati (pom.xml ecc.).
             if (!propertyValues.Flags.Contains(ProjectTreeFlags.Common.FileOnDisk) ||
                 propertyValues.Flags.Contains(ProjectTreeFlags.Common.Folder) ||
