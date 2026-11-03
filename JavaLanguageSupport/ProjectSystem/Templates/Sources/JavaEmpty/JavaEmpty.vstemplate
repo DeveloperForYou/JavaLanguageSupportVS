@@ -3,6 +3,7 @@
   <TemplateData>
     <Name>File Java vuoto</Name>
     <Description>Crea un file sorgente Java.</Description>
+    <Icon>JavaEmpty.ico</Icon>
     <ProjectType>Java</ProjectType>
     <AppliesTo>JavaLanguageSupportCps</AppliesTo>
     <DefaultName>NewFile.java</DefaultName>

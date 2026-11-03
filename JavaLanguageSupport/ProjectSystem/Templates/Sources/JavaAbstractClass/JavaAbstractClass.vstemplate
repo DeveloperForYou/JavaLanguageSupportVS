@@ -3,6 +3,7 @@
   <TemplateData>
     <Name>Classe astratta Java</Name>
     <Description>Crea una classe astratta Java.</Description>
+    <Icon>JavaAbstractClass.ico</Icon>
     <ProjectType>Java</ProjectType>
     <AppliesTo>JavaLanguageSupportCps</AppliesTo>
     <DefaultName>AbstractClass.java</DefaultName>

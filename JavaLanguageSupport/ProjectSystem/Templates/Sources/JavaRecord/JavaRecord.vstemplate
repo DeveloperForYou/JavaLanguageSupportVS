@@ -3,6 +3,7 @@
   <TemplateData>
     <Name>Record Java</Name>
     <Description>Crea un record Java (Java 16+).</Description>
+    <Icon>JavaRecord.ico</Icon>
     <ProjectType>Java</ProjectType>
     <AppliesTo>JavaLanguageSupportCps</AppliesTo>
     <DefaultName>Record.java</DefaultName>

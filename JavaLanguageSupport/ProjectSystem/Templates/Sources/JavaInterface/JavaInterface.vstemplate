@@ -3,6 +3,7 @@
   <TemplateData>
     <Name>Interfaccia Java</Name>
     <Description>Crea una interfaccia Java.</Description>
+    <Icon>JavaInterface.ico</Icon>
     <ProjectType>Java</ProjectType>
     <AppliesTo>JavaLanguageSupportCps</AppliesTo>
     <DefaultName>Interface.java</DefaultName>

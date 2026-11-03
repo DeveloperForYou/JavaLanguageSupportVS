@@ -3,6 +3,7 @@
   <TemplateData>
     <Name>Classe Java</Name>
     <Description>Crea una classe Java pubblica.</Description>
+    <Icon>JavaClass.ico</Icon>
     <ProjectType>Java</ProjectType>
     <AppliesTo>JavaLanguageSupportCps</AppliesTo>
     <DefaultName>Class.java</DefaultName>

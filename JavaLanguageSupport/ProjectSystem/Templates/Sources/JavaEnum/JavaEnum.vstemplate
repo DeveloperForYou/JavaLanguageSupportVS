@@ -3,6 +3,7 @@
   <TemplateData>
     <Name>Enum Java</Name>
     <Description>Crea una enumerazione Java.</Description>
+    <Icon>JavaEnum.ico</Icon>
     <ProjectType>Java</ProjectType>
     <AppliesTo>JavaLanguageSupportCps</AppliesTo>
     <DefaultName>Enum.java</DefaultName>

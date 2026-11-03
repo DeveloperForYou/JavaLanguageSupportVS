@@ -3,6 +3,7 @@
   <TemplateData>
     <Name>Annotation Java</Name>
     <Description>Crea una annotation Java.</Description>
+    <Icon>JavaAnnotation.ico</Icon>
     <ProjectType>Java</ProjectType>
     <AppliesTo>JavaLanguageSupportCps</AppliesTo>
     <DefaultName>Annotation.java</DefaultName>
