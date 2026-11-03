@@ -2,7 +2,7 @@
 
 Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 2026** (non Visual Studio Code). Le funzionalità semantiche si basano su [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls) tramite **Language Server Protocol (LSP)**; compilazione, esecuzione e test utilizzano JDK, Maven o Gradle.
 
-> **Stato del progetto (ottobre 2026):** le fasi di stabilizzazione dell'editor **A1–A3, B1–B2, C1–C3, D1–D3, E1 (CodeLens), E2 (Inlay Hints) ed E3 (indicizzazione, colorazione e prestazioni)** sono state **collaudate manualmente in Visual Studio 2026 Experimental**. Nel collaudo finale E3 la colorazione è rimasta stabile, l'editor è risultato responsivo, Navigation Bar, CodeLens e Inlay Hints hanno recuperato i risultati attesi e non sono stati osservati errori nei log. Il supporto rimane sperimentale: questi risultati non garantiscono l'assenza di anomalie con tutti i workspace e le versioni di JDT LS. Non sono ancora presenti un Project System Java nativo, il debug Java integrato o l'integrazione JUnit/TestNG con Test Explorer.
+> **Stato del progetto (novembre 2026):** le fasi editoriali **A1–E3** sono state collaudate manualmente in Visual Studio 2026 Experimental. È inoltre presente un **Java Project System CPS sperimentale** per file `.javaproj` (**Pack F1**): apertura in Esplora soluzioni, gestione dei file, proprietà e inclusione automatica dei sorgenti. Il **Pack F2** aggiunge sette modelli Java nativi (F2A), le relative icone (F2B), un'icona personalizzata per il progetto (F2C, visualizzazione verificata) e moniker personalizzati per sorgenti e file Maven/Gradle/configurazione (F2D, implementati nei sorgenti; collaudo grafico completo ancora da completare). La build Java nativa via MSBuild, il debug Java integrato e JUnit/TestNG in Test Explorer restano da sviluppare. La stabilità dell'editor e i risultati di CPS si riferiscono ai collaudi manuali effettuati, non a tutte le versioni e i workspace.
 
 ## Funzionalità
 
@@ -25,7 +25,9 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | Compilazione, esecuzione e test | Comandi **Strumenti → Java** per JDK, Maven e Gradle |
 | Progetti Spring Boot | **Supporto dedicato pianificato**; i comandi Maven/Gradle esistenti possono essere usati con progetti Spring Boot compatibili, ma non includono ancora funzionalità specifiche del framework |
 | Traduzione dell'interfaccia dell'estensione (localizzazione) | **Pianificata**: separazione delle stringhe dell'interfaccia e scelta della lingua, a partire da italiano e inglese |
-| Project System Java (`.javaproj`) in Esplora soluzioni | **Non implementato** |
+| Project System Java (`.javaproj`) in Esplora soluzioni | **Pack F1 implementato e collaudato manualmente**: apertura e struttura CPS, cartelle e file, rinomina, aggiunta/rimozione e proprietà; build MSBuild Java non ancora implementata |
+| Aggiungi nuovo elemento — modelli Java | **Pack F2A/F2B**: sette template nativi e relative icone; duplicati eliminati nel collaudo |
+| Icone in Esplora soluzioni | **Pack F2C/F2D**: icona del progetto verificata; moniker custom per sorgenti Java, Maven, Gradle e file di configurazione presenti nel repository; verifica grafica F2D ancora in corso |
 | Debug Java integrato (F5/F9/F10/F11) | **Non implementato** |
 | JUnit/TestNG in Test Explorer | **Non implementato** |
 | Designer visuale Swing/AWT/JavaFX | **Pianificato**, non implementato |
@@ -46,6 +48,11 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | **E1** | CodeLens, riferimenti e implementazioni | ✅ Collaudato (con hotfix) |
 | **E2** | Inlay Hints di parametri e tipi `var` | ✅ Collaudato (con hotfix) |
 | **E3** | Indicizzazione JDT LS, stabilità dei colori e prestazioni | ✅ Collaudato (con hotfix) |
+| **F1** | Project System CPS (`.javaproj`), inclusione dei file e operazioni di Esplora soluzioni | ✅ Collaudato manualmente |
+| **F2A** | Sette modelli Java nativi in «Aggiungi nuovo elemento» | ✅ Duplicati risolti e modelli visibili |
+| **F2B** | Icone dei modelli di elemento Java | 🧪 Implementato; collaudo completo da confermare |
+| **F2C** | Icona personalizzata del progetto Java con varianti chiaro/scuro | ✅ Visualizzazione verificata |
+| **F2D** | Icone dedicate ai file Java, Maven, Gradle e correlati | 🧪 Implementato nei sorgenti; verifica grafica completa in corso |
 | **Spring Boot** | Integrazione dedicata ai progetti Spring Boot | 📋 Pianificata |
 | **Localizzazione** | Interfaccia multilingua dell'estensione (italiano/inglese) | 📋 Pianificata |
 
@@ -69,6 +76,41 @@ I dati della cache risiedono sotto `%LOCALAPPDATA%\JavaLanguageSupportVS\jdtls\p
 **Verifica manuale consigliata:** aprire una cartella Java con **File → Apri → Cartella**, attendere l'importazione, controllare colori, Navigation Bar, riferimenti CodeLens e Inlay Hints; poi chiudere e riaprire Visual Studio Experimental con lo stesso workspace e ripetere le prove. Controllare il log JDT LS e **Java: Stato IntelliSense**. Eventuali errori di risorse interne `jdt.ls-java-project` durante l'importazione vanno distinti dai malfunzionamenti persistenti: l'ultimo collaudo è risultato pulito, ma una regressione in altri workspace o versioni di JDT LS resta possibile.
 
 Le indicazioni *collaudato* si riferiscono a verifiche **manuali**, non a test automatici su tutte le versioni di Visual Studio o JDT LS; non costituiscono una garanzia di assenza di regressioni.
+
+### Pack F1 e F2 — Project System Java CPS e icone
+
+Il **Pack F1** introduce il tipo di progetto `.javaproj` tramite CPS (Common Project System), limitato alla capability `JavaLanguageSupportCps`. Il file `.javaproj` contiene metadati per Visual Studio: **non sostituisce** `pom.xml` o `build.gradle`, che restano le definizioni di build Maven/Gradle. Il progetto di accettazione è `Examples/JavaProjectSystemAcceptance/HelloJavaF1.javaproj`.
+
+I file del progetto vengono caricati da `ProjectSystem/BuildSystem/JavaProject.targets`: `JavaCompile` include i `**/*.java`, mentre `None` raccoglie gli altri file (per esempio POM, Gradle, risorse, wrapper, README e configurazioni). Sono esclusi automaticamente output e directory temporanee come `bin/`, `obj/`, `target/`, `build/`, `.git/` e `.vs/`. Le inclusioni automatiche sono disattivabili con `EnableDefaultJavaItems=false`. La gestione dei file è integrata in Esplora soluzioni, ma **il target MSBuild `Build` non compila ancora Java**: usare Maven/Gradle o i comandi Java già disponibili.
+
+Il **Pack F2A** integra sette modelli nell'interfaccia nativa **Aggiungi → Nuovo elemento**: classe, classe astratta, interfaccia, enum, record, annotation e file Java vuoto. I modelli sono distribuiti come template VSIX e sono associati alla capability CPS; **F2B** aggiunge le relative icone. Il manifest VSIX registra i template con l'asset `Microsoft.VisualStudio.ItemTemplate`.
+
+Per le icone di Esplora soluzioni, `ProjectSystem/Icons/JavaProjectTreeIconProvider.cs` esporta un `IProjectTreePropertiesProvider` per i soli progetti Java CPS. **F2C** assegna l'icona al nodo principale; **F2D** utilizza `JavaProjectItemIcons.cs` per associare i nomi dei file ai moniker del catalogo `JavaProject.imagemanifest`. Le risorse Light/Dark 16×16 e 32×32 sono incorporate in `JavaLanguageSupport.dll` come risorse WPF; il manifest è registrato come asset `Microsoft.VisualStudio.ImageManifest`. I file non riconosciuti mantengono l'icona predefinita di Visual Studio.
+
+| Categoria icona F2D | File riconosciuti (esempi) |
+| --- | --- |
+| Java e test Java | `*.java`, `*Test.java`, `*Tests.java`, `*IT.java` |
+| Maven | `pom.xml`, `mvnw`, `mvnw.cmd`, `maven-wrapper.properties` |
+| Gradle / Kotlin DSL | `build.gradle`, `settings.gradle`, `*.gradle.kts`, `gradle.properties`, `gradlew` |
+| Altri linguaggi JVM e pacchetti | `*.kt`, `*.kts`, `*.groovy`, `*.class`, `*.jar`, `*.war`, `*.ear` |
+| Configurazioni e strumenti | `*.properties`, `*.yaml`, `*.yml`, `*.toml`, `MANIFEST.MF`, `.project`, `.classpath`, `.iml`, `.gitignore`, `Dockerfile`, `README*` |
+
+#### Anteprima delle icone personalizzate
+
+Le immagini qui sotto sono **le vere risorse PNG presenti nel repository**, non schermate ricreate dell'interfaccia. Permettono di confrontare le versioni previste per i temi **chiaro** e **scuro**.
+
+| Tipo di nodo/file | Light | Dark |
+| --- | :---: | :---: |
+| Progetto Java | ![Icona progetto Java Light](JavaLanguageSupport/ProjectSystem/Icons/JavaProject.Light.32.png) | ![Icona progetto Java Dark](JavaLanguageSupport/ProjectSystem/Icons/JavaProject.Dark.32.png) |
+| Sorgente Java | ![Java Light](JavaLanguageSupport/ProjectSystem/Icons/Files/JavaSource.Light.32.png) | ![Java Dark](JavaLanguageSupport/ProjectSystem/Icons/Files/JavaSource.Dark.32.png) |
+| Test Java | ![Java Test Light](JavaLanguageSupport/ProjectSystem/Icons/Files/JavaTest.Light.32.png) | ![Java Test Dark](JavaLanguageSupport/ProjectSystem/Icons/Files/JavaTest.Dark.32.png) |
+| Maven (POM) | ![Maven Light](JavaLanguageSupport/ProjectSystem/Icons/Files/Maven.Light.32.png) | ![Maven Dark](JavaLanguageSupport/ProjectSystem/Icons/Files/Maven.Dark.32.png) |
+| Gradle | ![Gradle Light](JavaLanguageSupport/ProjectSystem/Icons/Files/Gradle.Light.32.png) | ![Gradle Dark](JavaLanguageSupport/ProjectSystem/Icons/Files/Gradle.Dark.32.png) |
+| Gradle Kotlin DSL | ![Gradle Kotlin Light](JavaLanguageSupport/ProjectSystem/Icons/Files/GradleKotlin.Light.32.png) | ![Gradle Kotlin Dark](JavaLanguageSupport/ProjectSystem/Icons/Files/GradleKotlin.Dark.32.png) |
+| Kotlin | ![Kotlin Light](JavaLanguageSupport/ProjectSystem/Icons/Files/Kotlin.Light.32.png) | ![Kotlin Dark](JavaLanguageSupport/ProjectSystem/Icons/Files/Kotlin.Dark.32.png) |
+| Configurazioni XML | ![XML Light](JavaLanguageSupport/ProjectSystem/Icons/Files/XmlConfig.Light.32.png) | ![XML Dark](JavaLanguageSupport/ProjectSystem/Icons/Files/XmlConfig.Dark.32.png) |
+
+Per il collaudo visivo in IDE, aprire `HelloJavaF1.javaproj` in **Visual Studio Experimental**, espandere Esplora soluzioni e ripetere il controllo cambiando tema. L'anteprima qui sopra documenta le immagini distribuite; **non equivale a uno screenshot dell'effettiva resa in Visual Studio**.
 
 ## Prerequisiti
 
@@ -112,6 +154,16 @@ Lo script verifica i prerequisiti; **non** conferma da solo che la sessione LSP 
 
 > **Attenzione:** **F5 nella soluzione VSIX** avvia il debug **dell'estensione**, non un programma Java. Il debugger Java integrato è una funzionalità futura.
 
+### Aggiornare la configurazione Visual Studio Experimental
+
+Se dopo una modifica alla VSIX (in particolare ai template, al file `.imagemanifest` o alle icone) l'istanza **Exp** mostra ancora la versione precedente, **chiudere prima Visual Studio Experimental** e, dopo aver ricompilato/deployato l'estensione, eseguire dal **Developer PowerShell for Visual Studio 2026**:
+
+```powershell
+devenv /RootSuffix Exp /UpdateConfiguration
+```
+
+Il comando aggiorna la configurazione dell'istanza sperimentale, facendo rileggere le registrazioni delle estensioni; può essere utile dopo modifiche ai manifest delle immagini. **Non ricompila il progetto e non sostituisce il deployment della VSIX**. Riaprire poi `Exp` e verificare le icone nei temi chiaro e scuro.
+
 ### Comandi dell'editor
 
 | Operazione nel file Java | Scorciatoia nativa Visual Studio |
@@ -149,6 +201,7 @@ Aprire **una cartella di esempio alla volta** e attendere l'indicizzazione inizi
 | `InlayHintsAcceptance/` | Inlay Hints (Pack E2): parametri e tipi dedotti da `var`, inclusi i casi degli hotfix |
 | `SemanticTokensAcceptance/`, `NavigationBarAcceptance/`, `EditorReliabilityAcceptance/` | Stabilità della colorazione, recupero dei simboli e verifica dell'editor (Pack E3); ripetere anche dopo il riavvio di VS Experimental |
 | `MavenHello/`, `GradleHello/` | Compilazione/esecuzione Maven e Gradle |
+| `JavaProjectSystemAcceptance/` | Progetto `HelloJavaF1.javaproj` per collaudo di CPS F1, dei template F2A/F2B e delle icone F2C/F2D |
 
 I progetti di accettazione contengono spesso un proprio `README.md` con istruzioni dettagliate. **Alcuni README degli esempi più vecchi possono descrivere comportamenti anteriori agli hotfix**: per lo stato più recente fare riferimento a questa pagina e ai sorgenti correnti.
 
@@ -180,6 +233,13 @@ JavaLanguageSupportVS/
     ├── Build/
     ├── Configuration/
     ├── Grammars/
+    ├── ProjectSystem/
+    │   ├── Registration/
+    │   ├── BuildSystem/
+    │   ├── Templates/
+    │   └── Icons/
+    │       └── Files/
+    ├── JavaProject.imagemanifest
     ├── JavaLanguageSupport.csproj
     └── source.extension.vsixmanifest
 ```
@@ -199,6 +259,11 @@ JavaLanguageSupportVS/
 | `Build` | Rilevamento workspace, build/run/test tramite JDK, Maven e Gradle |
 | `Configuration` | Impostazioni Java, temi, TextMate e registrazioni `.pkgdef` |
 | `Grammars` | Grammatica `java.tmLanguage.json` |
+| `ProjectSystem/Registration` | Registrazione del tipo CPS `.javaproj` e della capability `JavaLanguageSupportCps` |
+| `ProjectSystem/BuildSystem` | `.props`, `.targets` e schemi XAML per proprietà, tipi di elementi e inclusione file |
+| `ProjectSystem/Templates` | Sorgenti e archivi ZIP dei sette modelli Java nativi |
+| `ProjectSystem/Icons` | Provider CPS, mappatura moniker per file e PNG Light/Dark |
+| `JavaProject.imagemanifest` | Identificatori e sorgenti delle icone di progetto e dei file |
 
 La VSIX usa **.NET Framework 4.7.2** (`net472`) e il progetto C# specifica **`LangVersion 7.3`**. Le modifiche ai sorgenti devono quindi essere compatibili con C# 7.3. Il file `.gitattributes` richiede **CRLF** per i principali file C#, JSON, progetto e configurazione; preservare questo formato quando si applicano patch.
 
@@ -222,11 +287,14 @@ I file `JavaLanguageSupport.csproj` e `source.extension.vsixmanifest` restano ne
 
 **Comandi Java non visibili:** assicurarsi di usare l'**istanza sperimentale**, verificare l'attivazione della VSIX in **Estensioni → Gestisci estensioni**, poi controllare `ActivityLog.xml` se l'estensione non si carica.
 
+**Icone Java/Maven/Gradle non aggiornate o icona del progetto generica:** verificare che la VSIX includa `JavaProject.imagemanifest`, che l'asset `Microsoft.VisualStudio.ImageManifest` sia registrato in `source.extension.vsixmanifest` e che le PNG siano incorporate nella DLL tramite `UseWPF`. Dopo il deployment, chiudere `Exp` e usare `devenv /RootSuffix Exp /UpdateConfiguration`. Le icone F2D sono specifiche di Esplora soluzioni nei progetti `.javaproj`, non sono associazioni globali a tutte le estensioni in Windows o Visual Studio.
+
 I log locali e i workspace temporanei di JDT LS **non devono essere aggiunti al repository**. Ignorare inoltre `bin/`, `obj/`, `.vs/`, `.java-vs/` e i pacchetti `.vsix` generati.
 
 ## Limiti conosciuti
 
-- Il progetto **non** fornisce ancora un Project System Java con integrazione `.javaproj` in Esplora soluzioni.
+- Il **Project System CPS `.javaproj` esiste** (Pack F1), ma la build Java tramite il target MSBuild `Build` non è ancora implementata; usare Maven/Gradle o i comandi Java esistenti.
+- I template e le icone di progetto/file sono sperimentali: F2C è stato verificato, mentre la resa completa delle icone dei file F2D nei diversi temi richiede ancora collaudo.
 - Il debugging Java con i comandi nativi dell'IDE e l'integrazione con Test Explorer sono **futuri**.
 - Non è ancora presente un'integrazione specifica per **Spring Boot**: il supporto Maven/Gradle è generico e non equivale a un riconoscimento o un avvio dedicato delle applicazioni Spring Boot.
 - Non è ancora presente un sistema completo di **localizzazione dell'estensione**: molte etichette dei menu, finestre e messaggi sono attualmente definite in italiano nei sorgenti.
@@ -249,15 +317,19 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 | **E1** | CodeLens, riferimenti e implementazioni | ✅ Collaudato (con hotfix) |
 | **E2** | Inlay Hints dei parametri e tipi `var` (incluse stringhe, array, generici e `<>`) | ✅ Collaudato (con hotfix) |
 | **E3** | Indicizzazione JDT LS, prestazioni e ripristino automatico dei colori semantici | ✅ Collaudato (con hotfix) |
+| **F1** | Project System CPS `.javaproj` e file in Esplora soluzioni | ✅ Collaudato manualmente |
+| **F2A–F2B** | Template Java nativi, eliminazione duplicati e icone dei modelli | 🧪 Modelli verificati; collaudo icone dei modelli da completare |
+| **F2C** | Icona personalizzata del progetto Java | ✅ Visualizzazione verificata |
+| **F2D** | Icone personalizzate per sorgenti Java e file Maven/Gradle | 🧪 Implementato; collaudo visivo da completare |
 | **Spring Boot** | Riconoscimento progetti, strumenti Spring e avvio dell'applicazione | 📋 Pianificato |
 | **Localizzazione** | Risorse testuali traducibili, italiano/inglese e selezione della lingua | 📋 Pianificata |
-| **Integrazione IDE** | Runner, Project System Java, debugger, JUnit/TestNG | 📋 Evoluzione futura |
+| **Integrazione IDE** | Build Java nativa, debugger Java e JUnit/TestNG in Test Explorer; estensione delle funzioni CPS già presenti | 📋 Evoluzione futura |
 | **Designer visuale** | Swing prima, quindi AWT e JavaFX | 📋 Evoluzione futura |
 
 ### Evoluzioni successive
 
 1. Consolidare i comandi di **compilazione, esecuzione e test**, lanciati oggi da **Strumenti → Java**.
-2. Realizzare un **Project System Java** per Esplora soluzioni con progetti e dipendenze Maven/Gradle.
+2. **Evolvere il Project System Java CPS già presente** con build integrata, dipendenze Maven/Gradle e ulteriori operazioni native dell'IDE.
 3. Integrare **debug Java** (breakpoint, step, variabili) con il flusso IDE.
 4. Integrare **JUnit/TestNG** nel Test Explorer.
 5. Progettare un **Designer Swing/AWT/JavaFX** con toolbox, proprietà, gerarchia componenti, anteprima e generazione/sincronizzazione del codice. Nessun designer visuale è attualmente disponibile.
@@ -279,4 +351,4 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 
 ---
 
-**Repository:** [DeveloperForYou/JavaLanguageSupportVS](https://github.com/DeveloperForYou/JavaLanguageSupportVS). La documentazione descrive i componenti attualmente presenti e distingue i **collaudi manuali completati** dalle **funzionalità sperimentali** e da quelle **ancora pianificate**. Non costituisce una garanzia di compatibilità su tutte le versioni di Visual Studio, JDK e JDT LS.
+**Repository:** [DeveloperForYou/JavaLanguageSupportVS](https://github.com/DeveloperForYou/JavaLanguageSupportVS). La documentazione descrive i componenti presenti sul ramo principale al 3 novembre 2026, distinguendo i **collaudi manuali completati** dalle **funzionalità sperimentali** e da quelle **ancora pianificate**. Non costituisce una garanzia di compatibilità su tutte le versioni di Visual Studio, JDK e JDT LS.
