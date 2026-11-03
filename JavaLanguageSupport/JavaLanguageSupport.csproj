@@ -119,9 +119,6 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
-  <ItemGroup>
-    <Compile Include="ProjectSystem\Icons\JavaImageAssemblyCodeBase.F2C.cs.old" />
-  </ItemGroup>
   <!-- F2C: icone native CPS per progetto Java e sorgenti .java -->
   <ItemGroup>
     <Resource Include="ProjectSystem\Icons\JavaProject.Light.16.png" />
