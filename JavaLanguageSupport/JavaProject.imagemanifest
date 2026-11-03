@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Java project icon for the CPS project root; theme-specific sources. -->
+<ImageManifest xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+               xmlns="http://schemas.microsoft.com/VisualStudio/ImageManifestSchema/2014">
+  <Symbols>
+    <String Name="Resources" Value="/JavaLanguageSupport;Component/ProjectSystem/Icons" />
+    <Guid Name="JavaProjectIconsGuid" Value="{d203fa12-c9a4-47a1-8f62-39afba8d2fa0}" />
+    <ID Name="JavaProjectRoot" Value="0" />
+  </Symbols>
+  <Images>
+    <Image Guid="$(JavaProjectIconsGuid)" ID="$(JavaProjectRoot)" AllowColorInversion="false">
+      <Source Uri="$(Resources)/JavaProject.Light.16.png" Background="Light"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/JavaProject.Light.32.png" Background="Light"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/JavaProject.Dark.16.png" Background="Dark"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/JavaProject.Dark.32.png" Background="Dark"><Size Value="32" /></Source>
+      <Source Uri="$(Resources)/JavaProject.Light.16.png" Background="HighContrastLight"><Size Value="16" /></Source>
+      <Source Uri="$(Resources)/JavaProject.Dark.16.png" Background="HighContrastDark"><Size Value="16" /></Source>
+    </Image>
+  </Images>
+  <ImageLists />
+</ImageManifest>

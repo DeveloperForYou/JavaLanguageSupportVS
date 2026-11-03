@@ -1,6 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
+    <!-- F2C: compila le immagini CPS come risorse WPF (JavaLanguageSupport.g.resources). -->
+    <UseWPF>true</UseWPF>
+    <!-- Gli XAML CPS sono schemi del Project System, non pagine WPF. -->
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
     <LangVersion>7.3</LangVersion>
     <OutputType>Library</OutputType>
     <AssemblyName>JavaLanguageSupport</AssemblyName>
@@ -73,8 +78,7 @@
     <JavaVsixColorCompiler Condition="'$(JavaVsixColorCompiler)' == '' and '$(VisualStudioInstallDir)' != '' and Exists('$(VisualStudioInstallDir)\$(JavaVsixCompilerRelativePath)')">$(VisualStudioInstallDir)\$(JavaVsixCompilerRelativePath)</JavaVsixColorCompiler>
   </PropertyGroup>
   <Target Name="GenerateJavaThemeColors" BeforeTargets="PrepareForBuild">
-    <Error Condition="'$(JavaVsixColorCompiler)' == '' or !Exists('$(JavaVsixColorCompiler)')"
-           Text="VsixColorCompiler.exe non trovato. VSInstallDir puo' essere vuoto nei progetti SDK-style. Installare il workload 'Sviluppo di estensioni di Visual Studio', oppure impostare /p:JavaVsixColorCompiler=PATH_COMPLETO. Vedere la guida ZIP." />
+    <Error Condition="'$(JavaVsixColorCompiler)' == '' or !Exists('$(JavaVsixColorCompiler)')" Text="VsixColorCompiler.exe non trovato. VSInstallDir puo' essere vuoto nei progetti SDK-style. Installare il workload 'Sviluppo di estensioni di Visual Studio', oppure impostare /p:JavaVsixColorCompiler=PATH_COMPLETO. Vedere la guida ZIP." />
     <Exec Command="&quot;$(JavaVsixColorCompiler)&quot; &quot;$(MSBuildProjectDirectory)\Configuration\JavaThemeColors.xml&quot; &quot;$(MSBuildProjectDirectory)\Configuration\JavaThemeColors.pkgdef&quot; /noLogo" />
   </Target>
   <!-- Pack F1: provide build-system template files in the EXISTING VSIX.
@@ -113,6 +117,20 @@
       <IncludeInVSIX>true</IncludeInVSIX>
       <VSIXSubPath>ItemTemplates\Java\1033</VSIXSubPath>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="ProjectSystem\Icons\JavaImageAssemblyCodeBase.F2C.cs.old" />
+  </ItemGroup>
+  <!-- F2C: icone native CPS per progetto Java e sorgenti .java -->
+  <ItemGroup>
+    <Resource Include="ProjectSystem\Icons\JavaProject.Light.16.png" />
+    <Resource Include="ProjectSystem\Icons\JavaProject.Light.32.png" />
+    <Resource Include="ProjectSystem\Icons\JavaProject.Dark.16.png" />
+    <Resource Include="ProjectSystem\Icons\JavaProject.Dark.32.png" />
+    <Content Include="JavaProject.imagemanifest">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
   </ItemGroup>
 </Project>
