@@ -1,3 +1,3 @@
-public abstract class $safeitemname$ {
+$javaPackageHeader$public abstract class $safeitemname$ {
 
 }

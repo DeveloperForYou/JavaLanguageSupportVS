@@ -1,1 +1,1 @@
-// File sorgente Java.
+$javaPackageHeader$// File sorgente Java.

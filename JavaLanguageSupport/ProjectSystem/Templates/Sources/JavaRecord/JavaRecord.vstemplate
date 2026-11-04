@@ -14,4 +14,8 @@
   <TemplateContent>
     <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.java">Record.java</ProjectItem>
   </TemplateContent>
+  <WizardExtension>
+    <Assembly>JavaLanguageSupport, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null</Assembly>
+    <FullClassName>JavaLanguageSupport.ProjectSystem.Templates.Wizards.JavaItemTemplateWizard</FullClassName>
+  </WizardExtension>
 </VSTemplate>

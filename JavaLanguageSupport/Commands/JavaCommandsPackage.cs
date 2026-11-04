@@ -25,6 +25,8 @@ namespace JavaLanguageSupport.Commands
     /// </summary>
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
     [ProvideMenuResource("Menus.ctmenu", 1)]
+    // F2E3-TEMPLATE-WIZARD-BINDING
+    [ProvideBindingPath]
     [Guid(PackageGuid)]
     public sealed class JavaCommandsPackage : AsyncPackage
     {

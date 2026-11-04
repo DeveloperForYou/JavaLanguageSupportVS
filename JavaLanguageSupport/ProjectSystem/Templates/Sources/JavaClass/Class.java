@@ -1,3 +1,3 @@
-public class $safeitemname$ {
+$javaPackageHeader$public class $safeitemname$ {
 
 }

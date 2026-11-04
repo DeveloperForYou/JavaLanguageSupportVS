@@ -1,3 +1,3 @@
-public interface $safeitemname$ {
+$javaPackageHeader$public interface $safeitemname$ {
 
 }

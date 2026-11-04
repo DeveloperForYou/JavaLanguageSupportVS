@@ -1,2 +1,2 @@
-public record $safeitemname$(String value) {
+$javaPackageHeader$public record $safeitemname$(String value) {
 }
