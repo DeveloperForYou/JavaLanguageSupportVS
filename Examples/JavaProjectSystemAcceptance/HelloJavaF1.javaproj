@@ -19,4 +19,7 @@
   <ItemGroup>
     <Folder Include="src\main\java\com\example\services\" />
   </ItemGroup>
+  <ItemGroup>
+    <Folder Include="src\main\java\com\example\services\controllers\" />
+  </ItemGroup>
 </Project>

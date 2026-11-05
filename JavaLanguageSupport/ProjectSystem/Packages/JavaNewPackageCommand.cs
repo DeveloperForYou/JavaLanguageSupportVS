@@ -20,6 +20,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         private sealed class SelectionContext
         {
             public Project Project;
+            public string ProjectFile;
             public ProjectItem Folder;
             public string ProjectDirectory;
             public string SelectedDirectory;
@@ -74,7 +75,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 Directory.CreateDirectory(plan.TargetDirectory);
                 string includeError;
                 if (!JavaEmptyPackageProjectItems.TryInclude(
-                    context.Project.FullName, plan.TargetDirectory, out includeError))
+                    context.ProjectFile, plan.TargetDirectory, out includeError))
                 {
                     VsShellUtilities.ShowMessageBox(services,
                         "Package '" + plan.FullPackageName + "' creato sul disco, ma non " +
@@ -164,11 +165,11 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     if (ErrorHandler.Succeeded(hierarchy.GetProperty(itemId,
                         (int)__VSHPROPID.VSHPROPID_ExtObject, out folderObject)))
                         folder = folderObject as ProjectItem;
-                    if (folder != null && TryGetFolderPath(folder, out folderPath)) { }
-                    else if (ErrorHandler.Failed(hierarchy.GetCanonicalName(itemId, out folderPath)) ||
-                        string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
+                    // CPS may return a project-relative canonical name for a folder.
+                    // Resolve against the .javaproj directory, never the devenv.exe CWD.
+                    if (!TryGetHierarchyDirectory(hierarchy, itemId, folder,
+                        projectDir, out folderPath))
                         return false;
-                    folderPath = Path.GetFullPath(folderPath);
                 }
                 string buildHint = ReadBuildHint(projectFile);
                 string root, sourceRoot, existing, error;
@@ -177,7 +178,8 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     return false;
                 context = new SelectionContext
                 {
-                    Project = project, Folder = folder, ProjectDirectory = projectDir,
+                    Project = project, ProjectFile = projectFile, Folder = folder,
+                    ProjectDirectory = projectDir,
                     SelectedDirectory = folderPath, IsProjectNode = isRoot,
                     BuildHint = buildHint
                 };
@@ -229,6 +231,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 context = new SelectionContext
                 {
                     Project = project,
+                    ProjectFile = Path.GetFullPath(filename),
                     Folder = folder,
                     ProjectDirectory = projectDirectory,
                     SelectedDirectory = selectedDirectory,
@@ -240,6 +243,68 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             catch (Exception ex) when (ex is COMException || ex is ArgumentException ||
                 ex is IOException || ex is NotSupportedException ||
                 ex is UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        // F2F.2: CPS folder nodes can be exposed as a ProjectItem, an IVsProject
+        // document moniker or a canonical name. Use only paths inside this project.
+        private static bool TryGetHierarchyDirectory(IVsHierarchy hierarchy, uint itemId,
+            ProjectItem folder, string projectDirectory, out string directory)
+        {
+            directory = null;
+            string candidate;
+            if (folder != null && TryGetFolderPath(folder, out candidate) &&
+                TryResolveDirectory(projectDirectory, candidate, out directory))
+                return true;
+
+            var vsProject = hierarchy as IVsProject;
+            if (vsProject != null &&
+                ErrorHandler.Succeeded(vsProject.GetMkDocument(itemId, out candidate)) &&
+                TryResolveDirectory(projectDirectory, candidate, out directory))
+                return true;
+
+            if (ErrorHandler.Succeeded(hierarchy.GetCanonicalName(itemId, out candidate)) &&
+                TryResolveDirectory(projectDirectory, candidate, out directory))
+                return true;
+
+            object saveName;
+            if (ErrorHandler.Succeeded(hierarchy.GetProperty(itemId,
+                    (int)__VSHPROPID.VSHPROPID_SaveName, out saveName)) &&
+                TryResolveDirectory(projectDirectory, saveName as string, out directory))
+                return true;
+
+            return false;
+        }
+
+        private static bool TryResolveDirectory(string projectDirectory, string candidate,
+            out string directory)
+        {
+            directory = null;
+            if (string.IsNullOrWhiteSpace(candidate)) return false;
+            try
+            {
+                candidate = candidate.Trim().Trim('"');
+                Uri fileUri;
+                if (Uri.TryCreate(candidate, UriKind.Absolute, out fileUri) && fileUri.IsFile)
+                    candidate = fileUri.LocalPath;
+
+                var root = Path.GetFullPath(projectDirectory).TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var path = Path.GetFullPath(Path.IsPathRooted(candidate)
+                    ? candidate : Path.Combine(root, candidate));
+                // An existing .java or other item must NEVER be treated as a package.
+                if (!Directory.Exists(path) ||
+                    !(string.Equals(path, root, StringComparison.OrdinalIgnoreCase) ||
+                      path.StartsWith(root + Path.DirectorySeparatorChar,
+                          StringComparison.OrdinalIgnoreCase)))
+                    return false;
+                directory = path;
+                return true;
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is IOException ||
+                ex is NotSupportedException || ex is UnauthorizedAccessException)
             {
                 return false;
             }
