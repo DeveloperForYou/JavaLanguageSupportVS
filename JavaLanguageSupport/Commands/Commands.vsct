@@ -10,6 +10,11 @@
       <Group guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" priority="0x0600">
     <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_CODEWIN" />
   </Group>
+      <!-- F2F1-MENU-HOTFIX-BEGIN -->
+      <Group guid="guidJavaToolsCmdSet" id="JavaPackageContextGroup" priority="0x0700">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_PROJNODE" />
+      </Group>
+      <!-- F2F1-MENU-HOTFIX-END -->
     </Groups>
     <Buttons>
       <Button guid="guidJavaToolsCmdSet" id="cmdBuild" priority="0x0100" type="Button">
@@ -92,13 +97,31 @@
         <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings><ButtonText>Java: Override/Implement metodi</ButtonText></Strings>
       </Button>
+
+      <!-- F2F1-MENU-BEGIN -->
+      <Button guid="guidJavaToolsCmdSet" id="cmdCreateJavaPackage" priority="0x0800" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaPackageContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings><ButtonText>Java: Nuovo package...</ButtonText></Strings>
+      </Button>
+      <!-- F2F1-MENU-END -->
     </Buttons>
   </Commands>
+  <!-- F2F1-PLACEMENT-BEGIN -->
+  <CommandPlacements>
+    <CommandPlacement guid="guidJavaToolsCmdSet" id="JavaPackageContextGroup" priority="0x0700">
+      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_FOLDERNODE" />
+    </CommandPlacement>
+  </CommandPlacements>
+  <!-- F2F1-PLACEMENT-END -->
   <Symbols>
     <GuidSymbol name="guidJavaToolsPackage" value="{75323116-62F6-483F-A9DD-F2A167762E41}" />
     <GuidSymbol name="guidJavaToolsCmdSet" value="{A21A445E-8D9B-4296-9906-A829608EE59C}">
       <IDSymbol name="JavaEditorContextGroup" value="0x1021" />
       <IDSymbol name="JavaToolsGroup" value="0x1020" />
+      <!-- F2F1-MENU-GROUP-SYMBOL -->
+      <IDSymbol name="JavaPackageContextGroup" value="0x1022" />
       <IDSymbol name="cmdBuild" value="0x0100" />
       <IDSymbol name="cmdRun" value="0x0101" />
       <IDSymbol name="cmdTest" value="0x0102" />
@@ -116,6 +139,9 @@
       <IDSymbol name="cmdGenerateConstructor" value="0x0123" />
       <IDSymbol name="cmdGenerateGettersSetters" value="0x0124" />
       <IDSymbol name="cmdOverrideImplementMethods" value="0x0125" />
+      <!-- F2F1-SYMBOL-BEGIN -->
+      <IDSymbol name="cmdCreateJavaPackage" value="0x0126" />
+      <!-- F2F1-SYMBOL-END -->
     </GuidSymbol>
   </Symbols>
 </CommandTable>

@@ -68,6 +68,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
+    <Content Include="ProjectSystem\BuildSystem\JavaProject.Folder.xaml">
+      <Generator></Generator>
+    </Content>
   </ItemGroup>
   <!-- Register theme-specific Java colors before VSIX packaging. -->
   <!-- SDK-style VSIX: VSInstallDir may be empty in managed builds. -->
@@ -135,6 +138,9 @@
   <!-- 84 PNG come risorse WPF, *non* altre 84 asset VSIX. -->
   <ItemGroup>
     <Resource Include="ProjectSystem\Icons\Files\*.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Remove="ProjectSystem\BuildSystem\JavaProject.Folder.xaml" />
   </ItemGroup>
   <!-- F2D-ITEM-ICONS-END -->
 </Project>

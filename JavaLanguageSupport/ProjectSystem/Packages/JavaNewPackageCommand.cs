@@ -1,0 +1,303 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Xml;
+using System.Xml.Linq;
+using EnvDTE;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio;
+
+namespace JavaLanguageSupport.ProjectSystem.Packages
+{
+    /// <summary>
+    /// F2F.1 native Solution Explorer context command. Does not touch template
+    /// creation, JavaPackageResolver, CPS project manifests, or JDT LS.
+    /// </summary>
+    internal static class JavaNewPackageCommand
+    {
+        private sealed class SelectionContext
+        {
+            public Project Project;
+            public ProjectItem Folder;
+            public string ProjectDirectory;
+            public string SelectedDirectory;
+            public bool IsProjectNode;
+            public string BuildHint;
+        }
+
+        public static bool CanExecute(IServiceProvider services)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            SelectionContext context;
+            return TryGetContext(services, out context);
+        }
+
+        public static void Execute(IServiceProvider services)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            SelectionContext context;
+            if (!TryGetContext(services, out context)) return;
+            string root, sourceRoot, existing, error;
+            if (!JavaPackageCreationService.TryGetBase(context.ProjectDirectory,
+                context.SelectedDirectory, context.IsProjectNode, context.BuildHint,
+                out root, out sourceRoot, out existing, out error))
+            {
+                ShowError(services, error ?? "Impossibile determinare la source root.");
+                return;
+            }
+
+            var dialog = new JavaNewPackageDialog(context.ProjectDirectory,
+                context.SelectedDirectory, context.IsProjectNode,
+                context.BuildHint, sourceRoot, existing);
+            var shell = services.GetService(typeof(SVsUIShell)) as IVsUIShell;
+            IntPtr hwnd;
+            if (shell != null && ErrorHandler.Succeeded(shell.GetDialogOwnerHwnd(out hwnd)) &&
+                hwnd != IntPtr.Zero)
+                new System.Windows.Interop.WindowInteropHelper(dialog).Owner = hwnd;
+
+            if (dialog.ShowDialog() != true) return;
+            JavaPackageCreationPlan plan;
+            if (!JavaPackageCreationService.TryPlan(context.ProjectDirectory,
+                context.SelectedDirectory, context.IsProjectNode,
+                dialog.RelativePackageName, context.BuildHint, out plan, out error))
+            {
+                ShowError(services, error ?? "Package Java non valido.");
+                return;
+            }
+            try
+            {
+                // F2F1-CPS-FOLDER-FIX-BEGIN
+                // F2F1-EMPTY-PACKAGE-VISIBLE: aggiunge un item Folder esplicito
+                // al .javaproj, senza chiamare ProjectItems.AddFolder.
+                Directory.CreateDirectory(plan.TargetDirectory);
+                string includeError;
+                if (!JavaEmptyPackageProjectItems.TryInclude(
+                    context.Project.FullName, plan.TargetDirectory, out includeError))
+                {
+                    VsShellUtilities.ShowMessageBox(services,
+                        "Package '" + plan.FullPackageName + "' creato sul disco, ma non " +
+                        "ancora registrato nel file .javaproj.\n\n" + includeError +
+                        "\n\nAggiungi un file nel package oppure registra manualmente " +
+                        "<Folder Include=\"...\" /> nel progetto.",
+                        "Nuovo package Java", OLEMSGICON.OLEMSGICON_WARNING,
+                        OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+                }
+                // F2F1-CPS-FOLDER-FIX-END
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException ||
+                ex is COMException || ex is ArgumentException || ex is NotSupportedException)
+            {
+                ShowError(services, "Creazione del package non riuscita: " + ex.Message);
+            }
+        }
+
+        private static void ShowError(IServiceProvider services, string text)
+        {
+            VsShellUtilities.ShowMessageBox(services, text, "Nuovo package Java",
+                OLEMSGICON.OLEMSGICON_CRITICAL, OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+        }
+
+        // F2F1-MENU-HOTFIX-HIERARCHY-BEGIN
+        // Query the authoritative Solution Explorer selection, not only DTE.SelectedItems.
+        internal static void LogMenuState(string state)
+        {
+            try
+            {
+                if (string.Equals(_lastMenuState, state, StringComparison.Ordinal)) return;
+                _lastMenuState = state;
+                File.AppendAllText(Path.Combine(Path.GetTempPath(), "JavaCpsF2F1_MenuHotfix.log"),
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " | " + state + Environment.NewLine);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        private static string _lastMenuState;
+
+        private static bool TryGetContextFromHierarchy(IServiceProvider services,
+            out SelectionContext context)
+        {
+            context = null;
+            IVsMonitorSelection selection =
+                services.GetService(typeof(SVsShellMonitorSelection)) as IVsMonitorSelection;
+            if (selection == null) return false;
+            IntPtr hierarchyPtr = IntPtr.Zero;
+            IntPtr selectionPtr = IntPtr.Zero;
+            try
+            {
+                uint itemId;
+                IVsMultiItemSelect multi;
+                if (ErrorHandler.Failed(selection.GetCurrentSelection(out hierarchyPtr,
+                    out itemId, out multi, out selectionPtr)) ||
+                    hierarchyPtr == IntPtr.Zero || multi != null ||
+                    itemId == VSConstants.VSITEMID_NIL ||
+                    itemId == VSConstants.VSITEMID_SELECTION) return false;
+                IVsHierarchy hierarchy = Marshal.GetObjectForIUnknown(hierarchyPtr) as IVsHierarchy;
+                if (hierarchy == null) return false;
+
+                Project project = null;
+                object projectObject;
+                if (ErrorHandler.Succeeded(hierarchy.GetProperty(VSConstants.VSITEMID_ROOT,
+                    (int)__VSHPROPID.VSHPROPID_ExtObject, out projectObject)))
+                    project = projectObject as Project;
+
+                string projectFile = null;
+                try { if (project != null) projectFile = project.FullName; }
+                catch (COMException) { }
+                if (string.IsNullOrEmpty(projectFile) ||
+                    !projectFile.EndsWith(".javaproj", StringComparison.OrdinalIgnoreCase))
+                    hierarchy.GetCanonicalName(VSConstants.VSITEMID_ROOT, out projectFile);
+                if (string.IsNullOrEmpty(projectFile) ||
+                    !projectFile.EndsWith(".javaproj", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                projectFile = Path.GetFullPath(projectFile);
+                string projectDir = Path.GetDirectoryName(projectFile);
+                bool isRoot = itemId == VSConstants.VSITEMID_ROOT;
+                string folderPath = projectDir;
+                ProjectItem folder = null;
+                if (!isRoot)
+                {
+                    object folderObject;
+                    if (ErrorHandler.Succeeded(hierarchy.GetProperty(itemId,
+                        (int)__VSHPROPID.VSHPROPID_ExtObject, out folderObject)))
+                        folder = folderObject as ProjectItem;
+                    if (folder != null && TryGetFolderPath(folder, out folderPath)) { }
+                    else if (ErrorHandler.Failed(hierarchy.GetCanonicalName(itemId, out folderPath)) ||
+                        string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
+                        return false;
+                    folderPath = Path.GetFullPath(folderPath);
+                }
+                string buildHint = ReadBuildHint(projectFile);
+                string root, sourceRoot, existing, error;
+                if (!JavaPackageCreationService.TryGetBase(projectDir, folderPath,
+                    isRoot, buildHint, out root, out sourceRoot, out existing, out error))
+                    return false;
+                context = new SelectionContext
+                {
+                    Project = project, Folder = folder, ProjectDirectory = projectDir,
+                    SelectedDirectory = folderPath, IsProjectNode = isRoot,
+                    BuildHint = buildHint
+                };
+                return true;
+            }
+            catch (Exception ex) when (ex is COMException || ex is ArgumentException ||
+                ex is IOException || ex is NotSupportedException ||
+                ex is UnauthorizedAccessException || ex is InvalidCastException)
+            {
+                return false;
+            }
+            finally
+            {
+                if (hierarchyPtr != IntPtr.Zero) Marshal.Release(hierarchyPtr);
+                if (selectionPtr != IntPtr.Zero) Marshal.Release(selectionPtr);
+            }
+        }
+        // F2F1-MENU-HOTFIX-HIERARCHY-END
+        private static bool TryGetContext(IServiceProvider services, out SelectionContext context)
+        {
+            context = null;
+            if (TryGetContextFromHierarchy(services, out context)) return true;
+            DTE dte = services.GetService(typeof(SDTE)) as DTE;
+            if (dte == null) return false;
+            try
+            {
+                SelectedItems selection = dte.SelectedItems;
+                if (selection == null || selection.Count != 1) return false;
+                SelectedItem selected = selection.Item(1);
+                if (selected == null) return false;
+                ProjectItem folder = selected.ProjectItem;
+                Project project = folder == null ? selected.Project : folder.ContainingProject;
+                if (project == null) return false;
+                string filename = project.FullName;
+                if (string.IsNullOrWhiteSpace(filename) ||
+                    !filename.EndsWith(".javaproj", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                string projectDirectory = Path.GetDirectoryName(Path.GetFullPath(filename));
+                string selectedDirectory = projectDirectory;
+                bool projectNode = folder == null;
+                if (!projectNode && !TryGetFolderPath(folder, out selectedDirectory))
+                    return false;
+                string buildHint = ReadBuildHint(filename);
+                string root, sourceRoot, existing, error;
+                if (!JavaPackageCreationService.TryGetBase(projectDirectory,
+                    selectedDirectory, projectNode, buildHint, out root,
+                    out sourceRoot, out existing, out error)) return false;
+
+                context = new SelectionContext
+                {
+                    Project = project,
+                    Folder = folder,
+                    ProjectDirectory = projectDirectory,
+                    SelectedDirectory = selectedDirectory,
+                    IsProjectNode = projectNode,
+                    BuildHint = buildHint
+                };
+                return true;
+            }
+            catch (Exception ex) when (ex is COMException || ex is ArgumentException ||
+                ex is IOException || ex is NotSupportedException ||
+                ex is UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        private static bool TryGetFolderPath(ProjectItem item, out string path)
+        {
+            path = null;
+            try
+            {
+                if (item.Properties != null)
+                {
+                    Property property = item.Properties.Item("FullPath");
+                    string fullPath = property == null ? null : property.Value as string;
+                    if (!string.IsNullOrWhiteSpace(fullPath) && Directory.Exists(fullPath))
+                    {
+                        path = Path.GetFullPath(fullPath);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is COMException || ex is ArgumentException ||
+                ex is IOException || ex is NotSupportedException) { }
+            try
+            {
+                if (item.FileCount < 1) return false;
+                string file = item.FileNames[1];
+                if (string.IsNullOrWhiteSpace(file) || !Directory.Exists(file))
+                    return false;
+                path = Path.GetFullPath(file);
+                return true;
+            }
+            catch (Exception ex) when (ex is COMException || ex is ArgumentException ||
+                ex is IOException || ex is NotSupportedException) { return false; }
+        }
+
+        private static string ReadBuildHint(string projectFile)
+        {
+            try
+            {
+                var settings = new XmlReaderSettings
+                {
+                    XmlResolver = null, DtdProcessing = DtdProcessing.Prohibit
+                };
+                using (var reader = XmlReader.Create(projectFile, settings))
+                {
+                    XDocument document = XDocument.Load(reader);
+                    var node = document.Descendants()
+                        .FirstOrDefault(e => e.Name.LocalName == "JavaBuildSystem");
+                    if (node == null) return null;
+                    string value = node.Value.Trim();
+                    return value == "Maven" || value == "Gradle" || value == "Plain" ||
+                        value == "None" ? value : null;
+                }
+            }
+            catch (Exception ex) when (ex is XmlException || ex is IOException ||
+                ex is UnauthorizedAccessException) { return null; }
+        }
+
+    }
+}

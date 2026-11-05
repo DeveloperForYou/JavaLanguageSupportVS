@@ -30,6 +30,9 @@
     <PropertyPageSchema Include="$(MSBuildThisFileDirectory)JavaProject.JavaCompile.xaml">
       <Context>File;BrowseObject</Context>
     </PropertyPageSchema>
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)JavaProject.Folder.xaml">
+      <Context>File;BrowseObject</Context>
+    </PropertyPageSchema>
   </ItemGroup>
   <!-- F1 non compila Java via MSBuild: eseguire Maven/Gradle o comandi Java esistenti. -->
   <!-- Java CPS F1: file del progetto inclusi automaticamente (disattivabile con EnableDefaultJavaItems=false). -->

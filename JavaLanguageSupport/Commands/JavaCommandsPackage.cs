@@ -8,6 +8,7 @@ using JavaLanguageSupport.Build;
 using JavaLanguageSupport.Editor.Refactoring;
 using JavaLanguageSupport.Editor.Navigation;
 using JavaLanguageSupport.LanguageServer;
+using JavaLanguageSupport.ProjectSystem.Packages; // F2F1
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.TextManager.Interop;
@@ -24,6 +25,7 @@ namespace JavaLanguageSupport.Commands
     /// F5/breakpoint Java richiedono un engine AD7/integrazione DAP separata.
     /// </summary>
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
+    [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)] // F2F1-MENU-HOTFIX-AUTOLOAD
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // F2E3-TEMPLATE-WIZARD-BINDING
     [ProvideBindingPath]
@@ -53,6 +55,7 @@ namespace JavaLanguageSupport.Commands
         private const int GenerateConstructorId = 0x0123;
         private const int GenerateGettersSettersId = 0x0124;
         private const int OverrideImplementMethodsId = 0x0125;
+        private const int CreateJavaPackageId = 0x0126; // F2F1
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
@@ -87,6 +90,21 @@ namespace JavaLanguageSupport.Commands
             AddJavaContextCommand(service, GenerateConstructorId, JavaEditorOperation.GenerateConstructor);
             AddJavaContextCommand(service, GenerateGettersSettersId, JavaEditorOperation.GenerateGettersSetters);
             AddJavaContextCommand(service, OverrideImplementMethodsId, JavaEditorOperation.OverrideImplementMethods);
+            // F2F1-COMMAND-BEGIN
+            // Visible only for Java CPS project nodes and Java source-root folders.
+            var newPackage = new OleMenuCommand(
+                (s, e) => JavaNewPackageCommand.Execute(this),
+                new CommandID(CommandSet, CreateJavaPackageId));
+            newPackage.BeforeQueryStatus += (s, e) =>
+            {
+                bool available = JavaNewPackageCommand.CanExecute(this);
+                newPackage.Visible = available;
+                newPackage.Enabled = available;
+                JavaNewPackageCommand.LogMenuState(available ? "VISIBLE" : "HIDDEN");
+            };
+            service.AddCommand(newPackage);
+            JavaNewPackageCommand.LogMenuState("REGISTERED"); // F2F1-MENU-HOTFIX
+            // F2F1-COMMAND-END
         }
 
         // Solo nell'editor Java e soltanto quando il click destro è su un simbolo.
