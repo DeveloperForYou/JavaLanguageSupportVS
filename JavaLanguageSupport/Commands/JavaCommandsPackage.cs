@@ -100,10 +100,8 @@ namespace JavaLanguageSupport.Commands
                 bool available = JavaNewPackageCommand.CanExecute(this);
                 newPackage.Visible = available;
                 newPackage.Enabled = available;
-                JavaNewPackageCommand.LogMenuState(available ? "VISIBLE" : "HIDDEN");
             };
             service.AddCommand(newPackage);
-            JavaNewPackageCommand.LogMenuState("REGISTERED"); // F2F1-MENU-HOTFIX
             // F2F1-COMMAND-END
         }
 

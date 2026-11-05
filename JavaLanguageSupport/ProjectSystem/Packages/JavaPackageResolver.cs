@@ -127,6 +127,15 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             if (!TryNormalizeTarget(projectDirectory, directoryPath, out directory, out error))
                 return false;
 
+            // F2F7-CPS-FOLDER-PATH-NORMALIZATION
+            // CPS può restituire directory come '...\com\'. Path.GetFullPath
+            // conserva il separatore finale: senza normalizzazione il nome
+            // package diventa 'com.' e la validazione fallisce.
+            // Non eliminare il separatore da una radice di volume (es. C:\).
+            string volumeRoot = Path.GetPathRoot(directory);
+            if (!string.Equals(directory, volumeRoot, StringComparison.OrdinalIgnoreCase))
+                directory = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
             JavaSourceRootInfo root;
             if (!JavaSourceRootResolver.TryFindRootForPath(projectDirectory, directory,
                 out root, buildSystemHint, additionalRoots))

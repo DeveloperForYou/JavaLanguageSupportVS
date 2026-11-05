@@ -49,9 +49,10 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 return;
             }
 
+            // Pass the resolved base, not the raw CPS selection. The user can
+            // change source root and starting package inside the dialog.
             var dialog = new JavaNewPackageDialog(context.ProjectDirectory,
-                context.SelectedDirectory, context.IsProjectNode,
-                context.BuildHint, sourceRoot, existing);
+                root, context.IsProjectNode, context.BuildHint, sourceRoot, existing);
             var shell = services.GetService(typeof(SVsUIShell)) as IVsUIShell;
             IntPtr hwnd;
             if (shell != null && ErrorHandler.Succeeded(shell.GetDialogOwnerHwnd(out hwnd)) &&
@@ -61,7 +62,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             if (dialog.ShowDialog() != true) return;
             JavaPackageCreationPlan plan;
             if (!JavaPackageCreationService.TryPlan(context.ProjectDirectory,
-                context.SelectedDirectory, context.IsProjectNode,
+                dialog.SelectedBaseDirectory, dialog.UseProjectNode,
                 dialog.RelativePackageName, context.BuildHint, out plan, out error))
             {
                 ShowError(services, error ?? "Package Java non valido.");
@@ -103,21 +104,6 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
 
         // F2F1-MENU-HOTFIX-HIERARCHY-BEGIN
         // Query the authoritative Solution Explorer selection, not only DTE.SelectedItems.
-        internal static void LogMenuState(string state)
-        {
-            try
-            {
-                if (string.Equals(_lastMenuState, state, StringComparison.Ordinal)) return;
-                _lastMenuState = state;
-                File.AppendAllText(Path.Combine(Path.GetTempPath(), "JavaCpsF2F1_MenuHotfix.log"),
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " | " + state + Environment.NewLine);
-            }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
-
-        private static string _lastMenuState;
-
         private static bool TryGetContextFromHierarchy(IServiceProvider services,
             out SelectionContext context)
         {
@@ -129,14 +115,38 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             IntPtr selectionPtr = IntPtr.Zero;
             try
             {
+                // F2F5-SINGLE-SELECT-CPS: a CPS folder can arrive with
+                // VSITEMID_SELECTION and an IVsMultiItemSelect even when the
+                // user selected ONE folder. Do not discard that selection.
                 uint itemId;
                 IVsMultiItemSelect multi;
                 if (ErrorHandler.Failed(selection.GetCurrentSelection(out hierarchyPtr,
-                    out itemId, out multi, out selectionPtr)) ||
-                    hierarchyPtr == IntPtr.Zero || multi != null ||
-                    itemId == VSConstants.VSITEMID_NIL ||
+                    out itemId, out multi, out selectionPtr))) return false;
+
+                IVsHierarchy hierarchy = null;
+                if (multi != null)
+                {
+                    uint count;
+                    int singleHierarchy;
+                    if (ErrorHandler.Failed(multi.GetSelectionInfo(
+                            out count, out singleHierarchy)) || count != 1)
+                        return false;
+
+                    if (itemId == VSConstants.VSITEMID_SELECTION ||
+                        hierarchyPtr == IntPtr.Zero)
+                    {
+                        var selected = new VSITEMSELECTION[1];
+                        if (ErrorHandler.Failed(multi.GetSelectedItems(0, 1, selected)))
+                            return false;
+                        itemId = selected[0].itemid;
+                        hierarchy = selected[0].pHier;
+                    }
+                }
+
+                if (itemId == VSConstants.VSITEMID_NIL ||
                     itemId == VSConstants.VSITEMID_SELECTION) return false;
-                IVsHierarchy hierarchy = Marshal.GetObjectForIUnknown(hierarchyPtr) as IVsHierarchy;
+                if (hierarchy == null && hierarchyPtr != IntPtr.Zero)
+                    hierarchy = Marshal.GetObjectForIUnknown(hierarchyPtr) as IVsHierarchy;
                 if (hierarchy == null) return false;
 
                 Project project = null;
@@ -275,6 +285,61 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 TryResolveDirectory(projectDirectory, saveName as string, out directory))
                 return true;
 
+            // F2F3-CPS-BROWSE-PATH: use the folder's browse object (the same
+            // object displayed by the Properties toolwindow) when CPS does not
+            // expose an absolute GetMkDocument/canonical name.
+            object browse;
+            if (ErrorHandler.Succeeded(hierarchy.GetProperty(itemId,
+                    (int)__VSHPROPID.VSHPROPID_BrowseObject, out browse)) && browse != null)
+            {
+                try
+                {
+                    var props = System.ComponentModel.TypeDescriptor.GetProperties(browse);
+                    var fullPath = props.Find("FullPath", true);
+                    if (fullPath != null)
+                    {
+                        object value = fullPath.GetValue(browse);
+                        if (TryResolveDirectory(projectDirectory,
+                            value == null ? null : Convert.ToString(value), out directory))
+                            return true;
+                    }
+                }
+                catch (Exception ex) when (ex is COMException ||
+                    ex is ArgumentException || ex is NotSupportedException ||
+                    ex is System.Reflection.TargetInvocationException) { }
+            }
+
+            // Last fallback: walk VSHPROPID_Parent and compose folder names.
+            // This covers CPS nodes whose canonical name is a leaf only.
+            var parts = new System.Collections.Generic.Stack<string>();
+            uint current = itemId;
+            for (int depth = 0; depth < 80 && current != VSConstants.VSITEMID_ROOT; depth++)
+            {
+                object partValue;
+                if (ErrorHandler.Failed(hierarchy.GetProperty(current,
+                    (int)__VSHPROPID.VSHPROPID_Name, out partValue)) ||
+                    !(partValue is string)) break;
+                string name = ((string)partValue).Trim();
+                if (name.Length == 0 || name == "." || name == ".." ||
+                    name.IndexOfAny(new[] { '\\', '/' }) >= 0) break;
+                parts.Push(name);
+                object parentValue;
+                if (ErrorHandler.Failed(hierarchy.GetProperty(current,
+                    (int)__VSHPROPID.VSHPROPID_Parent, out parentValue)) ||
+                    parentValue == null) break;
+                try
+                {
+                    current = parentValue is uint
+                        ? (uint)parentValue
+                        : unchecked((uint)Convert.ToInt64(parentValue));
+                }
+                catch (Exception ex) when (ex is FormatException ||
+                    ex is InvalidCastException || ex is OverflowException) { break; }
+            }
+            if (current == VSConstants.VSITEMID_ROOT && parts.Count > 0 &&
+                TryResolveDirectory(projectDirectory,
+                    Path.Combine(parts.ToArray()), out directory))
+                return true;
             return false;
         }
 

@@ -14,6 +14,13 @@
       <Group guid="guidJavaToolsCmdSet" id="JavaPackageContextGroup" priority="0x0700">
         <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_PROJNODE" />
       </Group>
+      <!-- F2F4-FOLDER-MENU: direct native CPS context groups. -->
+      <Group guid="guidJavaToolsCmdSet" id="JavaPackageFolderGroup" priority="0x0750">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_FOLDERNODE" />
+      </Group>
+      <Group guid="guidJavaToolsCmdSet" id="JavaPackageItemGroup" priority="0x0750">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ITEMNODE" />
+      </Group>
       <!-- F2F1-MENU-HOTFIX-END -->
     </Groups>
     <Buttons>
@@ -110,15 +117,18 @@
   </Commands>
   <!-- F2F1-PLACEMENT-BEGIN -->
   <CommandPlacements>
-    <CommandPlacement guid="guidJavaToolsCmdSet" id="JavaPackageContextGroup" priority="0x0700">
-      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_FOLDERNODE" />
-    </CommandPlacement>
     <!-- Some CPS physical folder nodes use the generic ITEMNODE context menu.
          CanExecute filters out files and non-Java folders. -->
-    <CommandPlacement guid="guidJavaToolsCmdSet" id="JavaPackageContextGroup" priority="0x0750">
-      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ITEMNODE" />
+  
+    <!-- F2F4-FOLDER-MENU: Java package command on included folder/item nodes. -->
+    <!-- F2F5-NATIVE-FOLDER-ADD: gruppo cartelle standard di VS/CPS. -->
+    <CommandPlacement guid="guidJavaToolsCmdSet" id="cmdCreateJavaPackage" priority="0x0850">
+      <Parent guid="guidSHLMainMenu" id="IDG_VS_CTXT_FOLDER_ADD" />
     </CommandPlacement>
-  </CommandPlacements>
+    <CommandPlacement guid="guidJavaToolsCmdSet" id="cmdCreateJavaPackage" priority="0x0100">
+      <Parent guid="guidJavaToolsCmdSet" id="JavaPackageItemGroup" />
+    </CommandPlacement>
+</CommandPlacements>
   <!-- F2F1-PLACEMENT-END -->
   <Symbols>
     <GuidSymbol name="guidJavaToolsPackage" value="{75323116-62F6-483F-A9DD-F2A167762E41}" />
@@ -127,6 +137,8 @@
       <IDSymbol name="JavaToolsGroup" value="0x1020" />
       <!-- F2F1-MENU-GROUP-SYMBOL -->
       <IDSymbol name="JavaPackageContextGroup" value="0x1022" />
+      <IDSymbol name="JavaPackageFolderGroup" value="0x1023" />
+      <IDSymbol name="JavaPackageItemGroup" value="0x1024" />
       <IDSymbol name="cmdBuild" value="0x0100" />
       <IDSymbol name="cmdRun" value="0x0101" />
       <IDSymbol name="cmdTest" value="0x0102" />
