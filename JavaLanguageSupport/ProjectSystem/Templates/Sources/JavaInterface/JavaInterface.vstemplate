@@ -16,6 +16,6 @@
   </TemplateContent>
   <WizardExtension>
     <Assembly>JavaLanguageSupport, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null</Assembly>
-    <FullClassName>JavaLanguageSupport.ProjectSystem.Templates.Wizards.JavaItemTemplateWizard</FullClassName>
+    <FullClassName>JavaLanguageSupport.ProjectSystem.Templates.Wizards.JavaInterfacePackageWizard</FullClassName>
   </WizardExtension>
 </VSTemplate>

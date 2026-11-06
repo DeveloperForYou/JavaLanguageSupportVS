@@ -143,4 +143,29 @@
     <None Remove="ProjectSystem\BuildSystem\JavaProject.Folder.xaml" />
   </ItemGroup>
   <!-- F2D-ITEM-ICONS-END -->
+
+  <!-- F2G.1: seven Java item sources, shared by template and runtime -->
+  <ItemGroup>
+    <EmbeddedResource Include="ProjectSystem\Templates\Sources\JavaClass\Class.java">
+      <LogicalName>JavaTemplate.JavaClass</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="ProjectSystem\Templates\Sources\JavaAbstractClass\AbstractClass.java">
+      <LogicalName>JavaTemplate.JavaAbstractClass</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="ProjectSystem\Templates\Sources\JavaInterface\Interface.java">
+      <LogicalName>JavaTemplate.JavaInterface</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="ProjectSystem\Templates\Sources\JavaEnum\Enum.java">
+      <LogicalName>JavaTemplate.JavaEnum</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="ProjectSystem\Templates\Sources\JavaRecord\Record.java">
+      <LogicalName>JavaTemplate.JavaRecord</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="ProjectSystem\Templates\Sources\JavaAnnotation\Annotation.java">
+      <LogicalName>JavaTemplate.JavaAnnotation</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="ProjectSystem\Templates\Sources\JavaEmpty\NewFile.java">
+      <LogicalName>JavaTemplate.JavaEmpty</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
 </Project>

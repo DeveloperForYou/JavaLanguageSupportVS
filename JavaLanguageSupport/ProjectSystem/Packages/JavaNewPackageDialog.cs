@@ -578,9 +578,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             seen.Add(root.Path.TrimEnd('\\', '/'));
             var pending = new Stack<string>();
             if (Directory.Exists(root.Path)) pending.Push(root.Path);
-            const int maxPackages = 2000;
-            const int maxDepth = 28;
-            while (pending.Count > 0 && choices.Count < maxPackages)
+            while (pending.Count > 0)
             {
                 string parent = pending.Pop();
                 string[] children;
@@ -589,7 +587,6 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     ex is UnauthorizedAccessException) { continue; }
                 foreach (string dir in children.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
                 {
-                    if (choices.Count >= maxPackages) break;
                     string segment = Path.GetFileName(dir);
                     string invalid;
                     if (!JavaPackageResolver.TryValidatePackageName(segment, out invalid))
@@ -603,7 +600,6 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                         ex is UnauthorizedAccessException) { continue; }
                     string rel = dir.Substring(root.Path.TrimEnd('\\', '/').Length)
                         .TrimStart('\\', '/');
-                    if (rel.Split(Path.DirectorySeparatorChar).Length > maxDepth) continue;
                     if (!seen.Add(dir.TrimEnd('\\', '/'))) continue;
                     choices.Add(new PackageChoice {
                         Path = dir,
