@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>Package Java</Name>
+    <Description>Crea un package Java scegliendo source root e package di partenza.</Description>
+    <Icon>JavaPackage.ico</Icon>
+    <ProjectType>Java</ProjectType>
+    <AppliesTo>JavaLanguageSupportCps</AppliesTo>
+    <DefaultName>Package</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <SortOrder>5</SortOrder>
+    <TemplateID>{6A657FA9-CB3B-4191-85E8-4E858087C1B4}</TemplateID>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="false" TargetFileName="JavaPackage.placeholder">JavaPackage.placeholder</ProjectItem>
+  </TemplateContent>
+  <WizardExtension>
+    <Assembly>JavaLanguageSupport, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null</Assembly>
+    <FullClassName>JavaLanguageSupport.ProjectSystem.Templates.Wizards.JavaPackageItemTemplateWizard</FullClassName>
+  </WizardExtension>
+</VSTemplate>

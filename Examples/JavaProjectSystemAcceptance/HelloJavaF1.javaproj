@@ -22,4 +22,7 @@
   <ItemGroup>
     <Folder Include="src\main\java\com\example\controllers\" />
   </ItemGroup>
+  <ItemGroup>
+    <Folder Include="src\main\java\com\example\repositories\" />
+  </ItemGroup>
 </Project>
