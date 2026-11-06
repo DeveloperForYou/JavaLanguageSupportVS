@@ -48,6 +48,11 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         private readonly TextBlock _pathPreview;
         private readonly TextBlock _feedback;
         private readonly Button _create;
+
+        // F2F13-DYNAMIC-HEIGHT: il contenuto determina l'altezza naturale.
+        private ScrollViewer _dynamicScroll;
+        private StackPanel _dynamicBody;
+        private bool _fitQueued;
         private bool _normalizingNewPackageName;
 
         // F2F11-RELATIVE-NAME: il nome inserito e' sempre relativo al package scelto.
@@ -90,7 +95,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             _buildHint = buildHint;
 
             Title = "Nuovo package Java";
-            // F2F9-COMPACT-PACKAGE-DIALOG: compact default; resize and scrolling remain available.
+            // F2F9-COMPACT-PACKAGE-DIALOG: compact default; no resize, scrolling remain available.
             // F2F10-NATURAL-HEIGHT: start at the natural height of the controls.
             // The height is capped after the first layout to prevent dead space.
             Width = 680;
@@ -98,7 +103,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             MinWidth = 520;
             MinHeight = 390;
             MaxHeight = Math.Max(390, SystemParameters.WorkArea.Height - 26);
-            ResizeMode = ResizeMode.CanResize;
+            ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ShowInTaskbar = false;
             FontFamily = new FontFamily("Segoe UI");
@@ -147,6 +152,8 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             };
             var body = new StackPanel { Margin = new Thickness(22, 16, 22, 10) };
             scroll.Content = body;
+            _dynamicScroll = scroll;
+            _dynamicBody = body;
 
             var heading = Text("Crea un package Java", 18, true);
             heading.Margin = new Thickness(0, 0, 0, 3);
@@ -212,6 +219,9 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             _packagePreview = Detail("—", true);
             previewBody.Children.Add(_packagePreview);
             _pathPreview = Detail("", false);
+            // F2F13: mostra per intero anche un percorso su piu' righe.
+            _pathPreview.TextTrimming = TextTrimming.None;
+            _pathPreview.MaxHeight = double.PositiveInfinity;
             _pathPreview.Margin = new Thickness(0, 3, 0, 0);
             previewBody.Children.Add(_pathPreview);
             body.Children.Add(preview);
@@ -248,22 +258,17 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             {
                 _name.Focus();
                 System.Windows.Input.Keyboard.Focus(_name);
-
-                // F2F10-NATURAL-HEIGHT: the ScrollViewer stays available when
-                // the user makes the dialog smaller or when DPI/text grows.
-                // Do not allow dragging beyond the natural content height:
-                // it would create an empty region under the action buttons.
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    double fitted = ActualHeight;
-                    if (fitted <= 0 || double.IsNaN(fitted) ||
-                        double.IsInfinity(fitted)) return;
-                    double heightLimit = Math.Max(MinHeight,
-                        Math.Min(MaxHeight, Math.Ceiling(fitted)));
-                    Height = Math.Min(fitted, heightLimit);
-                    MaxHeight = heightLimit;
-                    SizeToContent = SizeToContent.Manual;
-                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
+                // F2F13: lascia SizeToContent.Height sempre attivo.
+                // La finestra cresce/diminuisce con l'anteprima.
+                ScheduleDynamicHeight();
+            };
+            SizeChanged += (sender, args) =>
+            {
+                // Se cambiano le dimensioni (anche per resizing orizzontale),
+                // aggiorna il limite all'altezza naturale, senza fascia vuota.
+                if (Math.Abs(args.NewSize.Width - args.PreviousSize.Width) > 0.5 ||
+                    args.NewSize.Height > args.PreviousSize.Height + 0.5)
+                    ScheduleDynamicHeight();
             };
             RefreshPreview();
         }
@@ -747,6 +752,37 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     : (error ?? "Nome package non valido.");
                 _create.IsEnabled = false;
             }
+            ScheduleDynamicHeight();
+        }
+
+        // F2F13-DYNAMIC-HEIGHT: misuriamo lo StackPanel con altezza infinita;
+        // misurare il solo ScrollViewer non funziona quando e' gia' scrollabile.
+        // La finestra resta SizeToContent.Height finche' l'utente non la ridimensiona
+        // manualmente. Se la riduce, la scrollbar Auto continua a funzionare.
+        private void ScheduleDynamicHeight()
+        {
+            if (!IsLoaded || _dynamicBody == null || _dynamicScroll == null || _fitQueued)
+                return;
+            _fitQueued = true;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _fitQueued = false;
+                if (!IsLoaded || _dynamicScroll.ActualWidth <= 0) return;
+                // Larghezza disponibile per il contenuto, mantenendo i margini.
+                double width = _dynamicScroll.ActualWidth;
+                _dynamicBody.Measure(new Size(width, double.PositiveInfinity));
+                double chrome = Math.Max(0, ActualHeight - _dynamicScroll.ActualHeight);
+                double fullHeight = Math.Ceiling(_dynamicBody.DesiredSize.Height + chrome + 2);
+                double screenLimit = Math.Max(MinHeight, SystemParameters.WorkArea.Height - 26);
+                double newLimit = Math.Max(MinHeight, Math.Min(screenLimit, fullHeight));
+                if (Math.Abs(MaxHeight - newLimit) > 1)
+                    MaxHeight = newLimit;
+                // Con SizeToContent.Height la finestra si aggiorna da sola.
+                // In modalita' manuale correggiamo solo un eccesso di altezza,
+                // rispettando l'eventuale ridimensionamento verso il basso.
+                if (SizeToContent == SizeToContent.Manual && ActualHeight > newLimit + 1)
+                    Height = newLimit;
+            }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
         private static TextBlock Text(string value, double size, bool bold)
