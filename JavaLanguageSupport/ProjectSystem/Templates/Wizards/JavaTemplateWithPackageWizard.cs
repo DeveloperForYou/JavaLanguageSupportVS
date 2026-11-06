@@ -69,8 +69,11 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
             bool specialDescriptors = _resource == "JavaTemplate.JavaEmpty";
             string projectDirectory = Path.GetDirectoryName(projectFile);
             string buildHint = ReadBuildHint(projectFile);
-            var dialog = new JavaTemplatePackageSelectDialog(projectDirectory,
-                selectedDirectory, buildHint, suggestedName, specialDescriptors);
+            // F2G2-PACKAGE-IN-ITEM-WIZARD: pass the exact .javaproj
+            // to register newly created empty folders as CPS Folder items.
+            var dialog = new JavaTemplatePackageSelectDialog(projectFile,
+                projectDirectory, selectedDirectory, buildHint,
+                suggestedName, specialDescriptors);
             if (dialog.ShowDialog() != true)
                 throw new WizardCancelledException();
 
@@ -191,7 +194,7 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
             return true;
         }
 
-        private static bool TryLocateProject(DTE dte, IVsProject project, uint parentItemId,
+        internal static bool TryLocateProject(DTE dte, IVsProject project, uint parentItemId,
             out string projectFile, out string selectedDirectory)
         {
             projectFile = null;
@@ -301,7 +304,7 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
             return true;
         }
 
-        private static string ReadBuildHint(string projectFile)
+        internal static string ReadBuildHint(string projectFile)
         {
             try
             {

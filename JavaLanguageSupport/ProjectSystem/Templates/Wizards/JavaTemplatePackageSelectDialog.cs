@@ -7,9 +7,11 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
+using JavaLanguageSupport.ProjectSystem.Packages;
 using JavaLanguageSupport.Editor.Navigation;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 
 namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
 {
@@ -27,6 +29,8 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
             public override string ToString() { return Label; }
         }
 
+        // F2G2-PACKAGE-IN-ITEM-WIZARD: needed to register empty CPS folders.
+        private readonly string _projectFile;
         private readonly string _projectDirectory;
         private readonly string _buildHint;
         private readonly string _initialDirectory;
@@ -53,10 +57,11 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
             }
         }
 
-        internal JavaTemplatePackageSelectDialog(string projectDirectory,
-            string initialDirectory, string buildHint, string fileName,
+        internal JavaTemplatePackageSelectDialog(string projectFile,
+            string projectDirectory, string initialDirectory, string buildHint, string fileName,
             bool allowSpecialDescriptors)
         {
+            _projectFile = Path.GetFullPath(projectFile);
             _projectDirectory = Path.GetFullPath(projectDirectory);
             _initialDirectory = Path.GetFullPath(initialDirectory);
             _buildHint = buildHint;
@@ -157,10 +162,21 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
             var right = new DockPanel { LastChildFill = true };
             Grid.SetColumn(right, 2);
             columns.Children.Add(right);
+            // Place the secondary action next to the package header so it
+            // does not take vertical space from the scrollable list.
+            var packageHeader = new DockPanel { LastChildFill = true,
+                Margin = new Thickness(0, 0, 0, 6) };
+            DockPanel.SetDock(packageHeader, Dock.Top);
+            right.Children.Add(packageHeader);
+            var createPackage = new Button { Content = "Nuovo package...",
+                Height = 26, MinWidth = 124, Margin = new Thickness(8, 0, 0, 0) };
+            JavaNavigationWindowStyle.ThemeNavigationActionButton(createPackage);
+            DockPanel.SetDock(createPackage, Dock.Right);
+            packageHeader.Children.Add(createPackage);
             var packageLabel = Label("PACKAGE ESISTENTE", 11, true);
-            packageLabel.Margin = new Thickness(0, 0, 0, 7);
-            DockPanel.SetDock(packageLabel, Dock.Top);
-            right.Children.Add(packageLabel);
+            packageLabel.VerticalAlignment = VerticalAlignment.Center;
+            packageHeader.Children.Add(packageLabel);
+            createPackage.Click += (sender, args) => CreatePackageFromItemWizard();
             _search = new TextBox {
                 Height = 28, Padding = new Thickness(8, 4, 8, 4),
                 Margin = new Thickness(0, 0, 0, 7),
@@ -208,6 +224,77 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
             };
         }
 
+        private void CreatePackageFromItemWizard()
+        {
+            var root = _roots.SelectedItem as Choice;
+            if (root == null) return;
+            var selected = _packages.SelectedItem as Choice;
+            string baseDirectory = selected != null ? selected.Path : root.Path;
+            JavaPackageInfo info;
+            string error;
+            if (!JavaPackageResolver.TryResolveForDirectory(_projectDirectory,
+                baseDirectory, out info, out error, _buildHint))
+            {
+                VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider, error ?? "Package non valido.",
+                    "Nuovo package Java", OLEMSGICON.OLEMSGICON_WARNING,
+                    OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                    OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+                return;
+            }
+            var dialog = new JavaNewPackageDialog(_projectDirectory,
+                baseDirectory, false, _buildHint,
+                info.SourceRoot.FullPath, info.Name);
+            if (dialog.ShowDialog() != true) return;
+
+            JavaPackageCreationPlan plan;
+            if (string.IsNullOrWhiteSpace(dialog.SelectedBaseDirectory) ||
+                !JavaPackageCreationService.TryPlan(_projectDirectory,
+                    dialog.SelectedBaseDirectory, dialog.UseProjectNode,
+                    dialog.RelativePackageName, _buildHint, out plan, out error))
+            {
+                VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider, error ?? "Nome package non valido.",
+                    "Nuovo package Java", OLEMSGICON.OLEMSGICON_WARNING,
+                    OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                    OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+                return;
+            }
+            try
+            {
+                Directory.CreateDirectory(plan.TargetDirectory);
+                string includeError;
+                if (!JavaEmptyPackageProjectItems.TryInclude(_projectFile,
+                    plan.TargetDirectory, out includeError))
+                {
+                    VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider,
+                        "Directory creata, ma non inclusa come Folder nel .javaproj:\n" + includeError,
+                        "Nuovo package Java", OLEMSGICON.OLEMSGICON_WARNING,
+                        OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                        OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+                }
+                // Keep the new Java file name and refresh the package list.
+                // The nested dialog may have selected a different source root.
+                _search.Text = string.Empty;
+                var newRoot = _roots.Items.OfType<Choice>()
+                    .FirstOrDefault(c => Same(c.Path, plan.SourceRootDirectory));
+                if (newRoot != null && !Same(root.Path, newRoot.Path))
+                    _roots.SelectedItem = newRoot; // triggers FillPackages()
+                else
+                    FillPackages();
+                _packages.SelectedItem = _packages.Items.OfType<Choice>()
+                    .FirstOrDefault(c => Same(c.Path, plan.TargetDirectory));
+                RefreshPreview();
+            }
+            catch (Exception ex) when (ex is IOException ||
+                ex is UnauthorizedAccessException || ex is ArgumentException ||
+                ex is NotSupportedException)
+            {
+                VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider, ex.Message, "Nuovo package Java",
+                    OLEMSGICON.OLEMSGICON_CRITICAL,
+                    OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                    OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+            }
+        }
+
         private static TextBlock Label(string text, double size, bool bold)
         {
             var block = new TextBlock {
@@ -233,7 +320,7 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
         // F2G1B-READABLE-LISTBOX: foreground esplicito sul testo delle righe.
         // Le ListBox CPS/WPF possono ignorare Foreground ereditato dalla finestra,
         // in particolare su item selezionati, hover e selezione senza focus.
-        private static ListBox MakeList(string accessibleName)
+        internal static ListBox MakeList(string accessibleName)
         {
             var list = new ListBox
             {

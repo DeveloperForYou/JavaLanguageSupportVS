@@ -16,4 +16,10 @@
     <None Include="pom.xml" />
     <None Include="README.md" Condition="Exists('README.md')" />
   </ItemGroup>
+  <ItemGroup>
+    <Folder Include="src\test\resources\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="src\main\resources\" />
+  </ItemGroup>
 </Project>

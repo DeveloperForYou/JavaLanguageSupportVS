@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>Cartella risorse Java</Name>
+    <Description>Crea src/main/resources o src/test/resources (non un package Java).</Description>
+    <Icon>JavaResources.ico</Icon>
+    <ProjectType>Java</ProjectType>
+    <AppliesTo>JavaLanguageSupportCps</AppliesTo>
+    <DefaultName>JavaResources</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <SortOrder>46</SortOrder>
+    <TemplateID>{20f8cc66-cd1f-451f-a23c-ab38cf62ecac}</TemplateID>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="false" TargetFileName="_JavaResources.marker">_JavaResources.marker</ProjectItem>
+  </TemplateContent>
+  <WizardExtension>
+    <Assembly>JavaLanguageSupport, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null</Assembly>
+    <FullClassName>JavaLanguageSupport.ProjectSystem.Templates.Wizards.JavaResourceFolderItemTemplateWizard</FullClassName>
+  </WizardExtension>
+</VSTemplate>

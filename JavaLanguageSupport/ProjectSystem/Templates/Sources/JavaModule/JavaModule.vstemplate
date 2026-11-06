@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>Modulo Java (JDK 9+)</Name>
+    <Description>Crea module-info.java nella radice dei sorgenti Java.</Description>
+    <Icon>JavaModule.ico</Icon>
+    <ProjectType>Java</ProjectType>
+    <AppliesTo>JavaLanguageSupportCps</AppliesTo>
+    <DefaultName>module-info.java</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <SortOrder>45</SortOrder>
+    <TemplateID>{31dca5aa-9f70-48d1-9b3e-48cefd87e4f9}</TemplateID>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="false" TargetFileName="module-info.java">module-info.java</ProjectItem>
+  </TemplateContent>
+  <WizardExtension>
+    <Assembly>JavaLanguageSupport, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null</Assembly>
+    <FullClassName>JavaLanguageSupport.ProjectSystem.Templates.Wizards.JavaModuleItemTemplateWizard</FullClassName>
+  </WizardExtension>
+</VSTemplate>
