@@ -5,6 +5,8 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Media;
 using JavaLanguageSupport.Editor.Navigation;
 using Microsoft.VisualStudio.PlatformUI;
@@ -46,8 +48,13 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         private readonly TextBlock _pathPreview;
         private readonly TextBlock _feedback;
         private readonly Button _create;
+        private bool _normalizingNewPackageName;
 
-        public string RelativePackageName { get { return _name.Text.Trim(); } }
+        // F2F11-RELATIVE-NAME: il nome inserito e' sempre relativo al package scelto.
+        public string RelativePackageName
+        {
+            get { return RelativeToSelectedPackage(_name == null ? null : _name.Text); }
+        }
 
         public string SelectedBaseDirectory
         {
@@ -83,11 +90,14 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             _buildHint = buildHint;
 
             Title = "Nuovo package Java";
-            Width = 720;
-            Height = 590;
-            MinWidth = 540;
-            MinHeight = 480;
-            MaxHeight = Math.Max(480, SystemParameters.WorkArea.Height - 26);
+            // F2F9-COMPACT-PACKAGE-DIALOG: compact default; resize and scrolling remain available.
+            // F2F10-NATURAL-HEIGHT: start at the natural height of the controls.
+            // The height is capped after the first layout to prevent dead space.
+            Width = 680;
+            SizeToContent = SizeToContent.WidthAndHeight;
+            MinWidth = 520;
+            MinHeight = 390;
+            MaxHeight = Math.Max(390, SystemParameters.WorkArea.Height - 26);
             ResizeMode = ResizeMode.CanResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ShowInTaskbar = false;
@@ -98,25 +108,23 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             SetResourceReference(ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
 
-            var layout = new DockPanel { LastChildFill = true };
+            // Actions follow the content, not the bottom edge of a tall window.
+            // This removes the empty band between the preview and buttons.
             var footer = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(22, 12, 24, 17)
+                Margin = new Thickness(0, 10, 0, 0)
             };
-            DockPanel.SetDock(footer, Dock.Bottom);
-            layout.Children.Add(footer);
-
             _create = new Button
             {
-                Content = "Crea package", MinWidth = 135, Height = 32,
+                Content = "Crea package", MinWidth = 120, Height = 30,
                 Margin = new Thickness(0, 0, 10, 0),
                 IsDefault = true, IsEnabled = false
             };
             var cancel = new Button
             {
-                Content = "Annulla", MinWidth = 108, Height = 32,
+                Content = "Annulla", MinWidth = 94, Height = 30,
                 IsCancel = true
             };
             JavaNavigationWindowStyle.ThemeNavigationActionButton(_create);
@@ -137,31 +145,30 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
             };
-            layout.Children.Add(scroll);
-            var body = new StackPanel { Margin = new Thickness(24, 22, 24, 12) };
+            var body = new StackPanel { Margin = new Thickness(22, 16, 22, 10) };
             scroll.Content = body;
 
-            var heading = Text("Crea un package Java", 21, true);
-            heading.Margin = new Thickness(0, 0, 0, 6);
+            var heading = Text("Crea un package Java", 18, true);
+            heading.Margin = new Thickness(0, 0, 0, 3);
             body.Children.Add(heading);
             var intro = Text("Scegli i sorgenti e il package esistente da cui partire. " +
-                "Scrivi soltanto il nome del nuovo package.", 12, false);
-            intro.Margin = new Thickness(0, 0, 0, 21);
+                "Scrivi soltanto il nome del nuovo package.", 11, false);
+            intro.Margin = new Thickness(0, 0, 0, 13);
             body.Children.Add(intro);
 
-            body.Children.Add(Section("1. RADICE DEI SORGENTI"));
+            body.Children.Add(Section("RADICE DEI SORGENTI"));
             _roots = Picker("Radice sorgenti Java");
-            _roots.Margin = new Thickness(0, 0, 0, 15);
+            _roots.Margin = new Thickness(0, 0, 0, 11);
             body.Children.Add(_roots);
 
-            body.Children.Add(Section("2. PACKAGE DI PARTENZA"));
+            body.Children.Add(Section("PACKAGE DI PARTENZA"));
             var searchLabel = Text("Cerca tra i package esistenti", 12, false);
-            searchLabel.Margin = new Thickness(0, 0, 0, 5);
+            searchLabel.Margin = new Thickness(0, 0, 0, 3);
             body.Children.Add(searchLabel);
             _packageSearch = new TextBox {
-                Height = 31, Padding = new Thickness(8, 4, 8, 4),
+                Height = 28, Padding = new Thickness(8, 3, 8, 3),
                 VerticalContentAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 7),
+                Margin = new Thickness(0, 0, 0, 5),
                 ToolTip = "Filtra i package per una parte del nome."
             };
             Theme(_packageSearch);
@@ -169,17 +176,17 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 "Cerca package di partenza (opzionale)");
             body.Children.Add(_packageSearch);
             _bases = Picker("Package di partenza");
-            _bases.Margin = new Thickness(0, 0, 0, 5);
+            _bases.Margin = new Thickness(0, 0, 0, 3);
             body.Children.Add(_bases);
             var packageHelp = Text("Cerca per una parte del nome (ad esempio controller), " +
                 "poi scegli il package dall'elenco, anche se è vuoto.", 11, false);
-            packageHelp.Margin = new Thickness(0, 0, 0, 19);
+            packageHelp.Margin = new Thickness(0, 0, 0, 12);
             body.Children.Add(packageHelp);
 
-            body.Children.Add(Section("3. NUOVO PACKAGE"));
+            body.Children.Add(Section("NUOVO PACKAGE"));
             _name = new TextBox
             {
-                Height = 34, Padding = new Thickness(9, 5, 9, 5),
+                Height = 28, Padding = new Thickness(9, 4, 9, 4),
                 VerticalContentAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 0, 5)
             };
@@ -188,14 +195,14 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             body.Children.Add(_name);
             var nameHelp = Text("Esempio: repository oppure models.dto. " +
                 "Non ripetere il nome del package di partenza.", 11, false);
-            nameHelp.Margin = new Thickness(0, 0, 0, 17);
+            nameHelp.Margin = new Thickness(0, 0, 0, 11);
             body.Children.Add(nameHelp);
 
             var preview = new Border
             {
-                CornerRadius = new CornerRadius(5),
+                CornerRadius = new CornerRadius(4),
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(14, 11, 14, 12)
+                Padding = new Thickness(12, 9, 12, 10)
             };
             preview.SetResourceReference(Border.BorderBrushProperty,
                 EnvironmentColors.ToolWindowBorderBrushKey);
@@ -205,14 +212,17 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             _packagePreview = Detail("—", true);
             previewBody.Children.Add(_packagePreview);
             _pathPreview = Detail("", false);
-            _pathPreview.Margin = new Thickness(0, 6, 0, 0);
+            _pathPreview.Margin = new Thickness(0, 3, 0, 0);
             previewBody.Children.Add(_pathPreview);
             body.Children.Add(preview);
             _feedback = Text("", 12, false);
-            _feedback.Margin = new Thickness(0, 8, 0, 0);
+            _feedback.Margin = new Thickness(0, 5, 0, 0);
             body.Children.Add(_feedback);
+            body.Children.Add(footer);
 
-            Content = layout;
+            // Scroll only when the window is made smaller or text requires it.
+            // On taller windows, the button row stays right below the preview.
+            Content = scroll;
             JavaNavigationWindowStyle.SetupWindow(this);
 
             FillRoots();
@@ -222,15 +232,136 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 FillPackages();
                 RefreshPreview();
             };
-            _bases.SelectionChanged += (sender, args) => RefreshPreview();
+            _bases.SelectionChanged += (sender, args) =>
+            {
+                RemoveRepeatedBaseFromTextBox();
+                RefreshPreview();
+            };
             _packageSearch.TextChanged += (sender, args) => ApplyPackageFilter();
-            _name.TextChanged += (sender, args) => RefreshPreview();
+            _name.TextChanged += (sender, args) =>
+            {
+                if (_normalizingNewPackageName) return;
+                RemoveRepeatedBaseFromTextBox();
+                RefreshPreview();
+            };
             Loaded += (sender, args) =>
             {
                 _name.Focus();
                 System.Windows.Input.Keyboard.Focus(_name);
+
+                // F2F10-NATURAL-HEIGHT: the ScrollViewer stays available when
+                // the user makes the dialog smaller or when DPI/text grows.
+                // Do not allow dragging beyond the natural content height:
+                // it would create an empty region under the action buttons.
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    double fitted = ActualHeight;
+                    if (fitted <= 0 || double.IsNaN(fitted) ||
+                        double.IsInfinity(fitted)) return;
+                    double heightLimit = Math.Max(MinHeight,
+                        Math.Min(MaxHeight, Math.Ceiling(fitted)));
+                    Height = Math.Min(fitted, heightLimit);
+                    MaxHeight = heightLimit;
+                    SizeToContent = SizeToContent.Manual;
+                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
             };
             RefreshPreview();
+        }
+
+        // F2F9: Visual Studio Dark's native ComboBox arrow becomes black on
+        // hover/focus in some VS/Windows templates. Use a compact custom chrome
+        // with an explicitly white arrow in Dark only. Light keeps the native
+        // Visual Studio template unchanged.
+        private static readonly ControlTemplate DarkPickerTemplate = CreateDarkPickerTemplate();
+
+        private static ControlTemplate CreateDarkPickerTemplate()
+        {
+            var template = new ControlTemplate(typeof(ComboBox));
+            var host = new FrameworkElementFactory(typeof(Grid));
+
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "JavaPickerChrome";
+            chrome.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
+            chrome.SetBinding(Border.BackgroundProperty, new Binding("Background")
+                { RelativeSource = RelativeSource.TemplatedParent });
+            chrome.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush")
+                { RelativeSource = RelativeSource.TemplatedParent });
+            host.AppendChild(chrome);
+
+            var label = new FrameworkElementFactory(typeof(TextBlock));
+            label.SetBinding(TextBlock.TextProperty, new Binding("SelectedItem")
+                { RelativeSource = RelativeSource.TemplatedParent });
+            label.SetBinding(TextBlock.ForegroundProperty, new Binding("Foreground")
+                { RelativeSource = RelativeSource.TemplatedParent });
+            label.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            label.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            label.SetValue(TextBlock.MarginProperty, new Thickness(10, 0, 36, 0));
+            host.AppendChild(label);
+
+            // The transparent button covers the whole picker, so clicking its
+            // text also opens the list; mouse-over never changes the arrow to black.
+            var toggle = new FrameworkElementFactory(typeof(ToggleButton));
+            toggle.Name = "JavaPickerToggle";
+            toggle.SetValue(UIElement.FocusableProperty, false);
+            toggle.SetBinding(ToggleButton.IsCheckedProperty, new Binding("IsDropDownOpen")
+                { RelativeSource = RelativeSource.TemplatedParent, Mode = BindingMode.TwoWay });
+            var toggleTemplate = new ControlTemplate(typeof(ToggleButton));
+            var hitArea = new FrameworkElementFactory(typeof(Grid));
+            hitArea.SetValue(Panel.BackgroundProperty, Brushes.Transparent);
+            var arrow = new FrameworkElementFactory(typeof(System.Windows.Shapes.Path));
+            arrow.SetValue(System.Windows.Shapes.Path.DataProperty, Geometry.Parse("M 0,0 L 4,4 L 8,0"));
+            arrow.SetValue(System.Windows.Shapes.Shape.StrokeProperty, Brushes.White);
+            arrow.SetValue(System.Windows.Shapes.Shape.StrokeThicknessProperty, 1.7);
+            arrow.SetValue(System.Windows.Shapes.Shape.StrokeStartLineCapProperty, PenLineCap.Round);
+            arrow.SetValue(System.Windows.Shapes.Shape.StrokeEndLineCapProperty, PenLineCap.Round);
+            arrow.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+                HorizontalAlignment.Right);
+            arrow.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            arrow.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 12, 0));
+            hitArea.AppendChild(arrow);
+            toggleTemplate.VisualTree = hitArea;
+            toggle.SetValue(Control.TemplateProperty, toggleTemplate);
+            host.AppendChild(toggle);
+
+            var popup = new FrameworkElementFactory(typeof(Popup));
+            popup.Name = "PART_Popup";
+            popup.SetValue(Popup.PlacementProperty, PlacementMode.Bottom);
+            popup.SetValue(Popup.AllowsTransparencyProperty, true);
+            popup.SetValue(Popup.StaysOpenProperty, false);
+            popup.SetBinding(Popup.PlacementTargetProperty, new Binding()
+                { RelativeSource = RelativeSource.TemplatedParent });
+            popup.SetBinding(Popup.IsOpenProperty, new Binding("IsDropDownOpen")
+                { RelativeSource = RelativeSource.TemplatedParent, Mode = BindingMode.TwoWay });
+
+            var popupBorder = new FrameworkElementFactory(typeof(Border));
+            popupBorder.Name = "JavaPickerPopupBorder";
+            popupBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            popupBorder.SetBinding(Border.BackgroundProperty, new Binding("Background")
+                { RelativeSource = RelativeSource.TemplatedParent });
+            popupBorder.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush")
+                { RelativeSource = RelativeSource.TemplatedParent });
+            popupBorder.SetBinding(FrameworkElement.WidthProperty, new Binding("ActualWidth")
+                { RelativeSource = RelativeSource.TemplatedParent });
+
+            var dropdownScroll = new FrameworkElementFactory(typeof(ScrollViewer));
+            dropdownScroll.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty,
+                ScrollBarVisibility.Auto);
+            dropdownScroll.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty,
+                ScrollBarVisibility.Disabled);
+            dropdownScroll.SetValue(ScrollViewer.CanContentScrollProperty, true);
+            dropdownScroll.SetBinding(FrameworkElement.MaxHeightProperty,
+                new Binding("MaxDropDownHeight")
+                { RelativeSource = RelativeSource.TemplatedParent });
+            var items = new FrameworkElementFactory(typeof(ItemsPresenter));
+            dropdownScroll.AppendChild(items);
+            popupBorder.AppendChild(dropdownScroll);
+            popup.AppendChild(popupBorder);
+            host.AppendChild(popup);
+
+            template.VisualTree = host;
+            return template;
         }
 
         // F2F4-THEMED-PICKER: WPF Popup is not painted by ComboBox.Background.
@@ -240,11 +371,11 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         {
             var picker = new ComboBox
             {
-                Height = 33, IsEditable = false,
+                Height = 30, IsEditable = false,
                 IsTextSearchEnabled = true, MaxDropDownHeight = 285,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 VerticalContentAlignment = VerticalAlignment.Center,
-                Padding = new Thickness(6, 2, 6, 2)
+                Padding = new Thickness(6, 1, 6, 1)
             };
             Theme(picker);
             AutomationProperties.SetName(picker, accessibleName);
@@ -290,6 +421,16 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             var selectionText = dark ? Brushes.White :
                 (Brush)new SolidColorBrush(Color.FromRgb(0x17, 0x2D, 0x42));
 
+            if (dark)
+            {
+                if (!ReferenceEquals(picker.Template, DarkPickerTemplate))
+                    picker.Template = DarkPickerTemplate;
+            }
+            else if (ReferenceEquals(picker.Template, DarkPickerTemplate))
+            {
+                picker.ClearValue(Control.TemplateProperty);
+            }
+
             picker.Background = background;
             picker.Foreground = text;
             picker.BorderBrush = borderBrush;
@@ -306,7 +447,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             itemStyle.Setters.Add(new Setter(Control.BackgroundProperty, background));
             itemStyle.Setters.Add(new Setter(Control.ForegroundProperty, text));
             itemStyle.Setters.Add(new Setter(Control.BorderBrushProperty, borderBrush));
-            itemStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(9, 5, 9, 5)));
+            itemStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 3, 8, 3)));
             var over = new Trigger
             {
                 Property = ComboBoxItem.IsHighlightedProperty, Value = true
@@ -492,6 +633,81 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             RefreshPreview();
         }
 
+        // F2F11-RELATIVE-NAME: calcola il package effettivo usando i percorsi
+        // reali, senza dipendere dalle etichette della ComboBox.
+        // Esempio: radice=src/main/java, base=com.example,
+        // input=com.example.controllers.rest => controllers.rest.
+        private string SelectedPackageName()
+        {
+            var root = _roots == null ? null : _roots.SelectedItem as SourceChoice;
+            var selected = _bases == null ? null : _bases.SelectedItem as PackageChoice;
+            if (root == null || selected == null ||
+                string.IsNullOrEmpty(root.Path) || string.IsNullOrEmpty(selected.Path))
+                return string.Empty;
+
+            string rootPath = root.Path.TrimEnd('\\', '/');
+            string selectedPath = selected.Path.TrimEnd('\\', '/');
+            string prefix = rootPath + Path.DirectorySeparatorChar;
+            if (!selectedPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return string.Empty; // Package predefinito o selezione incoerente.
+
+            return selectedPath.Substring(prefix.Length).Replace('\\', '.').Replace('/', '.');
+        }
+
+        private string RelativeToSelectedPackage(string entered)
+        {
+            string value = (entered ?? string.Empty).Trim();
+            string parent = SelectedPackageName();
+            if (parent.Length == 0) return value;
+
+            // Se l'utente scrive solo il parent non esiste un nuovo package:
+            // il piano riceve un nome vuoto, disabilitando "Crea package".
+            if (string.Equals(value, parent, StringComparison.OrdinalIgnoreCase))
+                return string.Empty;
+
+            // Rimuovere solo i segmenti completi: "com.examplex" NON e'
+            // lo stesso prefisso di "com.example".
+            string prefix = parent + ".";
+            return value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                ? value.Substring(prefix.Length) : value;
+        }
+
+        private void RemoveRepeatedBaseFromTextBox()
+        {
+            if (_normalizingNewPackageName || _name == null)
+                return;
+
+            string parent = SelectedPackageName();
+            if (parent.Length == 0)
+                return;
+
+            string current = _name.Text.Trim();
+            string prefix = parent + ".";
+
+            if (!current.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            string relative = current.Substring(prefix.Length);
+
+            // Non normalizzare finché l'utente non ha scritto
+            // almeno un carattere dopo il package di partenza.
+            if (relative.Length == 0)
+                return;
+
+            int caret = _name.CaretIndex;
+            _normalizingNewPackageName = true;
+            try
+            {
+                _name.Text = relative;
+
+                _name.CaretIndex = Math.Max(0,Math.Min(relative.Length, caret - prefix.Length));
+            }
+            finally
+            {
+                _normalizingNewPackageName = false;
+            }
+        }
+
         private bool CanPlan(out JavaPackageCreationPlan plan, out string error)
         {
             plan = null;
@@ -502,7 +718,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 return false;
             }
             return JavaPackageCreationService.TryPlan(_projectDirectory,
-                SelectedBaseDirectory, UseProjectNode, _name.Text, _buildHint,
+                SelectedBaseDirectory, UseProjectNode, RelativePackageName, _buildHint,
                 out plan, out error);
         }
 
@@ -549,13 +765,13 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         private static TextBlock Section(string value)
         {
             var block = Text(value, 11, true);
-            block.Margin = new Thickness(0, 0, 0, 7);
+            block.Margin = new Thickness(0, 0, 0, 5);
             return block;
         }
 
         private static TextBlock Detail(string value, bool bold)
         {
-            var block = Text(value, bold ? 15 : 12, bold);
+            var block = Text(value, bold ? 13 : 11, bold);
             block.TextTrimming = TextTrimming.CharacterEllipsis;
             block.MaxHeight = bold ? 42 : 50;
             block.ToolTip = value;
