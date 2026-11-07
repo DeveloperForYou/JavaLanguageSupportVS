@@ -1,4 +1,4 @@
-package com.example.newservice;
+package com.example.oldservice;
 
 public class Customer {
 

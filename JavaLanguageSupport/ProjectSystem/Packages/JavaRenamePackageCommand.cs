@@ -122,6 +122,12 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 if (new JavaPackageRenamePreviewDialog(plan).ShowDialog() != true) return;
                 EnsureReady(plan, services);
                 Apply(plan);
+                // The physical rename is committed. Notify JDT LS explicitly:
+                // CPS Solution Explorer is not necessarily an Open Folder workspace.
+                string workspaceNotice = await JavaWorkspaceRenameSync.NotifyRenameAsync(
+                    plan.OldDirectory, plan.NewDirectory, plan.MovedJavaFiles,
+                    plan.Files.Select(x => x.Path));
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Notify(services,
                     "Package rinominato correttamente.\n\n" +
                     "Da: " + oldName + "\nA:  " + newName + "\n\n" +
@@ -130,7 +136,9 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     "\nModifiche al codice: " + plan.EditCount +
                     "\n\nBackup: " + plan.BackupDirectory +
                     "\n\nL'annullamento globale con Ctrl+Z non è disponibile. " +
-                    "Per ripristinare l'intera rinomina usa Git o il backup.", false);
+                    "Per ripristinare l'intera rinomina usa Git o il backup." +
+                    (string.IsNullOrWhiteSpace(workspaceNotice) ? "" :
+                        "\n\n" + workspaceNotice), false);
             }
             catch (Exception ex)
             {

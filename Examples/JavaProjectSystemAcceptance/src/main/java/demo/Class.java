@@ -1,6 +1,6 @@
 package demo;
 
-import com.example.newservice.Customer;
+import com.example.oldservice.Customer;
 
 public class Class {
 	Customer customer = new Customer();

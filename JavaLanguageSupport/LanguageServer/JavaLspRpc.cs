@@ -58,6 +58,17 @@ namespace JavaLanguageSupport.LanguageServer
             }
         }
 
+        // Send a protocol notification (not a request). Used after successful
+        // CPS package changes so JDT LS can reconcile its Java project model.
+        internal static async Task<bool> NotifyAsync(string method, object parameters)
+        {
+            var current = Volatile.Read(ref rpc);
+            if (current == null) return false;
+            await current.NotifyWithParameterObjectAsync(method, parameters)
+                .ConfigureAwait(false);
+            return true;
+        }
+
         internal static string FileUri(ITextDocument document)
         {
             if (document == null || string.IsNullOrWhiteSpace(document.FilePath)) return null;
