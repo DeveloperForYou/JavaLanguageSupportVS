@@ -2,7 +2,7 @@
 
 Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 2026** (non Visual Studio Code). Le funzionalità semantiche si basano su [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls) tramite **Language Server Protocol (LSP)**; compilazione, esecuzione e test utilizzano JDK, Maven o Gradle.
 
-> **Stato del progetto (novembre 2026):** le fasi editoriali **A1–E3** sono state collaudate manualmente in Visual Studio 2026 Experimental. È inoltre presente un **Java Project System CPS sperimentale** per file `.javaproj` (**Pack F1**): apertura in Esplora soluzioni, gestione dei file, proprietà e inclusione automatica dei sorgenti. Il **Pack F2** aggiunge sette modelli Java nativi (F2A), le relative icone (F2B), un'icona personalizzata per il progetto (F2C, visualizzazione verificata) e moniker personalizzati per sorgenti e file Maven/Gradle/configurazione (F2D, implementati nei sorgenti; collaudo grafico completo ancora da completare). La build Java nativa via MSBuild, il debug Java integrato e JUnit/TestNG in Test Explorer restano da sviluppare. La stabilità dell'editor e i risultati di CPS si riferiscono ai collaudi manuali effettuati, non a tutte le versioni e i workspace.
+> **Stato del progetto (novembre 2026):** le fasi editor **A1–E3** e il **Java Project System CPS `.javaproj` (F1)** sono stati verificati manualmente in Visual Studio 2026 Experimental. I Pack **F2E–F2G** introducono rilevamento delle source root Maven/Gradle/Plain, creazione e visualizzazione dei package Java (anche vuoti), sette template Java con selezione del package di destinazione, creazione del package durante il wizard del template, `module-info.java` (JDK 9+) e cartelle `resources`. La creazione dei template e il flusso F2G.2 sono stati collaudati manualmente. Il **refactoring dei package e l'aggiornamento automatico degli `import` (F2H)** sono ancora da implementare; la build Java nativa via MSBuild, il debug Java integrato e JUnit/TestNG in Test Explorer non sono disponibili. I collaudi non garantiscono compatibilità con ogni workspace o versione di JDT LS.
 
 ## Funzionalità
 
@@ -26,7 +26,11 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | Progetti Spring Boot | **Supporto dedicato pianificato**; i comandi Maven/Gradle esistenti possono essere usati con progetti Spring Boot compatibili, ma non includono ancora funzionalità specifiche del framework |
 | Traduzione dell'interfaccia dell'estensione (localizzazione) | **Pianificata**: separazione delle stringhe dell'interfaccia e scelta della lingua, a partire da italiano e inglese |
 | Project System Java (`.javaproj`) in Esplora soluzioni | **Pack F1 implementato e collaudato manualmente**: apertura e struttura CPS, cartelle e file, rinomina, aggiunta/rimozione e proprietà; build MSBuild Java non ancora implementata |
-| Aggiungi nuovo elemento — modelli Java | **Pack F2A/F2B**: sette template nativi e relative icone; duplicati eliminati nel collaudo |
+| Aggiungi → Nuovo elemento — sorgenti Java | **Pack F2G.1**: sette template nativi (classe, classe astratta, interfaccia, enum, record, annotation, file vuoto), con scelta di source root, package e nome file; collaudati manualmente |
+| Nuovo package Java | **Pack F2E/F2F**: riconoscimento root Maven/Gradle/Plain, finestra WPF, validazione, package nidificati e registrazione delle cartelle vuote come `Folder` in `.javaproj` |
+| Nuovo package durante la creazione di un elemento | **Pack F2G.2**: pulsante «Nuovo package...» nel selettore dei sette template; il package appena creato viene selezionato automaticamente; collaudato |
+| Moduli Java e cartelle risorse | **Pack F2G.2**: `module-info.java` per JDK 9+ (anche `open module`), più `src/main/resources` e `src/test/resources`; collaudato |
+| Refactoring dei package Java | **Pack F2H pianificato**: rinomina/spostamento semantico di package, sincronizzazione CPS, aggiornamento di dichiarazioni `package` e `import` |
 | Icone in Esplora soluzioni | **Pack F2C/F2D**: icona del progetto verificata; moniker custom per sorgenti Java, Maven, Gradle e file di configurazione presenti nel repository; verifica grafica F2D ancora in corso |
 | Debug Java integrato (F5/F9/F10/F11) | **Non implementato** |
 | JUnit/TestNG in Test Explorer | **Non implementato** |
@@ -53,6 +57,11 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | **F2B** | Icone dei modelli di elemento Java | 🧪 Implementato; collaudo completo da confermare |
 | **F2C** | Icona personalizzata del progetto Java con varianti chiaro/scuro | ✅ Visualizzazione verificata |
 | **F2D** | Icone dedicate ai file Java, Maven, Gradle e correlati | 🧪 Implementato nei sorgenti; verifica grafica completa in corso |
+| **F2E** | Source root e validazione package Maven/Gradle/Plain | ✅ Resolver verificati |
+| **F2F** | Creazione package, icona, UI WPF, package vuoti e integrazione in Aggiungi → Nuovo elemento | ✅ Collaudato manualmente |
+| **F2G.1** | Sette template Java con scelta package e generazione del file nella directory corretta | ✅ Collaudato su tutti e sette i template |
+| **F2G.2** | Nuovo package dal wizard dei template, modulo JDK 9+ e cartelle risorse | ✅ Collaudato manualmente |
+| **F2H** | Refactoring package/import e spostamento sorgenti Java | 📋 Da implementare |
 | **Spring Boot** | Integrazione dedicata ai progetti Spring Boot | 📋 Pianificata |
 | **Localizzazione** | Interfaccia multilingua dell'estensione (italiano/inglese) | 📋 Pianificata |
 
@@ -83,7 +92,27 @@ Il **Pack F1** introduce il tipo di progetto `.javaproj` tramite CPS (Common Pro
 
 I file del progetto vengono caricati da `ProjectSystem/BuildSystem/JavaProject.targets`: `JavaCompile` include i `**/*.java`, mentre `None` raccoglie gli altri file (per esempio POM, Gradle, risorse, wrapper, README e configurazioni). Sono esclusi automaticamente output e directory temporanee come `bin/`, `obj/`, `target/`, `build/`, `.git/` e `.vs/`. Le inclusioni automatiche sono disattivabili con `EnableDefaultJavaItems=false`. La gestione dei file è integrata in Esplora soluzioni, ma **il target MSBuild `Build` non compila ancora Java**: usare Maven/Gradle o i comandi Java già disponibili.
 
-Il **Pack F2A** integra sette modelli nell'interfaccia nativa **Aggiungi → Nuovo elemento**: classe, classe astratta, interfaccia, enum, record, annotation e file Java vuoto. I modelli sono distribuiti come template VSIX e sono associati alla capability CPS; **F2B** aggiunge le relative icone. Il manifest VSIX registra i template con l'asset `Microsoft.VisualStudio.ItemTemplate`.
+Il **Pack F2A** integra sette modelli nell'interfaccia nativa **Aggiungi → Nuovo elemento**: classe, classe astratta, interfaccia, enum, record (JDK 16+), annotation e file Java vuoto. I modelli sono distribuiti come template VSIX e sono associati alla capability CPS; **F2B** aggiunge le relative icone. Il manifest VSIX registra i template con l'asset `Microsoft.VisualStudio.ItemTemplate`.
+
+#### Pack F2E–F2G — Source root, package e nuovi elementi Java
+
+Il resolver `ProjectSystem/Packages/JavaSourceRootResolver.cs` distingue i progetti **Maven**, **Gradle** e **Java semplici (Plain)**. Riconosce le root convenzionali `src/main/java`, `src/test/java` e, nei progetti semplici, `src/`; considera inoltre alcune root configurate nel POM e i source set Gradle individuati. `JavaPackageResolver.cs` calcola il nome del package a partire dalla root e verifica i segmenti Java. Le directory `resources` **non** sono package Java.
+
+Con **Aggiungi → Nuovo elemento → Package Java** si apre `JavaNewPackageDialog.cs`: è possibile scegliere la root, cercare un package esistente, indicare il nome relativo e verificare l'anteprima della destinazione. Sono supportati package nidificati e directory ancora vuote; `JavaEmptyPackageProjectItems.cs` le registra nel file `.javaproj` tramite `<Folder Include="..." />` per renderle visibili in Esplora soluzioni. La finestra utilizza il tema Visual Studio chiaro/scuro e l'elenco dei package non applica un limite numerico artificiale; l'enumerazione delle cartelle avviene tuttavia in modo sincrono, quindi strutture molto grandi possono richiedere tempo per il caricamento.
+
+I **sette template Java** utilizzano `JavaTemplateWithPackageWizard.cs` e `JavaTemplatePackageSelectDialog.cs`. La finestra permette di scegliere la source root, cercare il package, specificare il nome del nuovo file e visualizzarne il percorso completo. La dichiarazione `package` viene generata in base alla cartella selezionata e il file `.java` viene creato **in quella directory**, senza copie aggiuntive nella cartella inizialmente selezionata. Dal **Pack F2G.2** è anche disponibile il pulsante **Nuovo package...**: dopo la creazione, il nuovo package viene selezionato e si può completare la creazione della classe, interfaccia, enum, ecc.
+
+```text
+Aggiungi → Nuovo elemento → Classe Java
+    → Seleziona source root / package
+    → Nuovo package... (facoltativo)
+    → Crea package → Seleziona il package creato
+    → Crea classe
+```
+
+La finestra *Nuovo elemento* può riapparire quando si annulla un wizard; da lì si può scegliere un altro template o premere **Annulla**. I sette modelli Java e il flusso di creazione dei package nella finestra dei template sono stati **collaudati manualmente** in Visual Studio Experimental.
+
+**Ulteriori template F2G.2:** **Modulo Java (JDK 9+)** genera un `module-info.java` nella root dei sorgenti principali, con dichiarazione `module ... { }` oppure `open module ... { }`; non gestisce ancora automaticamente `requires`, `exports` o la configurazione del module path Maven/Gradle. **Cartella risorse Java** crea o registra `src/main/resources` o `src/test/resources` (percorsi standard Maven e Gradle), senza trattarle come package. Il file `_JavaResources.marker` è un segnaposto **interno al template VSIX** e non deve essere generato nel progetto dell'utente.
 
 Per le icone di Esplora soluzioni, `ProjectSystem/Icons/JavaProjectTreeIconProvider.cs` esporta un `IProjectTreePropertiesProvider` per i soli progetti Java CPS. **F2C** assegna l'icona al nodo principale; **F2D** utilizza `JavaProjectItemIcons.cs` per associare i nomi dei file ai moniker del catalogo `JavaProject.imagemanifest`. Le risorse Light/Dark 16×16 e 32×32 sono incorporate in `JavaLanguageSupport.dll` come risorse WPF; il manifest è registrato come asset `Microsoft.VisualStudio.ImageManifest`. I file non riconosciuti mantengono l'icona predefinita di Visual Studio.
 
@@ -201,7 +230,7 @@ Aprire **una cartella di esempio alla volta** e attendere l'indicizzazione inizi
 | `InlayHintsAcceptance/` | Inlay Hints (Pack E2): parametri e tipi dedotti da `var`, inclusi i casi degli hotfix |
 | `SemanticTokensAcceptance/`, `NavigationBarAcceptance/`, `EditorReliabilityAcceptance/` | Stabilità della colorazione, recupero dei simboli e verifica dell'editor (Pack E3); ripetere anche dopo il riavvio di VS Experimental |
 | `MavenHello/`, `GradleHello/` | Compilazione/esecuzione Maven e Gradle |
-| `JavaProjectSystemAcceptance/` | Progetto `HelloJavaF1.javaproj` per collaudo di CPS F1, dei template F2A/F2B e delle icone F2C/F2D |
+| `JavaProjectSystemAcceptance/` | Progetto `HelloJavaF1.javaproj` per collaudo CPS F1, root e package F2E/F2F, sette template F2G, moduli/risorse F2G.2 e icone F2C/F2D |
 
 I progetti di accettazione contengono spesso un proprio `README.md` con istruzioni dettagliate. **Alcuni README degli esempi più vecchi possono descrivere comportamenti anteriori agli hotfix**: per lo stato più recente fare riferimento a questa pagina e ai sorgenti correnti.
 
@@ -236,6 +265,7 @@ JavaLanguageSupportVS/
     ├── ProjectSystem/
     │   ├── Registration/
     │   ├── BuildSystem/
+    │   ├── Packages/
     │   ├── Templates/
     │   └── Icons/
     │       └── Files/
@@ -261,7 +291,8 @@ JavaLanguageSupportVS/
 | `Grammars` | Grammatica `java.tmLanguage.json` |
 | `ProjectSystem/Registration` | Registrazione del tipo CPS `.javaproj` e della capability `JavaLanguageSupportCps` |
 | `ProjectSystem/BuildSystem` | `.props`, `.targets` e schemi XAML per proprietà, tipi di elementi e inclusione file |
-| `ProjectSystem/Templates` | Sorgenti e archivi ZIP dei sette modelli Java nativi |
+| `ProjectSystem/Packages` | Rilevamento source root, validazione package, creazione delle directory e registrazione degli item CPS `Folder` |
+| `ProjectSystem/Templates` | Sorgenti `.vstemplate`, ZIP dei sette modelli Java e dei template Package/Modulo/Risorse, wizard e dialog WPF |
 | `ProjectSystem/Icons` | Provider CPS, mappatura moniker per file e PNG Light/Dark |
 | `JavaProject.imagemanifest` | Identificatori e sorgenti delle icone di progetto e dei file |
 
@@ -291,9 +322,15 @@ I file `JavaLanguageSupport.csproj` e `source.extension.vsixmanifest` restano ne
 
 I log locali e i workspace temporanei di JDT LS **non devono essere aggiunti al repository**. Ignorare inoltre `bin/`, `obj/`, `.vs/`, `.java-vs/` e i pacchetti `.vsix` generati.
 
+**Package o template non visibili in «Aggiungi → Nuovo elemento»:** usare l'istanza Experimental, ricompilare e distribuire la VSIX. Se la finestra presenta ancora template o icone vecchi, chiudere l'istanza e applicare `devenv /RootSuffix Exp /UpdateConfiguration`. Per i template, rigenerare gli ZIP con `JavaLanguageSupport/ProjectSystem/Templates/Build-JavaCpsItemTemplates-F2.ps1` quando si modificano i sorgenti `.vstemplate`.
+
+**Package Java e risorse:** la creazione di package richiede una source root Java valida; `src/main/resources` e `src/test/resources` sono cartelle risorse, non package. `_JavaResources.marker` è previsto solo nei sorgenti/archivi del template: se compare nel progetto dell'utente, va trattato come un problema del wizard.
+
 ## Limiti conosciuti
 
 - Il **Project System CPS `.javaproj` esiste** (Pack F1), ma la build Java tramite il target MSBuild `Build` non è ancora implementata; usare Maven/Gradle o i comandi Java esistenti.
+- **F2H non è implementato:** la normale rinomina/spostamento di una cartella CPS non garantisce l'aggiornamento delle dichiarazioni `package` né degli `import` Java. È previsto un refactoring semantico tramite JDT LS con anteprima e gestione delle operazioni sulle risorse.
+- **F2G.2:** il template `module-info.java` crea il descrittore di base, non imposta automaticamente `requires`, `exports` o i parametri di build; le cartelle risorse seguono i percorsi convenzionali e non rilevano ancora configurazioni personalizzate nei source set Gradle o nel POM.
 - I template e le icone di progetto/file sono sperimentali: F2C è stato verificato, mentre la resa completa delle icone dei file F2D nei diversi temi richiede ancora collaudo.
 - Il debugging Java con i comandi nativi dell'IDE e l'integrazione con Test Explorer sono **futuri**.
 - Non è ancora presente un'integrazione specifica per **Spring Boot**: il supporto Maven/Gradle è generico e non equivale a un riconoscimento o un avvio dedicato delle applicazioni Spring Boot.
@@ -321,6 +358,11 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 | **F2A–F2B** | Template Java nativi, eliminazione duplicati e icone dei modelli | 🧪 Modelli verificati; collaudo icone dei modelli da completare |
 | **F2C** | Icona personalizzata del progetto Java | ✅ Visualizzazione verificata |
 | **F2D** | Icone personalizzate per sorgenti Java e file Maven/Gradle | 🧪 Implementato; collaudo visivo da completare |
+| **F2E** | Risoluzione source root e nomi package Maven/Gradle/Plain | ✅ Implementato e verificato |
+| **F2F** | Nuovo package Java con WPF e nodi `Folder` CPS vuoti | ✅ Collaudato manualmente |
+| **F2G.1** | Selezione package per tutti e sette i template Java | ✅ Collaudato manualmente |
+| **F2G.2** | Nuovo package durante la creazione dei template, `module-info.java`, directory `resources` | ✅ Collaudato manualmente |
+| **F2H** | Rinomina/spostamento package e aggiornamento `package`/`import` via JDT LS | 📋 Prossima fase |
 | **Spring Boot** | Riconoscimento progetti, strumenti Spring e avvio dell'applicazione | 📋 Pianificato |
 | **Localizzazione** | Risorse testuali traducibili, italiano/inglese e selezione della lingua | 📋 Pianificata |
 | **Integrazione IDE** | Build Java nativa, debugger Java e JUnit/TestNG in Test Explorer; estensione delle funzioni CPS già presenti | 📋 Evoluzione futura |
@@ -329,7 +371,7 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 ### Evoluzioni successive
 
 1. Consolidare i comandi di **compilazione, esecuzione e test**, lanciati oggi da **Strumenti → Java**.
-2. **Evolvere il Project System Java CPS già presente** con build integrata, dipendenze Maven/Gradle e ulteriori operazioni native dell'IDE.
+2. **Completare il refactoring dei package Java (F2H)**: rinomina/spostamento tramite JDT LS, aggiornamento delle dichiarazioni `package` e degli `import`, anteprima, gestione delle rinomine di cartelle/file e sincronizzazione CPS. Successivamente evolvere build integrata e dipendenze Maven/Gradle.
 3. Integrare **debug Java** (breakpoint, step, variabili) con il flusso IDE.
 4. Integrare **JUnit/TestNG** nel Test Explorer.
 5. Progettare un **Designer Swing/AWT/JavaFX** con toolbox, proprietà, gerarchia componenti, anteprima e generazione/sincronizzazione del codice. Nessun designer visuale è attualmente disponibile.
@@ -351,4 +393,4 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 
 ---
 
-**Repository:** [DeveloperForYou/JavaLanguageSupportVS](https://github.com/DeveloperForYou/JavaLanguageSupportVS). La documentazione descrive i componenti presenti sul ramo principale al 3 novembre 2026, distinguendo i **collaudi manuali completati** dalle **funzionalità sperimentali** e da quelle **ancora pianificate**. Non costituisce una garanzia di compatibilità su tutte le versioni di Visual Studio, JDK e JDT LS.
+**Repository:** [DeveloperForYou/JavaLanguageSupportVS](https://github.com/DeveloperForYou/JavaLanguageSupportVS). Documentazione aggiornata al **7 novembre 2026**: distingue i **collaudi manuali completati**, le **funzionalità sperimentali** e quelle **ancora pianificate**. Non costituisce una garanzia di compatibilità su tutte le versioni di Visual Studio, JDK e JDT LS.
