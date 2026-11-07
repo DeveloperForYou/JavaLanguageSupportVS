@@ -601,7 +601,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 if (FileComparer.Equals(full, plan.ProjectFile))
                     throw new InvalidOperationException(
                         "Il file .javaproj è aperto nell'editor: salvalo e chiudi solo la " +
-                        "scheda del progetto prima di procedere. I file .java possono restare aperti.");
+                        "scheda del progetto prima di procedere. \nI file .java possono restare aperti.");
                 if (!document.Saved)
                     throw new InvalidOperationException(
                         "Salva le modifiche a " + full + " e riprova: " +
@@ -637,7 +637,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 if (!string.Equals(snapshot.GetText(), ReadUtf8(disk), StringComparison.Ordinal))
                     throw new InvalidOperationException(
                         "Il buffer aperto non corrisponde al file su disco: " + full +
-                        ". Salva e riprova, senza chiudere la scheda.");
+                        ". \nSalva e riprova, senza chiudere la scheda.");
                 string target = plan.MovedJavaFiles.Contains(full, FileComparer) ?
                     Path.Combine(plan.NewDirectory, Path.GetFileName(full)) : full;
                 plan.OpenFiles.Add(new LiveDocument { From = full, To = target,

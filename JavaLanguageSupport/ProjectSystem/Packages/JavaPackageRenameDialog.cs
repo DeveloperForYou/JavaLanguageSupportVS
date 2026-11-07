@@ -20,6 +20,10 @@ internal static partial class JavaRenamePackageCommand
             private readonly TextBlock pathPreview;
             private readonly TextBlock status;
             private readonly Button accept;
+            // F2H1D-NATURAL-HEIGHT: preserve a natural-height layout on resize.
+            private ScrollViewer layoutScroll;
+            private StackPanel layoutBody;
+            private bool layoutFitQueued;
             internal string NewPackageName { get; private set; }
 
             internal JavaPackageRenameDialog(string directory, string originalName)
@@ -27,7 +31,9 @@ internal static partial class JavaRenamePackageCommand
                 oldDirectory = directory;
                 oldName = originalName;
                 Title = "Rinomina package Java";
-                Width = 700; Height = 510; MinWidth = 560; MinHeight = 435;
+                Width = 700; MinWidth = 560; MinHeight = 400;
+                // Follow wrapped text, without allowing an empty strip above the footer.
+                SizeToContent = SizeToContent.Height;
                 ResizeMode = ResizeMode.CanResize;
                 ShowInTaskbar = false;
                 WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -57,6 +63,8 @@ internal static partial class JavaRenamePackageCommand
                 shell.Children.Add(scroll);
                 var body = new StackPanel { Margin = new Thickness(22, 18, 22, 15) };
                 scroll.Content = body;
+                layoutScroll = scroll;
+                layoutBody = body;
 
                 body.Children.Add(Text("Rinomina un package Java", 18, true));
                 var intro = Text("Scegli il nuovo nome. Prima di modificare i file, " +
@@ -106,10 +114,62 @@ internal static partial class JavaRenamePackageCommand
                 note.Margin = new Thickness(0, 8, 0, 0);
                 body.Children.Add(note);
 
-                field.TextChanged += (s, e) => Refresh();
+                field.TextChanged += (s, e) => { Refresh(); ScheduleNaturalHeight(); };
                 JavaNavigationWindowStyle.SetupWindow(this);
                 Refresh();
-                Loaded += (s, e) => { field.Focus(); field.SelectAll(); };
+                Loaded += (s, e) =>
+                {
+                    field.Focus();
+                    field.SelectAll();
+                    ScheduleNaturalHeight();
+                };
+                // The content can wrap differently when the window becomes narrower.
+                SizeChanged += (s, e) =>
+                {
+                    if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 0.5)
+                        ScheduleNaturalHeight();
+                };
+            }
+
+            // F2H1D-NATURAL-HEIGHT: the ScrollViewer is needed for smaller
+            // windows, but its viewport alone cannot tell us the full content size.
+            // Measure the StackPanel at the CURRENT usable width with unbounded
+            // height, then cap window growth at this natural height. The bottom
+            // buttons remain anchored without an unused strip over them.
+            private void ScheduleNaturalHeight()
+            {
+                if (!IsLoaded || layoutFitQueued || layoutScroll == null ||
+                    layoutBody == null) return;
+                layoutFitQueued = true;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    layoutFitQueued = false;
+                    if (!IsLoaded || layoutScroll.ActualWidth < 1 ||
+                        layoutScroll.ActualHeight < 1) return;
+                    double width = layoutScroll.ViewportWidth > 0 ?
+                        layoutScroll.ViewportWidth : layoutScroll.ActualWidth;
+                    layoutBody.Measure(new Size(width, double.PositiveInfinity));
+                    // Difference covers footer and non-client window chrome.
+                    double chrome = Math.Max(0, ActualHeight - layoutScroll.ActualHeight);
+                    double natural = Math.Ceiling(layoutBody.DesiredSize.Height + chrome + 3);
+                    double screenLimit = Math.Max(MinHeight,
+                        SystemParameters.WorkArea.Height - 26);
+                    double limit = Math.Max(MinHeight, Math.Min(screenLimit, natural));
+                    double previousLimit = MaxHeight;
+                    bool wasNatural = !double.IsInfinity(previousLimit) &&
+                        Math.Abs(ActualHeight - previousLimit) < 8;
+                    if (Math.Abs(MaxHeight - limit) > 1)
+                        MaxHeight = limit;
+                    // Dragging a resize thumb changes SizeToContent to Manual.
+                    // Respect a deliberately short window, retaining scrolling.
+                    // If the user was at the natural height, follow reflow on width changes.
+                    if (SizeToContent == SizeToContent.Manual)
+                    {
+                        if (ActualHeight > limit + 1 ||
+                            (wasNatural && ActualHeight < limit - 1))
+                            Height = limit;
+                    }
+                }), System.Windows.Threading.DispatcherPriority.Loaded);
             }
 
             private void Refresh()

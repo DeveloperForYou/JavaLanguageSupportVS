@@ -52,7 +52,7 @@ internal static partial class JavaRenamePackageCommand
                 heading.Children.Add(Text("Verifica le modifiche prima di applicarle", 18, true));
                 var explanation = Text("Visual Studio sposterà il package e " +
                     "aggiornerà i riferimenti individuati dall'analisi Java. " +
-                    "Seleziona un file nell'elenco per esaminare i dettagli.", 12, false);
+                    "\nSeleziona un file nell'elenco per esaminare i dettagli.", 12, false);
                 explanation.Margin = new Thickness(0, 5, 0, 13);
                 heading.Children.Add(explanation);
                 heading.Children.Add(SectionLabel("RINOMINA PREVISTA"));
@@ -76,7 +76,7 @@ internal static partial class JavaRenamePackageCommand
                 noteBorder.SetResourceReference(Border.BorderBrushProperty,
                     EnvironmentColors.ToolWindowBorderBrushKey);
                 noteBorder.Child = Text("Le schede Java aperte e salvate rimarranno tali. " +
-                    "Verrà creato un backup dei file prima della rinomina. " +
+                    "\nVerrà creato un backup dei file prima della rinomina. " +
                     "\nNon è ancora disponibile l'annullamento globale con Ctrl+Z: " +
                     "per ripristinare l'intera operazione usa Git o il backup.", 11, false);
                 heading.Children.Add(noteBorder);
@@ -96,7 +96,8 @@ internal static partial class JavaRenamePackageCommand
                 leftTitle.Margin = new Thickness(0, 0, 0, 8);
                 DockPanel.SetDock(leftTitle, Dock.Top); left.Children.Add(leftTitle);
                 var files = new TreeView();
-                Theme(files);
+                // La selezione resta visibile anche senza focus, in ogni tema.
+                JavaNavigationWindowStyle.SetupTree(files);
                 System.Windows.Controls.ScrollViewer.SetVerticalScrollBarVisibility(
                     files, ScrollBarVisibility.Auto);
                 left.Children.Add(files);
@@ -118,7 +119,8 @@ internal static partial class JavaRenamePackageCommand
 
                 string root = Path.GetDirectoryName(plan.ProjectFile);
                 var moving = new TreeViewItem {
-                    Header = "File da spostare (" + plan.MovedJavaFiles.Count + ")",
+                    Header = JavaNavigationWindowStyle.TreeHeader(
+                        "File da spostare (" + plan.MovedJavaFiles.Count + ")", true),
                     IsExpanded = true,
                     Tag = "La cartella verrà rinominata da:\n" + plan.OldDirectory +
                         "\n\na:\n" + plan.NewDirectory };
@@ -129,7 +131,8 @@ internal static partial class JavaRenamePackageCommand
                 {
                     string moved = Path.Combine(plan.NewDirectory, Path.GetFileName(file));
                     var item = new TreeViewItem {
-                        Header = Path.GetFileName(file),
+                        Header = JavaNavigationWindowStyle.TreeHeader(
+                            Path.GetFileName(file), false),
                         ToolTip = file,
                         Tag = "SPOSTAMENTO FILE\n\nDa: " + ShortPath(root, file) +
                             "\n\nA:  " + ShortPath(root, moved) +
@@ -139,7 +142,8 @@ internal static partial class JavaRenamePackageCommand
                     moving.Items.Add(item);
                 }
                 var edited = new TreeViewItem {
-                    Header = "Modifiche al codice (" + plan.Files.Count + " file)",
+                    Header = JavaNavigationWindowStyle.TreeHeader(
+                        "Modifiche al codice (" + plan.Files.Count + " file)", true),
                     IsExpanded = true,
                     Tag = "Seleziona un file per controllare gli aggiornamenti " +
                           "alle dichiarazioni package, agli import e ai riferimenti." };
@@ -162,7 +166,8 @@ internal static partial class JavaRenamePackageCommand
                     }
                     TreeViewItem newItem = new TreeViewItem
                     {
-                        Header = Path.GetFileName(doc.Path) + "  (" + doc.EditCount + ")",
+                        Header = JavaNavigationWindowStyle.TreeHeader(
+                            Path.GetFileName(doc.Path) + "  (" + doc.EditCount + ")", false),
                         ToolTip = doc.Path,
                         Tag = description.ToString()
                     };
@@ -177,8 +182,17 @@ internal static partial class JavaRenamePackageCommand
                 // A changed file is more informative than the group header.
                 var first = edited.Items.Count != 0 ? edited.Items[0] as TreeViewItem :
                     moving.Items.Count != 0 ? moving.Items[0] as TreeViewItem : null;
-                if (first != null) first.IsSelected = true;
                 JavaNavigationWindowStyle.SetupWindow(this);
+                // Dopo la creazione della struttura visiva: seleziona il primo file
+                // e mostra subito le sue modifiche nel pannello di destra.
+                Loaded += (sender, args) =>
+                {
+                    if (first == null) return;
+                    first.IsSelected = true;
+                    details.Text = first.Tag as string ?? "";
+                    first.BringIntoView();
+                    first.Focus();
+                };
             }
 
             private static string ShortPath(string root, string full)
