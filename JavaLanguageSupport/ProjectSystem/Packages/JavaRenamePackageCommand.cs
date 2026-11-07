@@ -89,11 +89,6 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 string project, directory, oldName, sourceRoot;
                 if (!JavaNewPackageCommand.TryGetSelectedJavaPackage(services,
                     out project, out directory, out oldName, out sourceRoot)) return;
-                if (!JavaLspRpc.Connected)
-                {
-                    Notify(services, "Il servizio Java non è disponibile. Apri un file Java e attendi l'indicizzazione.", true);
-                    return;
-                }
                 var dialog = new JavaPackageRenameDialog(directory, oldName);
                 if (dialog.ShowDialog() != true) return;
                 string newName = dialog.NewPackageName;
@@ -112,6 +107,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 string javaFile;
                 int line, column;
                 FindPackageDeclaration(directory, oldName, out javaFile, out line, out column);
+                await EnsureJavaLanguageServerAsync(services, javaFile);
                 var request = new
                 {
                     textDocument = new { uri = new Uri(javaFile).AbsoluteUri },
@@ -142,6 +138,51 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 Notify(services, ex.Message, true);
             }
             finally { Interlocked.Exchange(ref busy, 0); }
+        }
+
+        // The package context menu must not depend on a Java editor already
+        // being open. Opening an existing declaration through Visual Studio's
+        // Java editor activates the existing language client on demand.
+        // No files are modified and no refactoring is applied during startup.
+        private static async Task EnsureJavaLanguageServerAsync(
+            IServiceProvider services, string javaFile)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (JavaLspRpc.Connected && JavaLanguageStatus.IsInitialized)
+                return;
+
+            if (!File.Exists(javaFile))
+                throw new FileNotFoundException(
+                    "Il file Java necessario per inizializzare il servizio non esiste.", javaFile);
+            var dte = services.GetService(typeof(SDTE)) as DTE;
+            if (dte == null || dte.ItemOperations == null)
+                throw new InvalidOperationException(
+                    "Visual Studio non può aprire un file Java per avviare il servizio linguistico.");
+            try
+            {
+                // This opens a normal tab, without closing any existing Java tabs.
+                dte.ItemOperations.OpenFile(javaFile, EnvDTE.Constants.vsViewKindTextView);
+            }
+            catch (Exception ex) when (ex is COMException || ex is IOException ||
+                ex is ArgumentException || ex is UnauthorizedAccessException)
+            {
+                throw new InvalidOperationException(
+                    "Impossibile aprire il sorgente Java per avviare IntelliSense: " +
+                    ex.Message, ex);
+            }
+
+            // An established RPC stream is not the same as the completed
+            // initialize/initialized LSP handshake. Wait without freezing VS.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+            while (!JavaLspRpc.Connected || !JavaLanguageStatus.IsInitialized)
+            {
+                if (DateTime.UtcNow >= deadline)
+                    throw new InvalidOperationException(
+                        "Il servizio Java non ha completato l'avvio. " +
+                        "Controlla Strumenti → Java: Stato IntelliSense e riprova. " +
+                        "Nessuna rinomina è stata applicata.");
+                await Task.Delay(250);
+            }
         }
 
         private static void Notify(IServiceProvider services, string message, bool warning)

@@ -101,7 +101,7 @@ namespace JavaLanguageSupport.Commands
             {
                 bool available = JavaRenamePackageCommand.CanExecute(this);
                 renamePackage.Visible = available;
-                renamePackage.Enabled = available && JavaLspRpc.Connected;
+                renamePackage.Enabled = available;
             };
             service.AddCommand(renamePackage);
         }

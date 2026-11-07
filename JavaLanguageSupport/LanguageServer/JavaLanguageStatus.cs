@@ -15,6 +15,11 @@ namespace JavaLanguageSupport.LanguageServer
     internal static class JavaLanguageStatus
     {
         private static readonly object Sync = new object();
+        private static bool initialized;
+        internal static bool IsInitialized
+        {
+            get { lock (Sync) return initialized; }
+        }
         private static string state = "Non avviato (apri un file .java)";
         private static string lastError = "";
         private static string logPath = "";
@@ -71,6 +76,7 @@ namespace JavaLanguageSupport.LanguageServer
                 initializationSummary = "Initialize non intercettato";
                 codeActionSummary = "Nessuna Code Action registrata";
                 executeCommandSummary = "Nessun comando LSP eseguito";
+                initialized = false;
                 state = "Avvio JDT LS";
                 WriteInternal("JDT LS startup: " + DateTime.Now.ToString("O"));
                 WriteInternal("Java: " + javaExe);
@@ -93,6 +99,7 @@ namespace JavaLanguageSupport.LanguageServer
         {
             lock (Sync)
             {
+                initialized = true;
                 state = "LSP inizializzato (indicizzazione progetti eventualmente ancora in corso)";
                 WriteInternal("Handshake LSP completato.");
             }
@@ -103,6 +110,7 @@ namespace JavaLanguageSupport.LanguageServer
             lock (Sync)
             {
                 lastError = error ?? "Errore sconosciuto";
+                initialized = false;
                 state = "Errore";
                 WriteInternal("ERRORE: " + lastError);
             }
@@ -112,6 +120,7 @@ namespace JavaLanguageSupport.LanguageServer
         {
             lock (Sync)
             {
+                initialized = false;
                 state = "JDT LS terminato (exit code " + code + ")";
                 WriteInternal(state);
             }
@@ -121,6 +130,7 @@ namespace JavaLanguageSupport.LanguageServer
         {
             lock (Sync)
             {
+                initialized = false;
                 state = "Arrestato";
                 WriteInternal(state);
             }
