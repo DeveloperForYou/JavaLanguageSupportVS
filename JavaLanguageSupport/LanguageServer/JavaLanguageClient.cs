@@ -187,6 +187,10 @@ namespace JavaLanguageSupport.LanguageServer
                 folder = workspace == null ? null : workspace.Location;
             }
             catch (Exception) { /* Open Folder service may be unavailable. */ }
+            // CPS .javaproj is an actual Java workspace even if VS did not
+            // enter Open Folder mode. Isolate its JDT LS cache accordingly.
+            if (string.IsNullOrWhiteSpace(folder))
+                folder = JavaCpsWorkspaceContext.ProjectRoot;
             if (string.IsNullOrWhiteSpace(folder)) return "unscoped";
             try
             {

@@ -21,6 +21,7 @@ namespace JavaLanguageSupport.LanguageServer
             get { lock (Sync) return initialized; }
         }
         private static string state = "Non avviato (apri un file .java)";
+        private static string cpsProjectState = "Nessun progetto Java CPS rilevato.";
         private static string lastError = "";
         private static string logPath = "";
         private static string workspacePath = "";
@@ -82,6 +83,15 @@ namespace JavaLanguageSupport.LanguageServer
                 WriteInternal("Java: " + javaExe);
                 WriteInternal("Launcher: " + launcher);
                 WriteInternal("Dati JDT LS: " + workspace);
+            }
+        }
+
+        internal static void CpsProjectState(string message)
+        {
+            lock (Sync)
+            {
+                cpsProjectState = message ?? "";
+                WriteInternal("Java CPS: " + cpsProjectState);
             }
         }
 
@@ -261,6 +271,7 @@ namespace JavaLanguageSupport.LanguageServer
                 result.AppendLine("Aprire una CARTELLA Java con File > Apri > Cartella, poi un file .java.");
                 result.AppendLine("La sola colorazione non conferma che LSP sia connesso.");
                 result.AppendLine("RPC per Quick Info e import: " + (JavaLspRpc.Connected ? "collegato" : "non collegato"));
+                result.AppendLine("Java CPS: " + cpsProjectState);
                 result.AppendLine("Attivita' workspace JDT LS: " + JavaWorkspaceActivity.Summary);
                 result.AppendLine("Diagnostica Java (publishDiagnostics): " +
                     JavaDiagnosticsMonitor.Summary);

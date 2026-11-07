@@ -159,6 +159,18 @@ namespace JavaLanguageSupport.LanguageServer
                 // CodeActionContext.diagnostics. JDT LS requires the concrete
                 // unresolved-type diagnostic to propose missing imports.
                 JToken request = methodParam;
+                if (methodName == "initialize")
+                {
+                    // The project system is not the Open Folder workspace.
+                    // Give JDT LS the real .javaproj root before initialization.
+                    try { request = JavaCpsWorkspaceContext.PrepareInitialize(methodParam); }
+                    catch (Exception ex)
+                    {
+                        JavaLanguageStatus.CpsProjectState(
+                            "Impossibile impostare la root CPS: " + ex.Message);
+                        request = methodParam;
+                    }
+                }
                 if (methodName == "textDocument/codeAction")
                 {
                     try
@@ -192,7 +204,7 @@ namespace JavaLanguageSupport.LanguageServer
                 // Non modifichiamo nessun messaggio LSP.
                 if (methodName == "initialize")
                 {
-                    JavaLanguageStatus.LspInitialize(methodParam, response);
+                    JavaLanguageStatus.LspInitialize(request, response);
                     JavaSemanticLegend.ReadInitialize(response);
                     JToken provider = response == null ? null :
                         response.SelectToken("capabilities.completionProvider.resolveProvider");

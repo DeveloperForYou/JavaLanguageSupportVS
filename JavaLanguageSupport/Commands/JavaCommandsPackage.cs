@@ -9,6 +9,7 @@ using JavaLanguageSupport.Editor.Refactoring;
 using JavaLanguageSupport.Editor.Navigation;
 using JavaLanguageSupport.ProjectSystem.Packages;
 using JavaLanguageSupport.LanguageServer;
+using JavaLanguageSupport.ProjectSystem.Registration;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.TextManager.Interop;
@@ -56,6 +57,7 @@ namespace JavaLanguageSupport.Commands
         private const int GenerateConstructorId = 0x0123;
         private const int GenerateGettersSettersId = 0x0124;
         private const int OverrideImplementMethodsId = 0x0125;
+        private JavaCpsLanguageServerStartup cpsLanguageServerStartup;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
@@ -104,6 +106,28 @@ namespace JavaLanguageSupport.Commands
                 renamePackage.Enabled = available;
             };
             service.AddCommand(renamePackage);
+
+            // Load JDT LS when a CPS Java project is loaded, even without
+            // an open .java editor. This uses the existing MEF language client.
+            var solution = await GetServiceAsync(typeof(SVsSolution)) as IVsSolution;
+            var componentModel = await GetServiceAsync(typeof(SComponentModel))
+                as IComponentModel;
+            if (solution != null && componentModel != null)
+            {
+                cpsLanguageServerStartup =
+                    new JavaCpsLanguageServerStartup(solution, componentModel);
+                cpsLanguageServerStartup.Start();
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && cpsLanguageServerStartup != null)
+            {
+                cpsLanguageServerStartup.Dispose();
+                cpsLanguageServerStartup = null;
+            }
+            base.Dispose(disposing);
         }
 
         // Solo nell'editor Java e soltanto quando il click destro è su un simbolo.
