@@ -86,3 +86,26 @@ Table (RDT) e in `ITextDocument`. Le schede rimangono aperte.
   aperti e salvati, rinominare `oldservice` in `newservice`; verificare che le
   schede restino aperte con titoli e contenuti aggiornati. Ripetere con un
   documento dirty per verificare il rifiuto senza perdita di dati.
+
+## F2H.1c — Finestre WPF per la rinomina package
+
+Le finestre presentano un testo orientato all'utente, privo di numerazioni dei Pack:
+
+- **Rinomina package Java:** mostra nome attuale, ultimo segmento modificabile,
+  nome completo e directory di destinazione, validazione e spiegazione del flusso.
+- **Anteprima rinomina package Java:** presenta il prima/dopo, contatori distinti
+  (file da spostare, file da modificare, modifiche al codice) e un elenco ad albero
+  per esaminare i dettagli di ogni file, senza caselle che suggeriscano
+  erroneamente la possibilità di applicare modifiche parziali.
+- Resta visibile l'avviso: schede Java aperte e salvate preservate, backup
+  prima della rinomina, niente Undo globale; nessun file viene modificato
+  finché l'utente non conferma nell'anteprima.
+- Le versioni del Pack rimangono **soltanto** nei commenti, negli script di
+  manutenzione e nella documentazione tecnica; non nei titoli, nelle descrizioni,
+  nei messaggi o nelle anteprime delle finestre WPF.
+
+**Test manuali:** aprire schede Java salvate, avviare la rinomina del package,
+verificare anteprima, nome nuovo, destinazione, categorie file e dettagli.
+Provare anche nome invariato, segmento non valido, cartella esistente e
+annullamento. La compilazione C# e l'esecuzione in VS Experimental vanno
+verificate dopo l'applicazione.
