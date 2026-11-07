@@ -323,14 +323,8 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 foreach (string file in Directory.GetFiles(directory, "*.java"))
                 {
                     if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
-                        throw new NotSupportedException(
-                            "La rinomina non supporta sorgenti collegati: " + file);
-                    if (new FileInfo(file).Length > 16L * 1024 * 1024)
-                        throw new NotSupportedException("Sorgente Java troppo grande: " + file);
+                        throw new NotSupportedException("La rinomina non supporta sorgenti collegati: " + file);
                     sources.Add(Path.GetFullPath(file));
-                    if (sources.Count > 500)
-                        throw new NotSupportedException(
-                            "La rinomina di package supporta fino a 500 file Java.");
                 }
                 foreach (string child in Directory.GetDirectories(directory))
                     pending.Push(child);
