@@ -112,6 +112,8 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
                     stream.Write(encoded, 0, encoded.Length);
                 _createdFile = targetFile;
                 _dte = dte;
+                // F2I5-CPS-CREATION-SYNC: the file exists on disk now.
+                JavaWorkspaceCreationSync.QueueCreatedFile(projectFile, targetFile);
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException ||
                 ex is ArgumentException || ex is NotSupportedException)

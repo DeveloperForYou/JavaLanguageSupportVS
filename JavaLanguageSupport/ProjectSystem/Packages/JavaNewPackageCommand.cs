@@ -73,10 +73,14 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 // F2F1-CPS-FOLDER-FIX-BEGIN
                 // F2F1-EMPTY-PACKAGE-VISIBLE: aggiunge un item Folder esplicito
                 // al .javaproj, senza chiamare ProjectItems.AddFolder.
+                // F2I5-CPS-CREATION-SYNC: capture genuinely new folders.
+                string[] newlyCreated = JavaWorkspaceCreationSync.MissingDirectories(
+                    context.ProjectFile, plan.TargetDirectory);
                 Directory.CreateDirectory(plan.TargetDirectory);
                 string includeError;
-                if (!JavaEmptyPackageProjectItems.TryInclude(
-                    context.ProjectFile, plan.TargetDirectory, out includeError))
+                bool included = JavaEmptyPackageProjectItems.TryInclude(
+                    context.ProjectFile, plan.TargetDirectory, out includeError);
+                if (!included)
                 {
                     VsShellUtilities.ShowMessageBox(services,
                         "Package '" + plan.FullPackageName + "' creato sul disco, ma non " +
@@ -86,6 +90,9 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                         "Nuovo package Java", OLEMSGICON.OLEMSGICON_WARNING,
                         OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
                 }
+                if (included)
+                    JavaWorkspaceCreationSync.QueueCreatedDirectories(
+                        context.ProjectFile, newlyCreated);
                 // F2F1-CPS-FOLDER-FIX-END
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException ||

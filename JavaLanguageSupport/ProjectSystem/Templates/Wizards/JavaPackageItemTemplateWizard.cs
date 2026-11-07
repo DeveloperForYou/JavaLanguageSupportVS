@@ -77,10 +77,14 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
 
             try
             {
+                // F2I5-CPS-CREATION-SYNC
+                string[] newlyCreated = JavaWorkspaceCreationSync.MissingDirectories(
+                    projectFile, plan.TargetDirectory);
                 Directory.CreateDirectory(plan.TargetDirectory);
                 string includeError;
-                if (!JavaEmptyPackageProjectItems.TryInclude(projectFile,
-                    plan.TargetDirectory, out includeError))
+                bool included = JavaEmptyPackageProjectItems.TryInclude(projectFile,
+                    plan.TargetDirectory, out includeError);
+                if (!included)
                 {
                     // The directory may have been created. Never claim rollback.
                     VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider,
@@ -89,6 +93,9 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
                         OLEMSGICON.OLEMSGICON_WARNING, OLEMSGBUTTON.OLEMSGBUTTON_OK,
                         OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
                 }
+                if (included)
+                    JavaWorkspaceCreationSync.QueueCreatedDirectories(
+                        projectFile, newlyCreated);
             }
             catch (Exception ex) when (ex is IOException || ex is ArgumentException ||
                 ex is UnauthorizedAccessException || ex is NotSupportedException)

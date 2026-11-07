@@ -260,10 +260,14 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
             }
             try
             {
+                // F2I5-CPS-CREATION-SYNC
+                string[] newlyCreated = JavaWorkspaceCreationSync.MissingDirectories(
+                    _projectFile, plan.TargetDirectory);
                 Directory.CreateDirectory(plan.TargetDirectory);
                 string includeError;
-                if (!JavaEmptyPackageProjectItems.TryInclude(_projectFile,
-                    plan.TargetDirectory, out includeError))
+                bool included = JavaEmptyPackageProjectItems.TryInclude(_projectFile,
+                    plan.TargetDirectory, out includeError);
+                if (!included)
                 {
                     VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider,
                         "Directory creata, ma non inclusa come Folder nel .javaproj:\n" + includeError,
@@ -271,6 +275,9 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
                         OLEMSGBUTTON.OLEMSGBUTTON_OK,
                         OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
                 }
+                if (included)
+                    JavaWorkspaceCreationSync.QueueCreatedDirectories(
+                        _projectFile, newlyCreated);
                 // Keep the new Java file name and refresh the package list.
                 // The nested dialog may have selected a different source root.
                 _search.Text = string.Empty;

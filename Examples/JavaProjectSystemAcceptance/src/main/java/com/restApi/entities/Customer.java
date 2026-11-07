@@ -1,6 +1,8 @@
 package com.restApi.entities;
 
-public class Customer {
+import com.restApi.entities.abstractEntities.AbstractClass;
+
+public class Customer extends AbstractClass{
 
     private String name;
 

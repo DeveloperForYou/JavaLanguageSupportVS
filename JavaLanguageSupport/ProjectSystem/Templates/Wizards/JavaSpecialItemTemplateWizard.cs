@@ -109,6 +109,9 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
             byte[] bytes = new UTF8Encoding(false, true).GetBytes(source);
             try
             {
+                // F2I5-CPS-CREATION-SYNC: module source root might be new.
+                string[] newlyCreated = JavaWorkspaceCreationSync.MissingDirectories(
+                    projectFile, destination);
                 // A newly created Maven/Gradle project may have no source tree yet.
                 Directory.CreateDirectory(destination);
                 using (var stream = new FileStream(moduleFile, FileMode.CreateNew,
@@ -116,6 +119,8 @@ namespace JavaLanguageSupport.ProjectSystem.Templates.Wizards
                     stream.Write(bytes, 0, bytes.Length);
                 _createdFile = moduleFile;
                 _dte = dte;
+                JavaWorkspaceCreationSync.QueueCreated(projectFile,
+                    newlyCreated, new[] { moduleFile });
             }
             catch (Exception ex) when (ex is IOException ||
                 ex is UnauthorizedAccessException || ex is ArgumentException ||
