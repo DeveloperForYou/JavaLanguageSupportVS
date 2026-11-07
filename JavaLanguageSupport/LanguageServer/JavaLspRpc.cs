@@ -69,6 +69,19 @@ namespace JavaLanguageSupport.LanguageServer
             return true;
         }
 
+        // F2I3-JAVA-MODEL-REFRESH: unlike RequestAsync, preserve errors for
+        // commands which schedule an Eclipse project refresh. A void reply is OK.
+        internal static async Task<bool> ExecuteWorkspaceCommandStrictAsync(
+            string command, object[] arguments)
+        {
+            var current = Volatile.Read(ref rpc);
+            if (current == null) return false;
+            await current.InvokeWithParameterObjectAsync<JToken>(
+                "workspace/executeCommand", new { command, arguments },
+                CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+
         internal static string FileUri(ITextDocument document)
         {
             if (document == null || string.IsNullOrWhiteSpace(document.FilePath)) return null;

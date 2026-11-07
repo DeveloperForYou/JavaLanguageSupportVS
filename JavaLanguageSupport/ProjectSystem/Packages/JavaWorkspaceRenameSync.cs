@@ -19,7 +19,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         private static readonly StringComparer Paths =
             StringComparer.OrdinalIgnoreCase;
 
-        internal static async Task<string> NotifyRenameAsync(string oldDirectory,
+        internal static async Task<string> NotifyRenameAsync(string projectFile, string oldDirectory,
             string newDirectory, IEnumerable<string> movedFiles,
             IEnumerable<string> changedFiles)
         {
@@ -71,8 +71,46 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     new { changes = notifications }).ConfigureAwait(false);
                 Trace.WriteLine("[Java CPS] workspace/didChangeWatchedFiles: " +
                     (transmitted ? "inviati " + notifications.Count + " eventi" : "client scollegato"));
-                return transmitted ? null :
-                    "JDT LS si è scollegato: riapri il progetto per aggiornare l'indice Java.";
+                if (!transmitted)
+                    return "JDT LS si è scollegato: riapri il progetto per aggiornare l'indice Java.";
+
+                // F2I3-JAVA-MODEL-REFRESH: didChangeWatchedFiles does not
+                // guarantee refreshLocal on an Eclipse package directory which
+                // was moved by CPS rather than by JDT itself. Ask JDT LS to
+                // update its imported project (refreshLocal DEPTH_INFINITE).
+                // JDT LS executes this operation as a background WorkspaceJob:
+                // successful RPC means scheduled, NOT indexing completed.
+                if (string.IsNullOrWhiteSpace(projectFile) ||
+                    !string.Equals(Path.GetExtension(projectFile), ".javaproj",
+                        StringComparison.OrdinalIgnoreCase) || !File.Exists(projectFile))
+                    return "Progetto CPS non disponibile: aggiornamento modello Java non richiesto.";
+                string projectRoot = Path.GetDirectoryName(Path.GetFullPath(projectFile));
+                if (!Inside(projectRoot, oldRoot) || !Inside(projectRoot, newRoot))
+                    return "La rinomina è esterna al progetto Java: aggiornamento modello non richiesto.";
+                string projectUri = DirectoryUri(projectRoot);
+
+                // In JDT LS, java.project.changeImportedProjects accepts three
+                // lists: project roots to IMPORT, to UPDATE, and to DELETE.
+                // The UPDATE list is index 1 in ProjectsManager's dispatcher.
+                // Never delete or replace the imported project here.
+                bool queued;
+                try
+                {
+                    queued = await JavaLspRpc.ExecuteWorkspaceCommandStrictAsync(
+                        "java.project.changeImportedProjects",
+                        new object[] { new string[0], new[] { projectUri }, new string[0] })
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine("[Java CPS] Aggiornamento modello Java: " + ex);
+                    return "File sincronizzati, ma JDT LS non ha accettato la richiesta " +
+                        "di aggiornamento del progetto: " + ex.Message;
+                }
+                if (!queued)
+                    return "Connessione JDT LS interrotta prima dell'aggiornamento del progetto.";
+                Trace.WriteLine("[Java CPS] Richiesto aggiornamento modello Java: " + projectUri);
+                return null;
             }
             catch (Exception ex)
             {
@@ -82,6 +120,16 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 return "Package rinominato, ma la sincronizzazione di JDT LS non è riuscita: " +
                     ex.Message + ". Riapri il progetto per aggiornare l'indice.";
             }
+        }
+
+        // F2I3-JAVA-MODEL-REFRESH: do not send a refresh for another project.
+        private static bool Inside(string root, string candidate)
+        {
+            string a = Path.GetFullPath(root).TrimEnd('\\', '/');
+            string b = Path.GetFullPath(candidate).TrimEnd('\\', '/');
+            return Paths.Equals(a, b) ||
+                b.StartsWith(a + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool SameParent(string file, string parent)

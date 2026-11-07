@@ -125,7 +125,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 // The physical rename is committed. Notify JDT LS explicitly:
                 // CPS Solution Explorer is not necessarily an Open Folder workspace.
                 string workspaceNotice = await JavaWorkspaceRenameSync.NotifyRenameAsync(
-                    plan.OldDirectory, plan.NewDirectory, plan.MovedJavaFiles,
+                    plan.ProjectFile, plan.OldDirectory, plan.NewDirectory, plan.MovedJavaFiles,
                     plan.Files.Select(x => x.Path));
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Notify(services,
