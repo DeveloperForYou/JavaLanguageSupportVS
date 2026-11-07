@@ -1,5 +1,7 @@
 package demo;
 
-public class Class {
+import com.example.oldservice.Customer;
 
+public class Class {
+	Customer customer = new Customer();
 }

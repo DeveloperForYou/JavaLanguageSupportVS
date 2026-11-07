@@ -95,6 +95,30 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             }
         }
 
+        // F2H1-CONTEXT-ACCESSOR: expose only the CPS selection already validated
+        // by F2F.7; no second selection resolver or new menu diagnostics.
+        internal static bool TryGetSelectedJavaPackage(IServiceProvider services,
+            out string projectFile, out string selectedDirectory,
+            out string packageName, out string sourceRoot)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            projectFile = selectedDirectory = packageName = sourceRoot = null;
+            SelectionContext context;
+            if (!TryGetContext(services, out context) || context.IsProjectNode)
+                return false;
+            JavaPackageInfo info;
+            string error;
+            if (!JavaPackageResolver.TryResolveForDirectory(context.ProjectDirectory,
+                context.SelectedDirectory, out info, out error, context.BuildHint) ||
+                info.IsDefaultPackage)
+                return false;
+            projectFile = context.ProjectFile;
+            selectedDirectory = info.DirectoryPath.TrimEnd('\\', '/');
+            packageName = info.Name;
+            sourceRoot = info.SourceRoot.FullPath;
+            return true;
+        }
+
         private static void ShowError(IServiceProvider services, string text)
         {
             VsShellUtilities.ShowMessageBox(services, text, "Nuovo package Java",

@@ -10,6 +10,13 @@
       <Group guid="guidJavaToolsCmdSet" id="JavaEditorContextGroup" priority="0x0600">
     <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_CODEWIN" />
   </Group>
+      <!-- F2H1-RENAME-PACKAGE: CPS folder/item context groups. -->
+      <Group guid="guidJavaToolsCmdSet" id="JavaRenamePackageFolderGroup" priority="0x0760">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_FOLDERNODE" />
+      </Group>
+      <Group guid="guidJavaToolsCmdSet" id="JavaRenamePackageItemGroup" priority="0x0760">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ITEMNODE" />
+      </Group>
     </Groups>
     <Buttons>
       <Button guid="guidJavaToolsCmdSet" id="cmdBuild" priority="0x0100" type="Button">
@@ -93,22 +100,37 @@
         <Strings><ButtonText>Java: Override/Implement metodi</ButtonText></Strings>
       </Button>
 
+      <Button guid="guidJavaToolsCmdSet" id="cmdRenameJavaPackage" priority="0x0830" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaRenamePackageFolderGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings><ButtonText>Java: Rinomina package...</ButtonText></Strings>
+      </Button>
     </Buttons>
   </Commands>
   <CommandPlacements>
-  
-</CommandPlacements>
+    <!-- F2H1-RENAME-PACKAGE: CPS may use folder-add or generic item menu. -->
+    <CommandPlacement guid="guidJavaToolsCmdSet" id="cmdRenameJavaPackage" priority="0x0890">
+      <Parent guid="guidSHLMainMenu" id="IDG_VS_CTXT_FOLDER_ADD" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidJavaToolsCmdSet" id="cmdRenameJavaPackage" priority="0x0120">
+      <Parent guid="guidJavaToolsCmdSet" id="JavaRenamePackageItemGroup" />
+    </CommandPlacement>
+  </CommandPlacements>
   <Symbols>
     <GuidSymbol name="guidJavaToolsPackage" value="{75323116-62F6-483F-A9DD-F2A167762E41}" />
     <GuidSymbol name="guidJavaToolsCmdSet" value="{A21A445E-8D9B-4296-9906-A829608EE59C}">
       <IDSymbol name="JavaEditorContextGroup" value="0x1021" />
       <IDSymbol name="JavaToolsGroup" value="0x1020" />
+      <IDSymbol name="JavaRenamePackageFolderGroup" value="0x1025" />
+      <IDSymbol name="JavaRenamePackageItemGroup" value="0x1026" />
       <IDSymbol name="cmdBuild" value="0x0100" />
       <IDSymbol name="cmdRun" value="0x0101" />
       <IDSymbol name="cmdTest" value="0x0102" />
       <IDSymbol name="cmdStatus" value="0x0103" />
       <IDSymbol name="cmdOrganizeImports" value="0x0112" />
       <IDSymbol name="cmdRename" value="0x0113" />
+      <IDSymbol name="cmdRenameJavaPackage" value="0x0127" />
       <IDSymbol name="cmdGoToTypeDefinition" value="0x011A" />
       <IDSymbol name="cmdCallHierarchy" value="0x011C" />
       <IDSymbol name="cmdTypeHierarchy" value="0x011D" />

@@ -1,0 +1,817 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using JavaLanguageSupport.Editor.Navigation;
+using JavaLanguageSupport.LanguageServer;
+using Microsoft.VisualStudio.PlatformUI;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+using Newtonsoft.Json.Linq;
+using EnvDTE;
+
+namespace JavaLanguageSupport.ProjectSystem.Packages
+{
+    /// <summary>
+    /// F2H.1: JDT LS driven rename of a Java leaf package. Deliberately fail-closed:
+    /// no subpackages, no open affected documents, no external files or unsupported
+    /// LSP resource operations. A backup is saved before any filesystem mutation.
+    /// Full CPS-linked undo and recursive package rename are subsequent work.
+    /// </summary>
+    internal static class JavaRenamePackageCommand
+    {
+        private sealed class TextChange
+        {
+            internal int From, To;
+            internal string Replacement;
+        }
+
+        private sealed class DocumentChange
+        {
+            internal string Path;
+            internal byte[] Before, After;
+            internal int EditCount;
+            internal readonly List<string> Preview = new List<string>();
+        }
+
+        private sealed class Plan
+        {
+            internal string ProjectFile, OldDirectory, NewDirectory;
+            internal string OldName, NewName;
+            internal readonly List<DocumentChange> Files = new List<DocumentChange>();
+            internal readonly List<string> MovedJavaFiles = new List<string>();
+            // F2H1A-DECLARATION-FALLBACK: separate local declarations from JDT edits.
+            internal int LocalPackageDeclarations;
+            internal byte[] ProjectBefore, ProjectAfter;
+            internal string BackupDirectory;
+            internal int EditCount { get { return Files.Sum(x => x.EditCount); } }
+        }
+
+        private static int busy;
+        private static readonly StringComparer FileComparer = StringComparer.OrdinalIgnoreCase;
+        private static readonly UTF8Encoding Utf8Strict = new UTF8Encoding(false, true);
+
+        internal static bool CanExecute(IServiceProvider services)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            string project, directory, name, sourceRoot;
+            return JavaNewPackageCommand.TryGetSelectedJavaPackage(services,
+                out project, out directory, out name, out sourceRoot);
+        }
+
+        internal static async Task ExecuteAsync(IServiceProvider services)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (Interlocked.CompareExchange(ref busy, 1, 0) != 0) return;
+            try
+            {
+                string project, directory, oldName, sourceRoot;
+                if (!JavaNewPackageCommand.TryGetSelectedJavaPackage(services,
+                    out project, out directory, out oldName, out sourceRoot)) return;
+                if (!JavaLspRpc.Connected)
+                {
+                    Notify(services, "JDT LS non è connesso. Attendi l'indicizzazione Java.", true);
+                    return;
+                }
+                var dialog = new RenameDialog(directory, oldName);
+                if (dialog.ShowDialog() != true) return;
+                string newName = dialog.NewPackageName;
+                string newDirectory = Path.Combine(Path.GetDirectoryName(directory),
+                    newName.Substring(newName.LastIndexOf('.') + 1));
+
+                // A leaf package is deliberately required in this first pack.
+                // Eclipse can rename descendants separately; never silently rewrite them.
+                if (Directory.GetDirectories(directory).Length != 0)
+                    throw new NotSupportedException(
+                        "F2H.1 rinomina solo package senza sottopackage. " +
+                        "I package con directory figlie saranno supportati nel pack successivo.");
+                if (Directory.Exists(newDirectory) || File.Exists(newDirectory))
+                    throw new IOException("La destinazione esiste già: " + newDirectory);
+
+                string javaFile;
+                int line, column;
+                FindPackageDeclaration(directory, oldName, out javaFile, out line, out column);
+                var request = new
+                {
+                    textDocument = new { uri = new Uri(javaFile).AbsoluteUri },
+                    position = new { line, character = column },
+                    newName = newName
+                };
+                JToken response = await JavaLspRpc.RequestAsync("textDocument/rename",
+                    request, CancellationToken.None);
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Plan plan = Prepare(response, project, directory, newDirectory,
+                    oldName, newName, sourceRoot);
+                if (new RenamePreview(plan).ShowDialog() != true) return;
+                EnsureClosedAndUnchanged(plan, services);
+                Apply(plan);
+                Notify(services,
+                    "Package rinominato da " + oldName + " a " + newName + ".\n\n" +
+                    "File Java aggiornati: " + plan.Files.Count +
+                    "\nModifiche complessive: " + plan.EditCount +
+                    " (dichiarazioni locali: " + plan.LocalPackageDeclarations + ")" +
+                    "\nBackup: " + plan.BackupDirectory +
+                    "\n\nIn F2H.1 Ctrl+Z globale non è ancora supportato: " +
+                    "per il ripristino usa Git o il backup.", false);
+            }
+            catch (Exception ex)
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Notify(services, ex.Message, true);
+            }
+            finally { Interlocked.Exchange(ref busy, 0); }
+        }
+
+        private static void Notify(IServiceProvider services, string message, bool warning)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            VsShellUtilities.ShowMessageBox(services, message, "Java: Rinomina package",
+                warning ? OLEMSGICON.OLEMSGICON_WARNING : OLEMSGICON.OLEMSGICON_INFO,
+                OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+        }
+
+        private static void FindPackageDeclaration(string directory, string expected,
+            out string file, out int line, out int column)
+        {
+            file = null;
+            line = 0;
+            column = 0;
+            foreach (string candidate in Directory.GetFiles(directory, "*.java")
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                string text = ReadUtf8(File.ReadAllBytes(candidate));
+                var match = Regex.Match(text,
+                    @"(?m)^[ \t]*package[ \t]+" + Regex.Escape(expected) + @"[ \t]*;");
+                if (!match.Success) continue;
+                // F2H1a: select the final identifier itself, not the ';' boundary.
+                int offset = match.Index + match.Value.LastIndexOf(expected,
+                    StringComparison.Ordinal) + expected.Length - 1;
+                line = 0;
+                int lastNewline = -1;
+                for (int i = 0; i < offset; ++i)
+                    if (text[i] == '\n') { line++; lastNewline = i; }
+                column = offset - lastNewline - 1;
+                file = candidate;
+                return;
+            }
+            throw new InvalidOperationException(
+                "Non trovo un file .java con la dichiarazione 'package " + expected + ";' " +
+                "nel package selezionato. F2H.1 richiede un package Java con almeno un sorgente.");
+        }
+
+        private static Plan Prepare(JToken response, string project, string oldDirectory,
+            string newDirectory, string oldName, string newName, string sourceRoot)
+        {
+            var obj = response as JObject;
+            if (obj == null) throw new InvalidOperationException(
+                "JDT LS non ha restituito un WorkspaceEdit di rinomina utilizzabile.");
+            string projectDir = Path.GetDirectoryName(Path.GetFullPath(project));
+            oldDirectory = Path.GetFullPath(oldDirectory).TrimEnd('\\', '/');
+            newDirectory = Path.GetFullPath(newDirectory).TrimEnd('\\', '/');
+            if (!Under(projectDir, oldDirectory) || !Under(sourceRoot, oldDirectory) ||
+                !Under(projectDir, newDirectory) || !Under(sourceRoot, newDirectory))
+                throw new InvalidOperationException("Rinomina esterna alla source root/progetto.");
+            if (Directory.GetDirectories(oldDirectory).Length > 0 ||
+                Directory.Exists(newDirectory))
+                throw new InvalidOperationException("Struttura delle cartelle cambiata; riprova.");
+
+            var plan = new Plan { ProjectFile = Path.GetFullPath(project),
+                OldDirectory = oldDirectory, NewDirectory = newDirectory,
+                OldName = oldName, NewName = newName };
+            var groups = new Dictionary<string, List<JToken>>(FileComparer);
+            var moves = new Dictionary<string, string>(FileComparer);
+            JArray documents = obj["documentChanges"] as JArray;
+            JObject changes = obj["changes"] as JObject;
+            if (documents != null && changes != null)
+                throw new NotSupportedException("WorkspaceEdit contiene changes e documentChanges simultaneamente.");
+            if (documents != null)
+            {
+                foreach (JToken item in documents)
+                {
+                    string kind = (string)item["kind"];
+                    if (kind == "rename")
+                    {
+                        string from = LocalPath((string)item["oldUri"]);
+                        string to = LocalPath((string)item["newUri"]);
+                        if (!DirectChild(oldDirectory, from) || !DirectChild(newDirectory, to) ||
+                            !string.Equals(Path.GetFileName(from), Path.GetFileName(to),
+                                StringComparison.OrdinalIgnoreCase) ||
+                            !string.Equals(Path.GetExtension(from), ".java",
+                                StringComparison.OrdinalIgnoreCase) || !File.Exists(from) ||
+                            moves.ContainsKey(from))
+                            throw new NotSupportedException(
+                                "JDT LS propone un movimento di risorsa non supportato: " + from);
+                        moves.Add(from, to);
+                    }
+                    else if (kind == "create" || kind == "delete")
+                    {
+                        // JDT LS creates/deletes a temporary .temp placeholder to
+                        // make the target package directory. Directory.Move already
+                        // handles the physical path in this implementation.
+                        string marker = LocalPath((string)item["uri"]);
+                        if (!string.Equals(Path.GetFileName(marker), ".temp",
+                                StringComparison.OrdinalIgnoreCase) ||
+                            !(Under(oldDirectory, marker) || Under(newDirectory, marker)))
+                            throw new NotSupportedException(
+                                "JDT LS propone una creazione/eliminazione non supportata: " + marker);
+                    }
+                    else if (kind == null && item["textDocument"] != null)
+                    {
+                        AddEdits(groups, ExistingPath((string)item["textDocument"]["uri"],
+                            oldDirectory, newDirectory), item["edits"] as JArray);
+                    }
+                    else throw new NotSupportedException(
+                        "WorkspaceEdit contiene un'operazione sconosciuta: " + kind);
+                }
+            }
+            else if (changes != null)
+            {
+                foreach (JProperty entry in changes.Properties())
+                    AddEdits(groups, ExistingPath(entry.Name, oldDirectory, newDirectory),
+                        entry.Value as JArray);
+            }
+            else throw new NotSupportedException(
+                "JDT LS non ha restituito changes/documentChanges.");
+
+            string[] sourceFiles = Directory.GetFiles(oldDirectory, "*.java")
+                .Select(Path.GetFullPath).ToArray();
+            if (sourceFiles.Length == 0)
+                throw new NotSupportedException("La rinomina di package vuoti sarà gestita separatamente.");
+            if (moves.Count > 0 && (moves.Count != sourceFiles.Length ||
+                sourceFiles.Any(f => !moves.ContainsKey(f))))
+                throw new NotSupportedException(
+                    "I movimenti proposti da JDT LS non coprono tutti i sorgenti del package.");
+            plan.MovedJavaFiles.AddRange(sourceFiles);
+            if (groups.Count == 0 || groups.All(g => g.Value.Count == 0))
+                throw new InvalidOperationException(
+                    "JDT LS non ha proposto modifiche al codice: nessuna rinomina eseguita.");
+
+            foreach (var group in groups.OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                string path = Path.GetFullPath(group.Key);
+                if (!Under(projectDir, path) ||
+                    !string.Equals(Path.GetExtension(path), ".java",
+                        StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+                    throw new NotSupportedException("JDT LS modifica un file esterno o non Java: " + path);
+                byte[] before = File.ReadAllBytes(path);
+                string content = ReadUtf8(before);
+                var changesForFile = new List<TextChange>();
+                foreach (JToken edit in group.Value)
+                {
+                    if (edit["range"] == null || edit["newText"] == null)
+                        throw new InvalidOperationException("TextEdit LSP incompleto: " + path);
+                    int start = Offset(content, edit["range"]["start"]);
+                    int end = Offset(content, edit["range"]["end"]);
+                    if (end < start) throw new InvalidOperationException("Intervallo LSP invertito: " + path);
+                    changesForFile.Add(new TextChange { From = start, To = end,
+                        Replacement = (string)edit["newText"] });
+                }
+                changesForFile = changesForFile.GroupBy(x => new { x.From, x.To, x.Replacement })
+                    .Select(x => x.First()).OrderByDescending(x => x.From).ToList();
+                int previous = content.Length + 1;
+                var result = new StringBuilder(content);
+                foreach (TextChange edit in changesForFile)
+                {
+                    if (edit.To > previous || edit.From < 0 || edit.To > content.Length)
+                        throw new InvalidOperationException("TextEdit LSP sovrapposti: " + path);
+                    result.Remove(edit.From, edit.To - edit.From);
+                    result.Insert(edit.From, edit.Replacement);
+                    previous = edit.From;
+                }
+                string afterText = result.ToString();
+                // A same-name package may exist in src/test/java: this pack
+                // must never rename its declaration without moving its folder.
+                if (!DirectChild(oldDirectory, path) &&
+                    ContainsPackage(content, oldName) && ContainsPackage(afterText, newName))
+                    throw new NotSupportedException(
+                        "JDT LS propone la rinomina anche in un'altra source root: " + path);
+                var filePlan = new DocumentChange { Path = path, Before = before,
+                    After = WriteUtf8(afterText, HasBom(before)), EditCount = changesForFile.Count };
+                foreach (TextChange edit in changesForFile.OrderBy(x => x.From))
+                    filePlan.Preview.Add("    " + ShowChange(content.Substring(edit.From,
+                        edit.To - edit.From)) + "  →  " + ShowChange(edit.Replacement));
+                plan.Files.Add(filePlan);
+            }
+            // F2H1a: JDT LS may omit RenamePackageChange when the VS native LSP
+            // client has not advertised workspaceEdit.resourceOperations. Its
+            // independent semantic edits (especially imports) remain authoritative.
+            // A package declaration is a local, mechanically verifiable consequence
+            // of moving this exact source file; only repair that declaration.
+            foreach (string source in sourceFiles)
+            {
+                var changed = plan.Files.FirstOrDefault(x => FileComparer.Equals(x.Path, source));
+                byte[] original = changed == null ? File.ReadAllBytes(source) : changed.Before;
+                string content = changed != null ? ReadUtf8(changed.After) : ReadUtf8(original);
+                if (!ContainsPackage(content, newName))
+                {
+                    if (!ContainsPackage(content, oldName))
+                        throw new NotSupportedException(
+                            "Dichiarazione package inattesa in " + source +
+                            ". Rinomina bloccata senza modifiche.");
+                    string repaired = ReplaceSinglePackageDeclaration(content, oldName, newName);
+                    byte[] after = WriteUtf8(repaired, HasBom(original));
+                    if (changed == null)
+                    {
+                        changed = new DocumentChange { Path = source, Before = original,
+                            After = after, EditCount = 1 };
+                        plan.Files.Add(changed);
+                    }
+                    else
+                    {
+                        changed.After = after;
+                        changed.EditCount++;
+                    }
+                    changed.Preview.Add("    [F2H1a: dichiarazione locale verificata] package " +
+                        oldName + ";  →  package " + newName + ";");
+                    plan.LocalPackageDeclarations++;
+                }
+            }
+            // The semantic server remains responsible for imports and fully
+            // qualified references. Abort if any old package name survives in
+            // Java sources; never silently commit broken references.
+            CheckNoStalePackageReferences(plan, projectDir);
+            plan.ProjectBefore = File.ReadAllBytes(plan.ProjectFile);
+            plan.ProjectAfter = UpdateFolderEntries(plan.ProjectBefore, projectDir,
+                oldDirectory, newDirectory);
+            return plan;
+        }
+
+        // F2H1a: only a single exact declaration, preserving the original file
+        // encoding, BOM and line endings. No regex substitutions of imports,
+        // qualified names or arbitrary Java syntax are permitted.
+        private static string ReplaceSinglePackageDeclaration(string code,
+            string oldName, string newName)
+        {
+            var pattern = new Regex(@"(?m)^[ \t]*package[ \t]+(?<name>" +
+                Regex.Escape(oldName) + @")[ \t]*;", RegexOptions.CultureInvariant);
+            var found = pattern.Matches(code);
+            if (found.Count != 1)
+                throw new InvalidOperationException(
+                    "Dichiarazione package non univoca: " + oldName);
+            var name = found[0].Groups["name"];
+            return code.Substring(0, name.Index) + newName +
+                code.Substring(name.Index + name.Length);
+        }
+
+        private static void CheckNoStalePackageReferences(Plan plan, string projectDir)
+        {
+            var edited = plan.Files.ToDictionary(x => x.Path, FileComparer);
+            var pending = new Stack<string>();
+            pending.Push(projectDir);
+            int scanned = 0;
+            string pattern = @"(?<![\w$.])" + Regex.Escape(plan.OldName) +
+                @"(?=[.\s;])";
+            // Ignore generated outputs but scan all remaining project Java
+            // sources, including test Java, for unhandled imports or FQNs.
+            var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { ".git", ".vs", ".gradle", ".idea", "bin", "obj", "target", "build", "out" };
+            while (pending.Count > 0)
+            {
+                string directory = pending.Pop();
+                foreach (string child in Directory.GetDirectories(directory))
+                {
+                    if (excluded.Contains(Path.GetFileName(child))) continue;
+                    if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
+                        throw new NotSupportedException(
+                            "Il progetto contiene una cartella collegata: " + child +
+                            ". Impossibile verificare tutti i riferimenti.");
+                    pending.Push(child);
+                }
+                foreach (string file in Directory.GetFiles(directory, "*.java"))
+                {
+                    if (++scanned > 10000)
+                        throw new NotSupportedException(
+                            "Troppi sorgenti da controllare (>10000). Rinomina annullata.");
+                    var info = new FileInfo(file);
+                    if (info.Length > 16L * 1024 * 1024)
+                        throw new NotSupportedException(
+                            "Sorgente troppo grande da controllare: " + file);
+                    DocumentChange replacement;
+                    string text = edited.TryGetValue(Path.GetFullPath(file), out replacement) ?
+                        ReadUtf8(replacement.After) : ReadUtf8(File.ReadAllBytes(file));
+                    if (Regex.IsMatch(text, pattern, RegexOptions.CultureInvariant))
+                        throw new InvalidOperationException(
+                            "Restano riferimenti al vecchio package in " + file +
+                            ". JDT LS non li ha aggiornati: rinomina annullata. " +
+                            "Controlla l'indicizzazione e la configurazione del progetto Java.");
+                }
+            }
+        }
+
+        private static string ShowChange(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "(inserimento)";
+            return value.Replace("\r", "\\r").Replace("\n", "\\n");
+        }
+
+        private static bool ContainsPackage(string content, string name)
+        {
+            return Regex.IsMatch(content, @"(?m)^[ \t]*package[ \t]+" +
+                Regex.Escape(name) + @"[ \t]*;");
+        }
+
+        private static int Offset(string content, JToken position)
+        {
+            if (position == null) throw new InvalidOperationException("Posizione LSP mancante.");
+            int line = (int?)position["line"] ?? -1;
+            int column = (int?)position["character"] ?? -1;
+            if (line < 0 || column < 0)
+                throw new InvalidOperationException("Coordinate LSP negative.");
+            int index = 0;
+            for (int i = 0; i < line; i++)
+            {
+                index = content.IndexOf('\n', index);
+                if (index < 0) throw new InvalidOperationException("Riga LSP inesistente.");
+                index++;
+            }
+            int end = content.IndexOf('\n', index);
+            if (end < 0) end = content.Length;
+            if (end > index && content[end - 1] == '\r') end--;
+            if (column > end - index)
+                throw new InvalidOperationException("Colonna LSP fuori intervallo.");
+            return index + column;
+        }
+
+        private static void AddEdits(Dictionary<string, List<JToken>> groups,
+            string path, JArray edits)
+        {
+            if (edits == null) throw new InvalidOperationException("TextDocumentEdit LSP senza edits.");
+            List<JToken> list;
+            if (!groups.TryGetValue(path, out list)) groups[path] = list = new List<JToken>();
+            list.AddRange(edits);
+        }
+
+        private static string ExistingPath(string uri, string oldDirectory, string newDirectory)
+        {
+            string path = LocalPath(uri);
+            if (Under(newDirectory, path))
+            {
+                string mapped = Path.Combine(oldDirectory,
+                    path.Substring(newDirectory.Length).TrimStart('\\', '/'));
+                if (File.Exists(mapped)) return Path.GetFullPath(mapped);
+            }
+            return path;
+        }
+
+        private static string LocalPath(string uri)
+        {
+            Uri parsed;
+            if (!Uri.TryCreate(uri, UriKind.Absolute, out parsed) || !parsed.IsFile)
+                throw new NotSupportedException("WorkspaceEdit con URI non locale: " + uri);
+            return Path.GetFullPath(parsed.LocalPath);
+        }
+
+        private static bool Under(string parent, string child)
+        {
+            string a = Path.GetFullPath(parent).TrimEnd('\\', '/');
+            string b = Path.GetFullPath(child).TrimEnd('\\', '/');
+            return FileComparer.Equals(a, b) || b.StartsWith(a + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool DirectChild(string parent, string file)
+        {
+            return FileComparer.Equals(Path.GetFullPath(parent).TrimEnd('\\', '/'),
+                Path.GetDirectoryName(Path.GetFullPath(file)).TrimEnd('\\', '/'));
+        }
+
+        private static bool HasBom(byte[] bytes)
+        {
+            return bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+        }
+        private static string ReadUtf8(byte[] bytes)
+        {
+            if (bytes.Length >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) ||
+                (bytes[0] == 0xFE && bytes[1] == 0xFF)))
+                throw new NotSupportedException("Sorgente UTF-16 non supportato in F2H.1.");
+            return Utf8Strict.GetString(bytes, HasBom(bytes) ? 3 : 0,
+                bytes.Length - (HasBom(bytes) ? 3 : 0));
+        }
+        private static byte[] WriteUtf8(string value, bool bom)
+        {
+            byte[] payload = Utf8Strict.GetBytes(value);
+            if (!bom) return payload;
+            byte[] bytes = new byte[payload.Length + 3];
+            bytes[0] = 0xEF; bytes[1] = 0xBB; bytes[2] = 0xBF;
+            Buffer.BlockCopy(payload, 0, bytes, 3, payload.Length);
+            return bytes;
+        }
+
+        private static byte[] UpdateFolderEntries(byte[] original, string projectDirectory,
+            string oldDirectory, string newDirectory)
+        {
+            string xml = ReadUtf8(original);
+            string oldRelative = oldDirectory.Substring(
+                projectDirectory.TrimEnd('\\', '/').Length).TrimStart('\\', '/')
+                .Replace('/', '\\').TrimEnd('\\');
+            string newRelative = newDirectory.Substring(
+                projectDirectory.TrimEnd('\\', '/').Length).TrimStart('\\', '/')
+                .Replace('/', '\\').TrimEnd('\\');
+            var include = new Regex(
+                "<Folder\\b[^>]*\\bInclude\\s*=\\s*(?<quote>[\\\"'])(?<value>.*?)\\k<quote>",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            string result = include.Replace(xml, match =>
+            {
+                string raw = match.Groups["value"].Value;
+                string normalized = raw.Replace('/', '\\').TrimEnd('\\');
+                if (!string.Equals(normalized, oldRelative, StringComparison.OrdinalIgnoreCase))
+                    return match.Value;
+                string replacement = newRelative + (raw.EndsWith("\\", StringComparison.Ordinal) ? "\\" : "");
+                int from = match.Groups["value"].Index - match.Index;
+                return match.Value.Substring(0, from) + replacement +
+                    match.Value.Substring(from + raw.Length);
+            });
+            // In F2H.1 we only update explicit Folder items. A manually
+            // included JavaCompile/None item under the old path requires a
+            // more comprehensive CPS migration: fail rather than break it.
+            var document = System.Xml.Linq.XDocument.Parse(result);
+            foreach (var element in document.Descendants())
+            {
+                var attr = element.Attribute("Include");
+                if (attr == null || element.Name.LocalName == "Folder") continue;
+                string value = attr.Value.Replace('/', '\\');
+                if (value.StartsWith(oldRelative + "\\", StringComparison.OrdinalIgnoreCase))
+                    throw new NotSupportedException(
+                        "Il .javaproj contiene un item esplicito sotto il package: " + value +
+                        ". F2H.1 supporta solo elementi Folder e JavaCompile/None tramite glob.");
+            }
+            return WriteUtf8(result, HasBom(original));
+        }
+
+        private static void EnsureClosedAndUnchanged(Plan plan, IServiceProvider services)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var dte = services.GetService(typeof(Microsoft.VisualStudio.Shell.Interop.SDTE)) as DTE;
+            if (dte == null || dte.Documents == null)
+                throw new InvalidOperationException("Documenti Visual Studio non disponibili.");
+            var affected = new HashSet<string>(plan.Files.Select(x => x.Path), FileComparer);
+            foreach (string source in plan.MovedJavaFiles) affected.Add(source);
+            affected.Add(plan.ProjectFile);
+            // Fail closed: a disk-only refactor cannot keep live VS edit buffers
+            // and linked Undo/Redo synchronized. Close every affected tab first.
+            foreach (Document document in dte.Documents)
+            {
+                string file;
+                try { file = document.FullName; }
+                catch (Exception) { continue; }
+                if (string.IsNullOrWhiteSpace(file)) continue;
+                try { if (affected.Contains(Path.GetFullPath(file)))
+                    throw new InvalidOperationException(
+                        "Chiudi il file prima di rinominare il package: " + file +
+                        ". Il Pack F2H.1 non modifica buffer aperti."); }
+                catch (ArgumentException) { }
+                catch (NotSupportedException) { }
+            }
+            if (Directory.Exists(plan.NewDirectory) || !Directory.Exists(plan.OldDirectory) ||
+                Directory.GetDirectories(plan.OldDirectory).Length > 0)
+                throw new IOException("La directory del package è cambiata dopo l'anteprima.");
+            var actualFiles = Directory.GetFiles(plan.OldDirectory, "*.java");
+            if (actualFiles.Length != plan.MovedJavaFiles.Count ||
+                actualFiles.Any(x => !plan.MovedJavaFiles.Contains(x, FileComparer)))
+                throw new IOException("Elenco dei sorgenti cambiato dopo l'anteprima.");
+            foreach (var doc in plan.Files)
+                if (!File.ReadAllBytes(doc.Path).SequenceEqual(doc.Before))
+                    throw new IOException("Il contenuto è cambiato dopo l'anteprima: " + doc.Path);
+            if (!File.ReadAllBytes(plan.ProjectFile).SequenceEqual(plan.ProjectBefore))
+                throw new IOException("Il progetto è cambiato dopo l'anteprima.");
+            foreach (var doc in plan.Files)
+                if ((File.GetAttributes(doc.Path) & FileAttributes.ReadOnly) != 0)
+                    throw new IOException("File di sola lettura: " + doc.Path);
+            if ((File.GetAttributes(plan.ProjectFile) & FileAttributes.ReadOnly) != 0)
+                throw new IOException("Progetto di sola lettura: " + plan.ProjectFile);
+        }
+
+        private static void Apply(Plan plan)
+        {
+            // Persistent safety copy inside the already ignored .vs/ directory.
+            string projectDir = Path.GetDirectoryName(plan.ProjectFile);
+            string backupRoot = Path.Combine(projectDir, ".vs", "JavaPackageRenameBackups",
+                DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N"));
+            foreach (var doc in plan.Files)
+            {
+                string relative = doc.Path.Substring(projectDir.TrimEnd('\\', '/').Length)
+                    .TrimStart('\\', '/');
+                string destination = Path.Combine(backupRoot, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                File.WriteAllBytes(destination, doc.Before);
+            }
+            Directory.CreateDirectory(backupRoot);
+            File.WriteAllBytes(Path.Combine(backupRoot, "original.javaproj"), plan.ProjectBefore);
+            File.WriteAllText(Path.Combine(backupRoot, "README.txt"),
+                "F2H.1 Backup\r\nOLD: " + plan.OldDirectory +
+                "\r\nNEW: " + plan.NewDirectory +
+                "\r\nProject: " + plan.ProjectFile + "\r\n",
+                new UTF8Encoding(false));
+            plan.BackupDirectory = backupRoot;
+
+            var written = new List<DocumentChange>();
+            bool moved = false;
+            try
+            {
+                foreach (var doc in plan.Files)
+                {
+                    // Add before writing: even a partially failed write must be restored.
+                    written.Add(doc);
+                    File.WriteAllBytes(doc.Path, doc.After);
+                }
+                Directory.Move(plan.OldDirectory, plan.NewDirectory);
+                moved = true;
+                if (!plan.ProjectBefore.SequenceEqual(plan.ProjectAfter))
+                    File.WriteAllBytes(plan.ProjectFile, plan.ProjectAfter);
+            }
+            catch (Exception error)
+            {
+                var rollbackErrors = new List<string>();
+                try { File.WriteAllBytes(plan.ProjectFile, plan.ProjectBefore); }
+                catch (Exception ex) { rollbackErrors.Add("progetto: " + ex.Message); }
+                if (moved)
+                {
+                    try { Directory.Move(plan.NewDirectory, plan.OldDirectory); }
+                    catch (Exception ex) { rollbackErrors.Add("directory: " + ex.Message); }
+                }
+                foreach (var doc in written.AsEnumerable().Reverse())
+                {
+                    try { File.WriteAllBytes(doc.Path, doc.Before); }
+                    catch (Exception ex) { rollbackErrors.Add(doc.Path + ": " + ex.Message); }
+                }
+                throw new InvalidOperationException(
+                    "Rinomina fallita: " + error.Message +
+                    (rollbackErrors.Count > 0 ?
+                        "\nRipristino INCOMPLETO: " + string.Join("; ", rollbackErrors) :
+                        "\nModifiche ripristinate.") +
+                    "\nBackup: " + backupRoot, error);
+            }
+        }
+
+        private sealed class RenameDialog : DialogWindow
+        {
+            private readonly string oldName;
+            private readonly string oldDirectory;
+            private readonly TextBox field;
+            private readonly TextBlock preview;
+            private readonly TextBlock status;
+            private readonly Button accept;
+            internal string NewPackageName { get; private set; }
+
+            internal RenameDialog(string directory, string originalName)
+            {
+                oldDirectory = directory;
+                oldName = originalName;
+                Title = "Rinomina package Java";
+                Width = 620; MinWidth = 520;
+                SizeToContent = SizeToContent.Height;
+                ResizeMode = ResizeMode.CanResizeWithGrip;
+                ShowInTaskbar = false;
+                WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                var body = new StackPanel { Margin = new Thickness(20, 17, 20, 16) };
+                Content = body;
+                body.Children.Add(Text("Package esistente", 12, true));
+                body.Children.Add(Text(oldName, 13, false));
+                var caption = Text("Nuovo nome (ultimo segmento)", 12, true);
+                caption.Margin = new Thickness(0, 15, 0, 5);
+                body.Children.Add(caption);
+                field = new TextBox { Height = 30, Padding = new Thickness(8, 4, 8, 4),
+                    Text = oldName.Substring(oldName.LastIndexOf('.') + 1) };
+                Theme(field); body.Children.Add(field);
+                preview = Text("", 12, true);
+                preview.Margin = new Thickness(0, 13, 0, 2);
+                body.Children.Add(preview);
+                status = Text("", 11, false); body.Children.Add(status);
+                var footer = new StackPanel { Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Margin = new Thickness(0, 17, 0, 0) };
+                accept = new Button { Content = "Anteprima modifiche", MinWidth = 155,
+                    Height = 30, IsDefault = true,
+                    Margin = new Thickness(0, 0, 8, 0) };
+                var cancel = new Button { Content = "Annulla", MinWidth = 100,
+                    Height = 30, IsCancel = true };
+                JavaNavigationWindowStyle.ThemeNavigationActionButton(accept);
+                JavaNavigationWindowStyle.ThemeNavigationActionButton(cancel);
+                footer.Children.Add(accept); footer.Children.Add(cancel);
+                body.Children.Add(footer);
+                accept.Click += (s, e) => { if (accept.IsEnabled) DialogResult = true; };
+                cancel.Click += (s, e) => DialogResult = false;
+                field.TextChanged += (s, e) => Refresh();
+                JavaNavigationWindowStyle.SetupWindow(this);
+                Refresh();
+                Loaded += (s, e) => { field.Focus(); field.SelectAll(); };
+            }
+
+            private void Refresh()
+            {
+                string tail = field.Text.Trim();
+                string invalid;
+                var prefix = oldName.LastIndexOf('.') >= 0 ?
+                    oldName.Substring(0, oldName.LastIndexOf('.') + 1) : "";
+                string newPackage = prefix + tail;
+                string newPath = Path.Combine(Path.GetDirectoryName(oldDirectory), tail);
+                bool valid = tail.Length > 0 && tail.IndexOf('.') < 0 &&
+                    tail.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 &&
+                    JavaPackageResolver.TryValidatePackageName(newPackage, out invalid) &&
+                    !string.Equals(newPackage, oldName, StringComparison.Ordinal) &&
+                    !ReservedWindowsName(tail) &&
+                    !Directory.Exists(newPath) && !File.Exists(newPath);
+                preview.Text = newPackage + "\n" + newPath;
+                status.Text = !valid ? "Inserisci un nuovo segmento Java valido e non esistente." :
+                    "JDT LS verificherà le modifiche a package e import prima dell'applicazione.";
+                accept.IsEnabled = valid;
+                NewPackageName = valid ? newPackage : null;
+            }
+        }
+
+        private static bool ReservedWindowsName(string name)
+        {
+            string upper = name.ToUpperInvariant();
+            if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL")
+                return true;
+            return upper.Length == 4 &&
+                (upper.StartsWith("COM", StringComparison.Ordinal) ||
+                 upper.StartsWith("LPT", StringComparison.Ordinal)) &&
+                upper[3] >= '1' && upper[3] <= '9';
+        }
+
+        private sealed class RenamePreview : DialogWindow
+        {
+            internal RenamePreview(Plan plan)
+            {
+                Title = "Java: Anteprima rinomina package (JDT LS)";
+                Width = 780; Height = 560; MinWidth = 580; MinHeight = 380;
+                ResizeMode = ResizeMode.CanResize;
+                WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                ShowInTaskbar = false;
+                var panel = new DockPanel { LastChildFill = true };
+                Content = panel;
+                var footer = new StackPanel { Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Margin = new Thickness(10, 8, 15, 12) };
+                DockPanel.SetDock(footer, Dock.Bottom); panel.Children.Add(footer);
+                var proceed = new Button { Content = "Applica rinomina", MinWidth = 138,
+                    Height = 30, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
+                var cancel = new Button { Content = "Annulla", MinWidth = 100,
+                    Height = 30, IsCancel = true };
+                JavaNavigationWindowStyle.ThemeNavigationActionButton(proceed);
+                JavaNavigationWindowStyle.ThemeNavigationActionButton(cancel);
+                footer.Children.Add(proceed); footer.Children.Add(cancel);
+                proceed.Click += (s, e) => DialogResult = true;
+                cancel.Click += (s, e) => DialogResult = false;
+
+                var content = new DockPanel { Margin = new Thickness(18, 16, 18, 4),
+                    LastChildFill = true };
+                panel.Children.Add(content);
+                var top = Text(plan.OldName + "  →  " + plan.NewName +
+                    "\n" + plan.OldDirectory + "\n→ " + plan.NewDirectory +
+                    "\n" + plan.EditCount + " modifiche (JDT LS + dichiarazioni locali: " +
+                    plan.LocalPackageDeclarations + ") in " + plan.Files.Count +
+                    " file, " + plan.MovedJavaFiles.Count + " sorgenti da spostare.\n" +
+                    "F2H.1: solo package foglia; file interessati chiusi; " +
+                    "nessun Ctrl+Z globale. Viene creato un backup in .vs/.", 12, false);
+                top.Margin = new Thickness(0, 0, 0, 12);
+                DockPanel.SetDock(top, Dock.Top); content.Children.Add(top);
+                var fileList = new StringBuilder();
+                fileList.AppendLine("FILE SPOSTATI");
+                foreach (string file in plan.MovedJavaFiles)
+                    fileList.AppendLine("  " + file + "  ->  " +
+                        Path.Combine(plan.NewDirectory, Path.GetFileName(file)));
+                fileList.AppendLine(); fileList.AppendLine("FILE MODIFICATI (JDT LS / dichiarazioni package locali)");
+                foreach (var doc in plan.Files)
+                {
+                    fileList.AppendLine("  " + doc.EditCount + " modifiche: " + doc.Path);
+                    foreach (string item in doc.Preview) fileList.AppendLine(item);
+                    fileList.AppendLine();
+                }
+                var viewer = new TextBox { Text = fileList.ToString(), IsReadOnly = true,
+                    AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+                    FontSize = 12, Padding = new Thickness(8) };
+                Theme(viewer); content.Children.Add(viewer);
+                JavaNavigationWindowStyle.SetupWindow(this);
+            }
+        }
+
+        private static TextBlock Text(string value, double size, bool bold)
+        {
+            var result = new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap,
+                FontSize = size, FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal };
+            result.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            return result;
+        }
+        private static void Theme(Control control)
+        {
+            control.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            control.SetResourceReference(Control.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            control.SetResourceReference(Control.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+        }
+    }
+}

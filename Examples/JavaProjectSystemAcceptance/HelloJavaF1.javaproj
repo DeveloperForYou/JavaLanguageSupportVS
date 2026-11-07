@@ -22,4 +22,7 @@
   <ItemGroup>
     <Folder Include="src\main\resources\" />
   </ItemGroup>
+  <ItemGroup>
+    <Folder Include="src\main\java\com\example\oldservice\" />
+  </ItemGroup>
 </Project>

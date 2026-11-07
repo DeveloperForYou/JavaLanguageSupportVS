@@ -7,6 +7,7 @@ using EnvDTE;
 using JavaLanguageSupport.Build;
 using JavaLanguageSupport.Editor.Refactoring;
 using JavaLanguageSupport.Editor.Navigation;
+using JavaLanguageSupport.ProjectSystem.Packages;
 using JavaLanguageSupport.LanguageServer;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.ComponentModelHost;
@@ -41,6 +42,7 @@ namespace JavaLanguageSupport.Commands
 
         private const int OrganizeImportsId = 0x0112;
         private const int RenameId = 0x0113;
+        private const int RenamePackageId = 0x0127; // F2H1-RENAME-PACKAGE-COMMAND
         
         private const int GoToTypeDefinitionId = 0x011A;
         
@@ -88,6 +90,20 @@ namespace JavaLanguageSupport.Commands
             AddJavaContextCommand(service, GenerateConstructorId, JavaEditorOperation.GenerateConstructor);
             AddJavaContextCommand(service, GenerateGettersSettersId, JavaEditorOperation.GenerateGettersSetters);
             AddJavaContextCommand(service, OverrideImplementMethodsId, JavaEditorOperation.OverrideImplementMethods);
+            // F2H1: rename only valid Java CPS package folders. JDT LS proposes all edits.
+            var renamePackage = new OleMenuCommand(
+                (s, e) => JoinableTaskFactory.RunAsync(async delegate
+                {
+                    await JavaRenamePackageCommand.ExecuteAsync(this);
+                }).FileAndForget("JavaLanguageSupport/RenamePackage"),
+                new CommandID(CommandSet, RenamePackageId));
+            renamePackage.BeforeQueryStatus += (s, e) =>
+            {
+                bool available = JavaRenamePackageCommand.CanExecute(this);
+                renamePackage.Visible = available;
+                renamePackage.Enabled = available && JavaLspRpc.Connected;
+            };
+            service.AddCommand(renamePackage);
         }
 
         // Solo nell'editor Java e soltanto quando il click destro è su un simbolo.
