@@ -43,7 +43,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 // LSP FileChangeType: Created = 1, Changed = 2, Deleted = 3.
                 foreach (string source in moved)
                 {
-                    if (!SameParent(source, oldRoot))
+                    if (!Inside(oldRoot, source) || Paths.Equals(oldRoot, source))
                         return "Sorgente esterno al package: sincronizzazione Java non inviata.";
                     notifications.Add(new { uri = FileUri(source), type = 3 });
                 }
@@ -51,7 +51,8 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 notifications.Add(new { uri = DirectoryUri(newRoot), type = 1 });
                 foreach (string source in moved)
                 {
-                    string destination = Path.Combine(newRoot, Path.GetFileName(source));
+                    string relative = source.Substring(oldRoot.Length).TrimStart('\\', '/');
+                    string destination = Path.Combine(newRoot, relative);
                     if (!File.Exists(destination))
                         return "File Java spostato non trovato: sincronizzazione Java non inviata.";
                     notifications.Add(new { uri = FileUri(destination), type = 1 });
@@ -132,12 +133,8 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     StringComparison.OrdinalIgnoreCase);
         }
 
-        private static bool SameParent(string file, string parent)
-        {
-            string directory = Path.GetDirectoryName(Path.GetFullPath(file));
-            return Paths.Equals(directory.TrimEnd('\\', '/'), parent);
-        }
-
+        // F2I4-RECURSIVE-PACKAGE: moved files keep their complete
+        // relative paths beneath the renamed root.
         private static string FileUri(string path)
         {
             return new Uri(Path.GetFullPath(path)).AbsoluteUri;

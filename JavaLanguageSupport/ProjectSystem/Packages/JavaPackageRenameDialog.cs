@@ -78,8 +78,10 @@ internal static partial class JavaRenamePackageCommand
                 body.Children.Add(current);
 
                 body.Children.Add(SectionLabel("NUOVO NOME (ULTIMO SEGMENTO)"));
+                // F2I4-RECURSIVE-PACKAGE: changing a parent package
+                // updates all subpackages beneath it as one operation.
                 var hint = Text("Il package padre resta invariato. Modifica soltanto " +
-                    "il nome finale, ad esempio da oldservice a newservice.", 11, false);
+                    "l'ultimo segmento: anche i sottopackage seguiranno la rinomina.", 11, false);
                 hint.Margin = new Thickness(0, 3, 0, 7);
                 body.Children.Add(hint);
                 field = new TextBox { Height = 31, Padding = new Thickness(9, 4, 9, 4),

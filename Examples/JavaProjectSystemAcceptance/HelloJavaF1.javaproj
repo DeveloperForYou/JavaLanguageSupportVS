@@ -23,6 +23,9 @@
     <Folder Include="src\main\resources\" />
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="src\main\java\com\example\oldservice\" />
+    <Folder Include="src\main\java\com\restApi\services\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="src\main\java\com\restApi\controllers\" />
   </ItemGroup>
 </Project>

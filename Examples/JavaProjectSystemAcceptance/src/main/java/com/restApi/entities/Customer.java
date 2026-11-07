@@ -1,4 +1,4 @@
-package com.example.oldservice;
+package com.restApi.entities;
 
 public class Customer {
 

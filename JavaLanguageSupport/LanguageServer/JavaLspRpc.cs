@@ -48,7 +48,10 @@ namespace JavaLanguageSupport.LanguageServer
                 JavaLanguageStatus.LspFailure(method, ex.GetType().Name + ": " + ex.Message);
                 // Per la rinomina l'errore deve arrivare fino alla UI: non
                 // trasformarlo in WorkspaceEdit nullo nascondendo la causa.
-                if (string.Equals(method, "textDocument/rename", StringComparison.Ordinal))
+                // F2I4-RECURSIVE-PACKAGE: never interpret an LSP
+                // protocol failure as an empty, valid recursive rename.
+                if (string.Equals(method, "textDocument/rename", StringComparison.Ordinal) ||
+                    string.Equals(method, "workspace/willRenameFiles", StringComparison.Ordinal))
                     throw;
                 return null;
             }

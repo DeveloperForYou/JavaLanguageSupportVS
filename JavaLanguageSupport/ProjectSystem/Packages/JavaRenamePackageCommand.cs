@@ -24,8 +24,8 @@ using EnvDTE;
 namespace JavaLanguageSupport.ProjectSystem.Packages
 {
     /// <summary>
-    /// F2H.1: JDT LS driven rename of a Java leaf package. Deliberately fail-closed:
-    /// no subpackages, no dirty open documents, no external files or unsupported
+    /// JDT LS driven rename of Java packages, including nested packages.
+    /// Fail-closed: no dirty open documents, no external files or unsupported
     /// LSP resource operations. A backup is saved before any filesystem mutation.
     /// Full CPS-linked undo and recursive package rename are subsequent work.
     /// </summary>
@@ -95,27 +95,53 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 string newDirectory = Path.Combine(Path.GetDirectoryName(directory),
                     newName.Substring(newName.LastIndexOf('.') + 1));
 
-                // A leaf package is deliberately required in this first pack.
-                // Eclipse can rename descendants separately; never silently rewrite them.
-                if (Directory.GetDirectories(directory).Length != 0)
-                    throw new NotSupportedException(
-                        "Questo comando può rinominare soltanto package senza sottopackage. " +
-                        "Scegli un package senza cartelle figlie per procedere.");
+                // F2I4-RECURSIVE-PACKAGE: rename the selected folder as a
+                // whole; all its Java descendants must have consistent packages.
+                string[] packageSources = CollectPackageJavaSources(directory, oldName);
+                bool recursive = Directory.GetDirectories(directory).Length != 0;
                 if (Directory.Exists(newDirectory) || File.Exists(newDirectory))
                     throw new IOException("La destinazione esiste già: " + newDirectory);
 
-                string javaFile;
-                int line, column;
-                FindPackageDeclaration(directory, oldName, out javaFile, out line, out column);
+                string javaFile = packageSources[0];
                 await EnsureJavaLanguageServerAsync(services, javaFile);
-                var request = new
+                JToken response;
+                if (recursive)
                 {
-                    textDocument = new { uri = new Uri(javaFile).AbsoluteUri },
-                    position = new { line, character = column },
-                    newName = newName
-                };
-                JToken response = await JavaLspRpc.RequestAsync("textDocument/rename",
-                    request, CancellationToken.None);
+                    // The folder-rename protocol sets renameSubpackages=true
+                    // inside JDT LS. textDocument/rename does NOT do that.
+                    await VerifySourceRootIndexedAsync(sourceRoot);
+                    response = await JavaLspRpc.RequestAsync("workspace/willRenameFiles",
+                        new { files = new[] { new {
+                            oldUri = DirectoryLspUri(directory),
+                            newUri = DirectoryLspUri(newDirectory)
+                        } } }, CancellationToken.None);
+                    if (response == null || response.Type == JTokenType.Null)
+                    {
+                        // JDT LS can legitimately return no WorkspaceEdit when
+                        // VS does not advertise LSP resourceOperations and no
+                        // semantic reference changes are required. We still
+                        // require a verified imported Java source root; each
+                        // declaration is checked locally, and stale references
+                        // in all project sources cause a hard failure.
+                        response = new JObject { ["changes"] = new JObject() };
+                    }
+                    else if (response is JObject &&
+                        response["changes"] == null && response["documentChanges"] == null)
+                        ((JObject)response)["changes"] = new JObject();
+                }
+                else
+                {
+                    string anchorFile;
+                    int line, column;
+                    FindPackageDeclaration(directory, oldName, out anchorFile,
+                        out line, out column);
+                    response = await JavaLspRpc.RequestAsync("textDocument/rename",
+                        new {
+                            textDocument = new { uri = new Uri(anchorFile).AbsoluteUri },
+                            position = new { line, character = column },
+                            newName = newName
+                        }, CancellationToken.None);
+                }
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Plan plan = Prepare(response, project, directory, newDirectory,
                     oldName, newName, sourceRoot);
@@ -230,6 +256,101 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 "nel package selezionato. Aggiungi almeno un file Java con la dichiarazione corretta.");
         }
 
+        // Verify that Eclipse recognizes exactly the Java source root
+        // selected by the CPS package resolver. Fail before any disk mutation.
+        private static async Task VerifySourceRootIndexedAsync(string sourceRoot)
+        {
+            JToken result = await JavaLspRpc.RequestAsync("workspace/executeCommand",
+                new { command = "java.project.listSourcePaths",
+                    arguments = new object[0] }, CancellationToken.None);
+            var paths = result == null ? null : result["data"] as JArray;
+            string expected = Path.GetFullPath(sourceRoot).TrimEnd('\\', '/');
+            bool found = (bool?)result?["status"] == true && paths != null &&
+                paths.Any(x => {
+                    string value = (string)x["path"];
+                    if (string.IsNullOrWhiteSpace(value)) return false;
+                    try
+                    {
+                        return string.Equals(Path.GetFullPath(value).TrimEnd('\\', '/'),
+                            expected, StringComparison.OrdinalIgnoreCase);
+                    }
+                    catch (Exception ex) when (ex is ArgumentException ||
+                        ex is NotSupportedException || ex is PathTooLongException)
+                    { return false; }
+                });
+            if (!found)
+                throw new InvalidOperationException(
+                    "Il servizio Java non ha ancora importato la source root del package. " +
+                    "Attendi l'indicizzazione del progetto Maven/Gradle e riprova. " +
+                    "Nessun file è stato modificato.");
+        }
+
+        private static string DirectoryLspUri(string directory)
+        {
+            return new Uri(Path.GetFullPath(directory).TrimEnd('\\', '/') +
+                Path.DirectorySeparatorChar).AbsoluteUri;
+        }
+
+        // The selected package may be empty but its descendants must contain
+        // at least one Java source. Reject links and invalid package folders.
+        private static string[] CollectPackageJavaSources(string packageDirectory,
+            string packageName)
+        {
+            string root = Path.GetFullPath(packageDirectory).TrimEnd('\\', '/');
+            var pending = new Stack<string>();
+            var sources = new List<string>();
+            pending.Push(root);
+            int visited = 0;
+            while (pending.Count != 0)
+            {
+                string directory = pending.Pop();
+                if (++visited > 1000)
+                    throw new NotSupportedException(
+                        "La struttura del package supera il limite di 1000 cartelle.");
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    throw new NotSupportedException(
+                        "La rinomina non supporta cartelle collegate: " + directory);
+                string suffix = directory.Substring(root.Length).TrimStart('\\', '/')
+                    .Replace('\\', '.').Replace('/', '.');
+                if (suffix.Length != 0)
+                {
+                    string invalid;
+                    if (!JavaPackageResolver.TryValidatePackageName(
+                        packageName + "." + suffix, out invalid))
+                        throw new NotSupportedException(
+                            "Il sottopackage non ha un nome Java valido: " + directory);
+                }
+                foreach (string file in Directory.GetFiles(directory, "*.java"))
+                {
+                    if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                        throw new NotSupportedException(
+                            "La rinomina non supporta sorgenti collegati: " + file);
+                    if (new FileInfo(file).Length > 16L * 1024 * 1024)
+                        throw new NotSupportedException("Sorgente Java troppo grande: " + file);
+                    sources.Add(Path.GetFullPath(file));
+                    if (sources.Count > 500)
+                        throw new NotSupportedException(
+                            "La rinomina di package supporta fino a 500 file Java.");
+                }
+                foreach (string child in Directory.GetDirectories(directory))
+                    pending.Push(child);
+            }
+            if (sources.Count == 0)
+                throw new NotSupportedException(
+                    "Il package e i sottopackage non contengono file Java. " +
+                    "Per rinominare cartelle vuote usa Esplora soluzioni.");
+            return sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        private static string DestinationForMovedFile(string oldDirectory,
+            string newDirectory, string file)
+        {
+            string relative = Path.GetFullPath(file).Substring(
+                Path.GetFullPath(oldDirectory).TrimEnd('\\', '/').Length)
+                .TrimStart('\\', '/');
+            return Path.Combine(newDirectory, relative);
+        }
+
         private static Plan Prepare(JToken response, string project, string oldDirectory,
             string newDirectory, string oldName, string newName, string sourceRoot)
         {
@@ -242,15 +363,16 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             if (!Under(projectDir, oldDirectory) || !Under(sourceRoot, oldDirectory) ||
                 !Under(projectDir, newDirectory) || !Under(sourceRoot, newDirectory))
                 throw new InvalidOperationException("Rinomina esterna alla source root/progetto.");
-            if (Directory.GetDirectories(oldDirectory).Length > 0 ||
-                Directory.Exists(newDirectory))
+            if (!Directory.Exists(oldDirectory) || Directory.Exists(newDirectory))
                 throw new InvalidOperationException("Struttura delle cartelle cambiata; riprova.");
+            bool recursive = Directory.GetDirectories(oldDirectory).Length > 0;
 
             var plan = new Plan { ProjectFile = Path.GetFullPath(project),
                 OldDirectory = oldDirectory, NewDirectory = newDirectory,
                 OldName = oldName, NewName = newName };
             var groups = new Dictionary<string, List<JToken>>(FileComparer);
             var moves = new Dictionary<string, string>(FileComparer);
+            bool folderMove = false;
             JArray documents = obj["documentChanges"] as JArray;
             JObject changes = obj["changes"] as JObject;
             if (documents != null && changes != null)
@@ -264,9 +386,18 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     {
                         string from = LocalPath((string)item["oldUri"]);
                         string to = LocalPath((string)item["newUri"]);
-                        if (!DirectChild(oldDirectory, from) || !DirectChild(newDirectory, to) ||
-                            !string.Equals(Path.GetFileName(from), Path.GetFileName(to),
-                                StringComparison.OrdinalIgnoreCase) ||
+                        if (recursive && FileComparer.Equals(from.TrimEnd(
+                            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                            oldDirectory) && FileComparer.Equals(to.TrimEnd(
+                            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                            newDirectory) && !folderMove)
+                        {
+                            folderMove = true;
+                            continue;
+                        }
+                        if (!Under(oldDirectory, from) || !Under(newDirectory, to) ||
+                            !FileComparer.Equals(to, DestinationForMovedFile(
+                                oldDirectory, newDirectory, from)) ||
                             !string.Equals(Path.GetExtension(from), ".java",
                                 StringComparison.OrdinalIgnoreCase) || !File.Exists(from) ||
                             moves.ContainsKey(from))
@@ -304,16 +435,16 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             else throw new NotSupportedException(
                 "Il servizio Java non ha restituito modifiche di rinomina riconoscibili.");
 
-            string[] sourceFiles = Directory.GetFiles(oldDirectory, "*.java")
-                .Select(Path.GetFullPath).ToArray();
+            string[] sourceFiles = CollectPackageJavaSources(oldDirectory, oldName);
             if (sourceFiles.Length == 0)
                 throw new NotSupportedException("La rinomina di package vuoti sarà gestita separatamente.");
-            if (moves.Count > 0 && (moves.Count != sourceFiles.Length ||
-                sourceFiles.Any(f => !moves.ContainsKey(f))))
+            if (!folderMove && moves.Count > 0 &&
+                (moves.Count != sourceFiles.Length ||
+                 sourceFiles.Any(f => !moves.ContainsKey(f))))
                 throw new NotSupportedException(
                     "Non tutti i file Java del package risultano inclusi nello spostamento. Nessuna modifica applicata.");
             plan.MovedJavaFiles.AddRange(sourceFiles);
-            if (groups.Count == 0 || groups.All(g => g.Value.Count == 0))
+            if (!recursive && (groups.Count == 0 || groups.All(g => g.Value.Count == 0)))
                 throw new InvalidOperationException(
                     "Il servizio Java non ha proposto modifiche al codice. Nessuna rinomina eseguita.");
 
@@ -352,8 +483,9 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 string afterText = result.ToString();
                 // A same-name package may exist in src/test/java: this pack
                 // must never rename its declaration without moving its folder.
-                if (!DirectChild(oldDirectory, path) &&
-                    ContainsPackage(content, oldName) && ContainsPackage(afterText, newName))
+                if (!Under(oldDirectory, path) &&
+                    ContainsPackageOrDescendant(content, oldName) &&
+                    ContainsPackageOrDescendant(afterText, newName))
                     throw new NotSupportedException(
                         "La proposta coinvolge anche un'altra radice sorgenti Java: " + path);
                 var filePlan = new DocumentChange { Path = path, Before = before,
@@ -373,13 +505,19 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 var changed = plan.Files.FirstOrDefault(x => FileComparer.Equals(x.Path, source));
                 byte[] original = changed == null ? File.ReadAllBytes(source) : changed.Before;
                 string content = changed != null ? ReadUtf8(changed.After) : ReadUtf8(original);
-                if (!ContainsPackage(content, newName))
+                string relativeDir = Path.GetDirectoryName(source).Substring(
+                    oldDirectory.Length).TrimStart('\\', '/')
+                    .Replace('\\', '.').Replace('/', '.');
+                string oldPackage = oldName + (relativeDir.Length == 0 ? "" : "." + relativeDir);
+                string newPackage = newName + (relativeDir.Length == 0 ? "" : "." + relativeDir);
+                if (!ContainsPackage(content, newPackage))
                 {
-                    if (!ContainsPackage(content, oldName))
+                    if (!ContainsPackage(content, oldPackage))
                         throw new NotSupportedException(
                             "Dichiarazione package inattesa in " + source +
                             ". Rinomina bloccata senza modifiche.");
-                    string repaired = ReplaceSinglePackageDeclaration(content, oldName, newName);
+                    string repaired = ReplaceSinglePackageDeclaration(content,
+                        oldPackage, newPackage);
                     byte[] after = WriteUtf8(repaired, HasBom(original));
                     if (changed == null)
                     {
@@ -393,7 +531,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                         changed.EditCount++;
                     }
                     changed.Preview.Add("Dichiarazione package verificata: package " +
-                        oldName + ";  →  package " + newName + ";");
+                        oldPackage + ";  →  package " + newPackage + ";");
                     plan.LocalPackageDeclarations++;
                 }
             }
@@ -473,6 +611,14 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         {
             if (string.IsNullOrEmpty(value)) return "(inserimento)";
             return value.Replace("\r", "\\r").Replace("\n", "\\n");
+        }
+
+        // Avoid changing a package declaration in another source root,
+        // including its descendant packages (src/test vs src/main).
+        private static bool ContainsPackageOrDescendant(string content, string name)
+        {
+            return Regex.IsMatch(content, @"(?m)^[ \t]*package[ \t]+" +
+                Regex.Escape(name) + @"(?:\.[^\s;]+)*[ \t]*;");
         }
 
         private static bool ContainsPackage(string content, string name)
@@ -585,9 +731,11 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             {
                 string raw = match.Groups["value"].Value;
                 string normalized = raw.Replace('/', '\\').TrimEnd('\\');
-                if (!string.Equals(normalized, oldRelative, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(normalized, oldRelative, StringComparison.OrdinalIgnoreCase) &&
+                    !normalized.StartsWith(oldRelative + "\\", StringComparison.OrdinalIgnoreCase))
                     return match.Value;
-                string replacement = newRelative + (raw.EndsWith("\\", StringComparison.Ordinal) ? "\\" : "");
+                string replacement = newRelative + normalized.Substring(oldRelative.Length) +
+                    (raw.EndsWith("\\", StringComparison.Ordinal) ? "\\" : "");
                 int from = match.Groups["value"].Index - match.Index;
                 return match.Value.Substring(0, from) + replacement +
                     match.Value.Substring(from + raw.Length);
@@ -643,7 +791,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     ex is NotSupportedException) { continue; }
                 // A non-Java document may also physically reside in the renamed
                 // package folder. Refuse instead of leaving its RDT path stale.
-                if (!affected.Contains(full) && DirectChild(plan.OldDirectory, full))
+                if (!affected.Contains(full) && Under(plan.OldDirectory, full))
                     throw new NotSupportedException(
                         "Chiudi solo il file non Java aperto sotto il package (non supportato): " + full);
                 if (!affected.Contains(full) || !uniqueOpen.Add(full)) continue;
@@ -688,15 +836,14 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                         "Il buffer aperto non corrisponde al file su disco: " + full +
                         ". \nSalva e riprova, senza chiudere la scheda.");
                 string target = plan.MovedJavaFiles.Contains(full, FileComparer) ?
-                    Path.Combine(plan.NewDirectory, Path.GetFileName(full)) : full;
+                    DestinationForMovedFile(plan.OldDirectory, plan.NewDirectory, full) : full;
                 plan.OpenFiles.Add(new LiveDocument { From = full, To = target,
                     Buffer = buffer, TextDocument = textDocument, Snapshot = snapshot,
                     OriginalText = snapshot.GetText() });
             }
-            if (Directory.Exists(plan.NewDirectory) || !Directory.Exists(plan.OldDirectory) ||
-                Directory.GetDirectories(plan.OldDirectory).Length > 0)
+            if (Directory.Exists(plan.NewDirectory) || !Directory.Exists(plan.OldDirectory))
                 throw new IOException("La directory del package è cambiata dopo l'anteprima.");
-            var actualFiles = Directory.GetFiles(plan.OldDirectory, "*.java");
+            var actualFiles = CollectPackageJavaSources(plan.OldDirectory, plan.OldName);
             if (actualFiles.Length != plan.MovedJavaFiles.Count ||
                 actualFiles.Any(x => !plan.MovedJavaFiles.Contains(x, FileComparer)))
                 throw new IOException("Elenco dei sorgenti cambiato dopo l'anteprima.");
@@ -775,7 +922,8 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 foreach (string from in plan.MovedJavaFiles)
                 {
                     changes.SyncFile(from);
-                    changes.SyncFile(Path.Combine(plan.NewDirectory, Path.GetFileName(from)));
+                    changes.SyncFile(DestinationForMovedFile(
+                        plan.OldDirectory, plan.NewDirectory, from));
                 }
             }
             catch (Exception ex)

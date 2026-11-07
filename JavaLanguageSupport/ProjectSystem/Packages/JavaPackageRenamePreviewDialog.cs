@@ -50,8 +50,9 @@ internal static partial class JavaRenamePackageCommand
                 DockPanel.SetDock(heading, Dock.Top);
                 content.Children.Add(heading);
                 heading.Children.Add(Text("Verifica le modifiche prima di applicarle", 18, true));
-                var explanation = Text("Visual Studio sposterà il package e " +
-                    "aggiornerà i riferimenti individuati dall'analisi Java. " +
+                // F2I4-RECURSIVE-PACKAGE: describe recursive movement.
+                var explanation = Text("Visual Studio sposterà il package e tutti i " +
+                    "sottopackage, aggiornando i riferimenti individuati dall'analisi Java. " +
                     "\nSeleziona un file nell'elenco per esaminare i dettagli.", 12, false);
                 explanation.Margin = new Thickness(0, 5, 0, 13);
                 heading.Children.Add(explanation);
@@ -129,10 +130,11 @@ internal static partial class JavaRenamePackageCommand
                 foreach (string file in plan.MovedJavaFiles.OrderBy(x => x,
                     StringComparer.OrdinalIgnoreCase))
                 {
-                    string moved = Path.Combine(plan.NewDirectory, Path.GetFileName(file));
+                    string moved = DestinationForMovedFile(
+                        plan.OldDirectory, plan.NewDirectory, file);
                     var item = new TreeViewItem {
                         Header = JavaNavigationWindowStyle.TreeHeader(
-                            Path.GetFileName(file), false),
+                            ShortPath(plan.OldDirectory, file), false),
                         ToolTip = file,
                         Tag = "SPOSTAMENTO FILE\n\nDa: " + ShortPath(root, file) +
                             "\n\nA:  " + ShortPath(root, moved) +
