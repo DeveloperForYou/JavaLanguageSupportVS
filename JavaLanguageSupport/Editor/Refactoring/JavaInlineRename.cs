@@ -312,6 +312,20 @@ namespace JavaLanguageSupport.Editor.Refactoring
                             return;
                         }
                         int changed = JavaProjectRenameEdits.Apply(plan, log);
+                        // F2I6-SYMBOL-FILE-SYNC: a class rename can also rename
+                        // Foo.java. The VS editor didChange does not guarantee
+                        // that Eclipse notices the old/new filesystem paths.
+                        // Only notify after the linked transaction and saves commit.
+                        if (plan.RenameCount != 0)
+                        {
+                            string syncWarning = await JavaSymbolRenameSync.NotifyAsync(
+                                plan.Root,
+                                plan.moves.Select(x => new KeyValuePair<string, string>(x.From, x.To)),
+                                plan.targets.Where(x => x.Edits.Count != 0)
+                                    .Select(x => x.Document.FilePath));
+                            if (!string.IsNullOrEmpty(syncWarning))
+                                Report(log, "JDT LS: " + syncWarning);
+                        }
                         Report(log, "Rinominato '" + oldName + "' in '" + newName + "' (" +
                             changed + " file, " + plan.EditCount + " sostituzioni, " +
                             plan.RenameCount + " file rinominati). Salva i documenti modificati.");
@@ -1661,11 +1675,13 @@ namespace JavaLanguageSupport.Editor.Refactoring
         {
             private readonly List<FileRename> moves;
             private readonly List<Target> targets;
+            private readonly string projectRoot;
             internal RenameFileUndoPrimitive(IEnumerable<FileRename> fileMoves,
-                IEnumerable<Target> documents)
+                IEnumerable<Target> documents, string javaProjectRoot)
             {
                 moves = fileMoves.Select(x => new FileRename { From = x.From, To = x.To }).ToList();
                 targets = documents.ToList();
+                projectRoot = javaProjectRoot;
             }
             public ITextUndoTransaction Parent { get; set; }
             public bool CanUndo { get { return true; } }
@@ -1723,6 +1739,23 @@ namespace JavaLanguageSupport.Editor.Refactoring
                                     target.Path + ": " + ex);
                             }
                         }
+                        // F2I6-SYMBOL-FILE-SYNC: notify the inverse file move
+                        // for Undo, or the original move for Redo, after the
+                        // linked text buffers have had a chance to save.
+                        var noticeMoves = (redo ? moves : moves.Select(x =>
+                            new FileRename { From = x.To, To = x.From }))
+                            .Select(x => new KeyValuePair<string, string>(x.From, x.To))
+                            .ToArray();
+                        var noticeFiles = targets.Where(x => x.Edits.Count != 0)
+                            .Select(x => x.Document.FilePath).ToArray();
+                        ThreadHelper.JoinableTaskFactory.RunAsync(async delegate
+                        {
+                            string warning = await JavaSymbolRenameSync.NotifyAsync(
+                                projectRoot, noticeMoves, noticeFiles);
+                            if (!string.IsNullOrEmpty(warning))
+                                System.Diagnostics.Trace.WriteLine(
+                                    "[Java Rename undo/redo] " + warning);
+                        }).FileAndForget("JavaLanguageSupport/SymbolRenameUndoSync");
                     }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             }
         }
@@ -1811,7 +1844,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     RenameOpenDocument(target, move.From, move.To);
                 }
                 if (fileUndo != null) {
-                    fileUndo.AddUndo(new RenameFileUndoPrimitive(plan.moves, plan.targets));
+                    fileUndo.AddUndo(new RenameFileUndoPrimitive(
+                        plan.moves, plan.targets, plan.Root));
                     fileUndo.Complete();
                     fileUndo.Dispose();
                     fileUndo = null;
