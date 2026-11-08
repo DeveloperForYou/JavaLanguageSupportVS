@@ -135,10 +135,29 @@ namespace JavaLanguageSupport.LanguageServer
             // original publishDiagnostics notification unchanged.
             if (methodName == "textDocument/publishDiagnostics")
             {
+                // F2J.3: capture arrival BEFORE handing diagnostics to VS.
+                try { JavaDiagnosticsLatencyTracker.ObservePublishReceived(methodParam); }
+                catch (Exception) { /* Observation is strictly best effort. */ }
                 try { JavaDiagnosticsMonitor.Observe(methodParam); }
                 catch (Exception) { /* Telemetry must not break diagnostics. */ }
             }
+            // F2J.3: forwarding duration is NOT the time to render squiggles.
+            long forwardingStarted = Stopwatch.GetTimestamp();
             await sendNotification(methodParam);
+            if (methodName == "textDocument/didOpen" ||
+                methodName == "textDocument/didChange" ||
+                methodName == "textDocument/didClose")
+            {
+                try { JavaDiagnosticsLatencyTracker.ObserveOutgoing(
+                    methodName, methodParam, "VS-native"); }
+                catch (Exception) { /* No interruption of client notifications. */ }
+            }
+            else if (methodName == "textDocument/publishDiagnostics")
+            {
+                try { JavaDiagnosticsLatencyTracker.ObservePublishForwarded(
+                    methodParam, forwardingStarted); }
+                catch (Exception) { /* Do not alter VS diagnostics. */ }
+            }
         }
 
         public async Task<JToken> HandleRequestAsync(string methodName, JToken methodParam,

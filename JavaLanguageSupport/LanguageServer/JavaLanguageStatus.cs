@@ -49,6 +49,8 @@ namespace JavaLanguageSupport.LanguageServer
 
         internal static void Starting(string javaExe, string launcher, string workspace)
         {
+            // F2J.3: measurements must not span separate JDT LS instances.
+            JavaDiagnosticsLatencyTracker.Reset();
             lock (Sync)
             {
                 string logFolder = Path.Combine(
@@ -280,6 +282,8 @@ namespace JavaLanguageSupport.LanguageServer
                     "; versione documento=" + (semanticVersion < 0 ? "-" : semanticVersion.ToString()) +
                     "; token server=" + (semanticTokens < 0 ? "n/d" : semanticTokens.ToString()) +
                     "; aggiornamenti=" + semanticUpdates);
+                result.AppendLine("--- Latenza diagnostica Java CPS (F2J.3) ---");
+                result.AppendLine(JavaDiagnosticsLatencyTracker.Report);
                 result.AppendLine("--- Capabilities negoziate LSP ---");
                 result.AppendLine(initializationSummary);
                 result.AppendLine("--- Prestazioni completamento Java (diagnostica) ---");

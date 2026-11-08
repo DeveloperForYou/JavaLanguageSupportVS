@@ -70,6 +70,11 @@ namespace JavaLanguageSupport.LanguageServer
             if (current == null) return false;
             await current.NotifyWithParameterObjectAsync(method, parameters)
                 .ConfigureAwait(false);
+            // F2J.3: observe CPS bridge metadata without serializing Java text.
+            if (method == "textDocument/didOpen" ||
+                method == "textDocument/didChange" ||
+                method == "textDocument/didClose")
+                JavaDiagnosticsLatencyTracker.ObserveBridgeOutgoing(method, parameters);
             return true;
         }
 
