@@ -19,6 +19,7 @@ namespace JavaLanguageSupport.LanguageServer
         private static readonly SemaphoreSlim DocumentSymbolsGate =
             new SemaphoreSlim(1, 1);
         internal static bool Connected => Volatile.Read(ref rpc) != null;
+        internal static object ConnectionIdentity => Volatile.Read(ref rpc);
 
         internal static void Attach(JsonRpc value) => Volatile.Write(ref rpc, value);
         internal static void Detach() => Volatile.Write(ref rpc, null);

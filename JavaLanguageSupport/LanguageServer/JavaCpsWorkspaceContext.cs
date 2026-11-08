@@ -61,6 +61,33 @@ namespace JavaLanguageSupport.LanguageServer
             }
         }
 
+        // F2J1-CPS-EDITOR-COMPLETION-SCOPE: only open Java sources belonging
+        // to an actually loaded .javaproj qualify for the CPS completion bridge.
+        // Open File and Open Folder Java sessions are intentionally excluded.
+        internal static bool IsLoadedJavaDocument(string sourceFile)
+        {
+            if (string.IsNullOrWhiteSpace(sourceFile)) return false;
+            try
+            {
+                if (!string.Equals(Path.GetExtension(sourceFile), ".java",
+                    StringComparison.OrdinalIgnoreCase)) return false;
+                string file = Path.GetFullPath(sourceFile);
+                lock (Sync)
+                {
+                    return Projects.Any(project =>
+                    {
+                        if (!File.Exists(project)) return false;
+                        string root = Path.GetDirectoryName(project).TrimEnd('\\', '/');
+                        return file.StartsWith(root + Path.DirectorySeparatorChar,
+                            StringComparison.OrdinalIgnoreCase);
+                    });
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException ||
+                ex is NotSupportedException || ex is IOException ||
+                ex is UnauthorizedAccessException) { return false; }
+        }
+
         internal static string ProjectRoot
         {
             get

@@ -20,6 +20,15 @@ namespace JavaLanguageSupport.LanguageServer
         // JDT LS may include publishDiagnostics.version; LSP permits it to be absent.
         private static readonly Dictionary<string, int> ClientVersions =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // Observed via the VS middle layer, never via our direct RPC bridge.
+        private static readonly HashSet<string> NativeOpenDocuments =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        internal static bool IsNativeDocumentOpen(string uri)
+        {
+            if (string.IsNullOrWhiteSpace(uri)) return false;
+            lock (Sync) return NativeOpenDocuments.Contains(uri);
+        }
         private static int invalidations;
         private static int rejectedOldVersions;
         private static int notifications;
@@ -42,6 +51,11 @@ namespace JavaLanguageSupport.LanguageServer
             {
                 if (Published.Remove(uri)) invalidations++;
                 if (method == "textDocument/didClose")
+                    NativeOpenDocuments.Remove(uri);
+                else if (method == "textDocument/didOpen" ||
+                         method == "textDocument/didChange")
+                    NativeOpenDocuments.Add(uri);
+                if (method == "textDocument/didClose")
                     ClientVersions.Remove(uri);
                 else if (version.HasValue && version.Value >= 0)
                 {
@@ -59,6 +73,7 @@ namespace JavaLanguageSupport.LanguageServer
             {
                 Published.Clear();
                 ClientVersions.Clear();
+                NativeOpenDocuments.Clear();
                 notifications = errors = warnings = info = 0;
                 invalidations = rejectedOldVersions = 0;
                 filename = "(nessun documento)";
