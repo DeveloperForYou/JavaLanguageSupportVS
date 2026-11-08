@@ -194,7 +194,8 @@ namespace JavaLanguageSupport.Editor.Intelligence
             ScheduleOnDispatcher();
         }
 
-        private void InvalidateOnDispatcher()
+        // F2J.2: derived CodeLens may refresh after focus without editing the buffer.
+        protected void InvalidateOnDispatcher()
         {
             if (disposed) return;
             Action reset = () => { lastVersion = -1; Schedule(); };

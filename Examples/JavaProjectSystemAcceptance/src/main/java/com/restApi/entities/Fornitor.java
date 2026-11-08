@@ -1,5 +1,7 @@
 package com.restApi.entities;
 
-public class Fornitor extends AbstractClass {
+import com.restApi.entities.abstractEntities.Person;
+
+public class Fornitor extends Person {
 	
 }

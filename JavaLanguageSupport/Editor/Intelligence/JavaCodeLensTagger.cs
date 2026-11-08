@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -8,7 +9,9 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
+using JavaLanguageSupport.Editor.Completion;
 using JavaLanguageSupport.Editor.Navigation;
 using JavaLanguageSupport.Editor.Refactoring;
 using JavaLanguageSupport.LanguageServer;
@@ -55,8 +58,33 @@ namespace JavaLanguageSupport.Editor.Intelligence
             internal ITextSnapshot Snapshot;
         }
 
+        // One expensive CodeLens refresh at a time across Java editor tabs.
+        // Normal completion and diagnostics are NOT gated here.
+        private static readonly SemaphoreSlim CodeLensGate = new SemaphoreSlim(1, 1);
+        private DateTime lastFocusRefreshUtc = DateTime.UtcNow;
+
         internal JavaCodeLensTagger(IWpfTextView view, ITextDocumentFactoryService documents)
-            : base(view, documents) { }
+            : base(view, documents)
+        {
+            view.VisualElement.GotKeyboardFocus += OnGotKeyboardFocus;
+            view.Closed += OnCodeLensViewClosed;
+        }
+
+        private void OnGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            // Revisit counts when returning to a tab after other source files
+            // changed; no poll, no request on every keypress.
+            DateTime now = DateTime.UtcNow;
+            if ((now - lastFocusRefreshUtc).TotalSeconds < 12) return;
+            lastFocusRefreshUtc = now;
+            InvalidateOnDispatcher();
+        }
+
+        private void OnCodeLensViewClosed(object sender, EventArgs e)
+        {
+            View.VisualElement.GotKeyboardFocus -= OnGotKeyboardFocus;
+            View.Closed -= OnCodeLensViewClosed;
+        }
 
         protected override string MethodName => "textDocument/codeLens";
         // Keep CodeLens above declarations stable while typing. Refresh
@@ -94,6 +122,26 @@ namespace JavaLanguageSupport.Editor.Intelligence
         {
             var result = new List<ITagSpan<InterLineAdornmentTag>>();
             if (snapshot.LineCount > 10000) return result;
+            // CPS F2J.1c owns didOpen/didChange. If the bridge exists, the
+            // CodeLens request must observe the SAME snapshot as completion.
+            // Never send duplicate didOpen from CodeLens itself.
+            JavaCpsCompletionDocumentSync sync;
+            if (JavaCpsCompletionDocumentSync.Enabled &&
+                View.TextBuffer.Properties.TryGetProperty(
+                    typeof(JavaCpsCompletionDocumentSync), out sync))
+            {
+                if (!await sync.EnsureAsync(uri, snapshot, token))
+                {
+                    RequestBoundedRetry(snapshot);
+                    return result;
+                }
+                if (!ReferenceEquals(snapshot, View.TextBuffer.CurrentSnapshot)) return result;
+            }
+
+            await CodeLensGate.WaitAsync(token);
+            var elapsed = Stopwatch.StartNew();
+            try
+            {
             JToken response = await JavaLspRpc.RequestAsync(MethodName,
                 new { textDocument = new { uri } }, token);
             // A null CodeLens response is allowed by LSP. The interface
@@ -136,8 +184,27 @@ namespace JavaLanguageSupport.Editor.Intelligence
             // Native JDT CodeLens is authoritative. Add only missing
             // semantic references for fields and interface headings.
             // Retry a temporarily empty server response (at most twice).
-            bool incomplete = await AddMissingInterfaceLensesAsync(
-                uri, snapshot, lines, token);
+            // Native JDT lenses should not be blocked for 8 seconds by many
+            // fallback reference/implementation searches. A short, cancellable
+            // budget publishes native results promptly and schedules at most
+            // two retries for the same snapshot if enrichment was incomplete.
+            bool incomplete = false;
+            using (var fallbackBudget = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                // If JDT supplies no native lenses, fallback is the ONLY source
+                // of field/interface counts; allow it a longer window.
+                fallbackBudget.CancelAfter(TimeSpan.FromMilliseconds(
+                    items.Count == 0 ? 5600 : 3300));
+                try
+                {
+                    incomplete = await AddMissingInterfaceLensesAsync(
+                        uri, snapshot, lines, fallbackBudget.Token);
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    incomplete = true;
+                }
+            }
             if (incomplete || items.Count == 0) RequestBoundedRetry(snapshot);
 
             foreach (var group in lines.OrderBy(x => x.Key))
@@ -167,6 +234,14 @@ namespace JavaLanguageSupport.Editor.Intelligence
                 result.Add(new TagSpan<InterLineAdornmentTag>(span, tag));
             }
             return result;
+            }
+            finally
+            {
+                CodeLensGate.Release();
+                // No source text or absolute paths in the trace.
+                Trace.WriteLine("[Java F2J2 CodeLens] refresh=" +
+                    elapsed.ElapsedMilliseconds + "ms");
+            }
         }
 
         // DocumentSymbol can contain nested Java interfaces inside classes.
