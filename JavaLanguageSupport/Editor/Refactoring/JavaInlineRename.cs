@@ -691,8 +691,13 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 if (PathCompare.Equals(path, origin))
                     targetBuffer = originBuffer;
                 else {
-                    dte.ItemOperations.OpenFile(path, EnvDTE.Constants.vsViewKindTextView);
-                    targetBuffer = GetOpenDocumentBuffer(path, adapters);
+                    // I documenti già aperti devono essere riutilizzati: una seconda
+                    // apertura DTE può attraversare un itemId CPS ormai obsoleto.
+                    targetBuffer = TryGetOpenDocumentBuffer(path, adapters);
+                    if (targetBuffer == null) {
+                        dte.ItemOperations.OpenFile(path, EnvDTE.Constants.vsViewKindTextView);
+                        targetBuffer = GetOpenDocumentBuffer(path, adapters);
+                    }
                 }
                 if (targetBuffer == null || !targetBuffer.ContentType.IsOfType("java"))
                     throw new InvalidOperationException("Buffer Java non disponibile: " + path);
@@ -785,14 +790,17 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 // nel nuovo percorso dopo ITextDocument.Rename.
                 plan.moves.Add(move);
             }
-            // Riporta in primo piano il file iniziale, se non era uno dei file non esistenti.
-            dte.ItemOperations.OpenFile(origin, EnvDTE.Constants.vsViewKindTextView);
+            // Non riaprire un file già aperto: il DTE può interrogare una vecchia
+            // gerarchia CPS e generare ArgumentOutOfRangeException(itemId).
+            // Il frame viene attivato tramite il cookie RDT, senza OpenFile.
+            ActivateOpenDocument(origin);
             return plan;
         }
 
-        // Recupera il vero buffer di documento tramite la Running Document Table.
-        // Il focus della vista attiva non viene utilizzato per individuare il file.
-        private static ITextBuffer GetOpenDocumentBuffer(string path,
+        // Recupera il vero buffer tramite la RDT, senza riaprire l'editor.
+        // FindAndLockDocument con RDT_NoLock non acquisisce lock da rilasciare;
+        // il puntatore COM eventualmente restituito va comunque rilasciato.
+        private static ITextBuffer TryGetOpenDocumentBuffer(string path,
             IVsEditorAdaptersFactoryService adapters)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -802,12 +810,14 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 throw new InvalidOperationException("Running Document Table non disponibile.");
             IVsHierarchy hierarchy;
             uint itemId, cookie;
-            IntPtr documentData;
-            Microsoft.VisualStudio.ErrorHandler.ThrowOnFailure(rdt.FindAndLockDocument(
-                (uint)_VSRDTFLAGS.RDT_NoLock, path, out hierarchy, out itemId,
-                out documentData, out cookie));
-            if (documentData == IntPtr.Zero)
-                throw new InvalidOperationException("Il file non e' registrato nell'editor: " + path);
+            IntPtr documentData = IntPtr.Zero;
+            int hr = rdt.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_NoLock,
+                path, out hierarchy, out itemId, out documentData, out cookie);
+            if (Microsoft.VisualStudio.ErrorHandler.Failed(hr)) {
+                if (documentData != IntPtr.Zero) Marshal.Release(documentData);
+                return null; // Non aperto; il chiamante potrà aprirlo una sola volta.
+            }
+            if (documentData == IntPtr.Zero) return null;
             try {
                 var legacy = Marshal.GetObjectForIUnknown(documentData) as IVsTextBuffer;
                 if (legacy == null)
@@ -815,6 +825,110 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 return adapters.GetDocumentBuffer(legacy) ?? adapters.GetDataBuffer(legacy);
             } finally {
                 Marshal.Release(documentData);
+            }
+        }
+
+        private static ITextBuffer GetOpenDocumentBuffer(string path,
+            IVsEditorAdaptersFactoryService adapters)
+        {
+            var buffer = TryGetOpenDocumentBuffer(path, adapters);
+            if (buffer == null)
+                throw new InvalidOperationException("Il file non e' registrato nell'editor: " + path);
+            return buffer;
+        }
+
+        // Il cookie RDT identifica il documento già aperto, senza usare itemId
+        // della gerarchia CPS (che può cambiare dopo la rinomina del file).
+        private static bool TryGetDocumentCookie(string path, out uint cookie)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            cookie = 0;
+            var rdt = Package.GetGlobalService(typeof(SVsRunningDocumentTable))
+                as IVsRunningDocumentTable;
+            if (rdt == null) return false;
+            IVsHierarchy hierarchy;
+            uint itemId;
+            IntPtr data = IntPtr.Zero;
+            int hr = rdt.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_NoLock,
+                path, out hierarchy, out itemId, out data, out cookie);
+            if (data != IntPtr.Zero) Marshal.Release(data);
+            return Microsoft.VisualStudio.ErrorHandler.Succeeded(hr) && cookie != 0;
+        }
+
+        // Riattiva il frame originale senza DTE.ItemOperations.OpenFile.
+        // Se la shell non lo espone, non impedisce il refactoring.
+        private static void ActivateOpenDocument(string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try {
+                uint cookie;
+                if (!TryGetDocumentCookie(path, out cookie)) return;
+                var shell = Package.GetGlobalService(typeof(SVsUIShell)) as IVsUIShell;
+                if (shell == null) return;
+                IEnumWindowFrames frames;
+                if (Microsoft.VisualStudio.ErrorHandler.Failed(
+                    shell.GetDocumentWindowEnum(out frames)) || frames == null) return;
+                var current = new IVsWindowFrame[1];
+                uint fetched;
+                while (frames.Next(1, current, out fetched) == 0 && fetched == 1) {
+                    if (FrameHasCookie(current[0], cookie)) {
+                        current[0].Show();
+                        return;
+                    }
+                }
+            } catch (Exception ex) {
+                System.Diagnostics.Trace.WriteLine("[Java Rename frame activation] " + ex);
+            }
+        }
+
+        private static bool FrameHasCookie(IVsWindowFrame frame, uint cookie)
+        {
+            if (frame == null) return false;
+            object value;
+            if (Microsoft.VisualStudio.ErrorHandler.Failed(frame.GetProperty(
+                (int)__VSFPROPID.VSFPROPID_DocCookie, out value)) || value == null)
+                return false;
+            try { return Convert.ToUInt32(value) == cookie; }
+            catch (Exception) { return false; }
+        }
+
+        // Best effort: se il tab è rimasto con il vecchio titolo, aggiorna SOLO
+        // il frame che punta al documento rinominato (via cookie RDT).
+        // Usato anche da Undo/Redo, senza chiudere e riaprire la scheda.
+        private static void RefreshRenamedEditorCaption(string from, string to)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try {
+                uint cookie;
+                if (!TryGetDocumentCookie(to, out cookie)) return;
+                var shell = Package.GetGlobalService(typeof(SVsUIShell)) as IVsUIShell;
+                if (shell == null) return;
+                IEnumWindowFrames frames;
+                if (Microsoft.VisualStudio.ErrorHandler.Failed(
+                    shell.GetDocumentWindowEnum(out frames)) || frames == null) return;
+                string oldFile = Path.GetFileName(from);
+                string newFile = Path.GetFileName(to);
+                var current = new IVsWindowFrame[1];
+                uint fetched;
+                while (frames.Next(1, current, out fetched) == 0 && fetched == 1) {
+                    var frame = current[0];
+                    if (!FrameHasCookie(frame, cookie)) continue;
+                    object value;
+                    if (Microsoft.VisualStudio.ErrorHandler.Failed(frame.GetProperty(
+                        (int)__VSFPROPID.VSFPROPID_Caption, out value))) continue;
+                    string caption = value as string;
+                    if (string.IsNullOrEmpty(caption) ||
+                        caption.IndexOf(oldFile, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    // Usa la property ufficiale di override del titolo, non tocca
+                    // la gerarchia CPS né il nome del documento nella RDT.
+                    string newCaption = Regex.Replace(caption, Regex.Escape(oldFile),
+                        _ => newFile, RegexOptions.IgnoreCase);
+                    Microsoft.VisualStudio.ErrorHandler.ThrowOnFailure(frame.SetProperty(
+                        (int)VsFramePropID.OverrideCaption, newCaption));
+                }
+            } catch (Exception ex) {
+                System.Diagnostics.Trace.WriteLine("[Java Rename tab caption] " + ex);
             }
         }
 
@@ -1772,6 +1886,10 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 Microsoft.VisualStudio.VSConstants.VSITEMID_NIL));
             if (!PathCompare.Equals(target.Document.FilePath, to))
                 target.Document.Rename(to);
+            if (!PathCompare.Equals(target.Document.FilePath, to))
+                throw new InvalidOperationException(
+                    "Il documento Java non ha aggiornato il proprio percorso: " + to);
+            RefreshRenamedEditorCaption(from, to);
         }
 
         internal static int Apply(RenamePlan plan, Action<string> log)
