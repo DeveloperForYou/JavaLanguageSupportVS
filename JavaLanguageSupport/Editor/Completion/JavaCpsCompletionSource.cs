@@ -8,6 +8,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using JavaLanguageSupport.LanguageServer;
+using Microsoft.VisualStudio.Core.Imaging;
+using Microsoft.VisualStudio.Imaging;
 using Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion;
 using Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion.Data;
 using Microsoft.VisualStudio.Text;
@@ -15,6 +17,7 @@ using Microsoft.VisualStudio.Text.Adornments;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
 using Newtonsoft.Json.Linq;
+using System.Windows.Threading;
 
 namespace JavaLanguageSupport.Editor.Completion
 {
@@ -30,13 +33,14 @@ namespace JavaLanguageSupport.Editor.Completion
     internal sealed class JavaCpsCompletionSourceProvider : IAsyncCompletionSourceProvider
     {
         [Import] internal ITextDocumentFactoryService Documents = null;
+        [Import] internal IAsyncCompletionBroker CompletionBroker = null;
 
         public IAsyncCompletionSource GetOrCreate(ITextView textView)
         {
             if (textView == null || Documents == null ||
                 !textView.TextBuffer.ContentType.IsOfType("java")) return null;
             return textView.Properties.GetOrCreateSingletonProperty(
-                () => new JavaCpsCompletionSource(textView, Documents));
+                () => new JavaCpsCompletionSource(textView, Documents, CompletionBroker));
         }
     }
 
@@ -46,16 +50,182 @@ namespace JavaLanguageSupport.Editor.Completion
         private readonly ITextBuffer buffer;
         private readonly ITextDocumentFactoryService documents;
         private readonly JavaCpsCompletionDocumentSync documentSync;
+        private readonly IWpfTextView completionView;
+        private readonly IAsyncCompletionBroker completionBroker;
+        private int refreshGeneration;
 
         internal JavaCpsCompletionSource(ITextView view,
-            ITextDocumentFactoryService documents)
+            ITextDocumentFactoryService documents, IAsyncCompletionBroker completionBroker)
         {
             buffer = view.TextBuffer;
             this.documents = documents;
+            this.completionBroker = completionBroker;
+            completionView = view as IWpfTextView;
             // One LSP text-document state per buffer, even if there are split views.
             documentSync = buffer.Properties.GetOrCreateSingletonProperty(
                 () => new JavaCpsCompletionDocumentSync(buffer));
             documentSync.RegisterView(view);
+            // F2J4: the VS completion session holds a FIXED initial item set.
+            // Requery JDT LS on a context boundary such as System., instead
+            // of filtering the previous (possibly generic) suggestions.
+            if (completionView != null && completionBroker != null)
+            {
+                buffer.Changed += OnCompletionTextChanged;
+                completionView.Closed += OnCompletionViewClosed;
+            }
+        }
+
+        // F2J4-CPS-CONTEXT-REFRESH
+        // The modern VS AsyncCompletion broker calls GetCompletionContextAsync
+        // only ONCE per session. Subsequent keystrokes filter its old list.
+        // After a dot we must dismiss that session and explicitly start a new
+        // one; after a typing pause we refresh the prefix without requiring Tab.
+        private static bool RefreshDisabled()
+        {
+            try
+            {
+                return File.Exists(Path.Combine(Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData),
+                    "JavaLanguageSupportVS", "disable-cps-completion-refresh.flag"));
+            }
+            catch (Exception) { return true; }
+        }
+
+        private void OnCompletionViewClosed(object sender, EventArgs e)
+        {
+            Interlocked.Increment(ref refreshGeneration);
+            buffer.Changed -= OnCompletionTextChanged;
+            if (completionView != null)
+                completionView.Closed -= OnCompletionViewClosed;
+        }
+
+        private void OnCompletionTextChanged(object sender,
+            TextContentChangedEventArgs change)
+        {
+            int generation = Interlocked.Increment(ref refreshGeneration);
+            if (completionView == null || completionView.IsClosed ||
+                completionBroker == null || RefreshDisabled() ||
+                change == null || change.Changes.Count != 1) return;
+            ITextChange edit = change.Changes[0];
+            // Avoid bulk edits, rename/formatting and completion insertions.
+            if (edit.OldLength != 0 || edit.NewLength != 1) return;
+            string added = edit.NewText;
+            if (string.IsNullOrEmpty(added)) return;
+            char typed = added[0];
+            bool afterDot = typed == '.';
+            if (!afterDot && !Identifier(typed)) return;
+            if (!Eligible()) return;
+            var ignored = RefreshOnEditAsync(change.Before, change.After,
+                edit.NewPosition + 1, typed, afterDot, generation);
+        }
+
+        private async Task RefreshOnEditAsync(ITextSnapshot before,
+            ITextSnapshot snapshot, int expectedCaret,
+            char typed, bool afterDot, int generation)
+        {
+            try
+            {
+                // Dot is a syntactic boundary: update as soon as the editor
+                // has processed this keystroke. Prefix refresh is debounced,
+                // otherwise a request on every letter would overload JDT LS.
+                if (!afterDot)
+                    await Task.Delay(280).ConfigureAwait(false);
+                if (generation != Volatile.Read(ref refreshGeneration)) return;
+                var dispatcher = completionView.VisualElement.Dispatcher;
+                await dispatcher.InvokeAsync(() => RestartCompletionOnUi(before, snapshot,
+                    expectedCaret, typed, afterDot, generation),
+                    DispatcherPriority.Background);
+            }
+            catch (TaskCanceledException) { /* Newer edit superseded this one. */ }
+            catch (InvalidOperationException) { /* View/dispatcher is closing. */ }
+            catch (OperationCanceledException) { /* View/dispatcher is closing. */ }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "Java F2J4 completion refresh: " + ex.Message);
+            }
+        }
+
+        private void RestartCompletionOnUi(ITextSnapshot before,
+            ITextSnapshot snapshot, int expectedCaret,
+            char typed, bool afterDot, int generation)
+        {
+            if (generation != Volatile.Read(ref refreshGeneration) ||
+                completionView == null || completionView.IsClosed ||
+                !ReferenceEquals(snapshot, buffer.CurrentSnapshot) ||
+                RefreshDisabled() || !Eligible()) return;
+
+            // Do not force popup after typing in unrelated areas or after a
+            // navigation: the caret must still be at the last inserted char.
+            SnapshotPoint caret = completionView.Caret.Position.BufferPosition;
+            if (!ReferenceEquals(caret.Snapshot, snapshot) ||
+                caret.Position != expectedCaret) return;
+            if (afterDot && (caret.Position == 0 ||
+                             snapshot[caret.Position - 1] != '.')) return;
+            if (!afterDot && WordSpan(caret).Length < 3) return;
+
+            IAsyncCompletionSession old = completionBroker.GetSession(completionView);
+            // Normal prefix typing should never open a popup that the user
+            // has already dismissed. A dot may start a fresh member popup.
+            if (!afterDot && (old == null || old.IsDismissed)) return;
+            if (old != null && !old.IsDismissed) old.Dismiss();
+
+            var trigger = new CompletionTrigger(
+                CompletionTriggerReason.Insertion, before, typed);
+            var fresh = completionBroker.TriggerCompletion(completionView,
+                trigger, caret, CancellationToken.None);
+            if (fresh != null && !fresh.IsDismissed)
+                fresh.OpenOrUpdate(trigger, caret, CancellationToken.None);
+        }
+        // F2J4-REFRESH-END
+
+        private static readonly ImageElement MethodGlyph =
+            new ImageElement(KnownMonikers.Method.ToImageId(), "Metodo Java");
+        private static readonly ImageElement FieldGlyph =
+            new ImageElement(KnownMonikers.Field.ToImageId(), "Campo Java");
+        private static readonly ImageElement VariableGlyph =
+            new ImageElement(KnownMonikers.MemberVariable.ToImageId(), "Variabile Java");
+        private static readonly ImageElement TypeGlyph =
+            new ImageElement(KnownMonikers.Class.ToImageId(), "Tipo Java");
+        private static readonly ImageElement KeywordGlyph =
+            new ImageElement(KnownMonikers.IntellisenseKeyword.ToImageId(), "Parola chiave Java");
+
+        // Shared filter instances are required by the VS completion API.
+        private static readonly CompletionFilter MethodFilter =
+            new CompletionFilter("Metodi", "M", MethodGlyph);
+        private static readonly CompletionFilter FieldFilter =
+            new CompletionFilter("Campi", "C", FieldGlyph);
+        private static readonly CompletionFilter VariableFilter =
+            new CompletionFilter("Variabili", "V", VariableGlyph);
+        private static readonly CompletionFilter TypeFilter =
+            new CompletionFilter("Tipi", "T", TypeGlyph);
+        private static readonly CompletionFilter KeywordFilter =
+            new CompletionFilter("Keyword e altri", "K", KeywordGlyph);
+
+        private static ImageElement CpsKindGlyph(int kind)
+        {
+            switch (kind)
+            {
+                case 2: case 3: case 4: return MethodGlyph; // method/function/ctor
+                case 5: case 10: case 20: return FieldGlyph; // field/property/enum member
+                case 6: case 12: case 21: return VariableGlyph; // variable/value/constant
+                case 7: case 8: case 13: case 22: case 25: return TypeGlyph;
+                default: return KeywordGlyph;
+            }
+        }
+
+        private static ImmutableArray<CompletionFilter> CpsKindFilters(int kind)
+        {
+            CompletionFilter filter;
+            switch (kind)
+            {
+                case 2: case 3: case 4: filter = MethodFilter; break;
+                case 5: case 10: case 20: filter = FieldFilter; break;
+                case 6: case 12: case 21: filter = VariableFilter; break;
+                case 7: case 8: case 13: case 22: case 25: filter = TypeFilter; break;
+                default: filter = KeywordFilter; break;
+            }
+            return ImmutableArray.Create(filter);
         }
 
         private bool Eligible()
@@ -200,8 +370,11 @@ namespace JavaLanguageSupport.Editor.Completion
                 if (!unique.Add(key)) continue;
                 string sort = (string)candidate["sortText"] ?? label;
                 string filter = (string)candidate["filterText"] ?? label;
-                items.Add(new CompletionItem(label, this, default(ImageElement),
-                    ImmutableArray<CompletionFilter>.Empty, string.Empty,
+                // LSP CompletionItemKind drives the native themed icon and
+                // optional VS category filters. Keep JDT LS sortText relevance.
+                int kind = (int?)candidate["kind"] ?? 1;
+                items.Add(new CompletionItem(label, this, CpsKindGlyph(kind),
+                    CpsKindFilters(kind), string.Empty,
                     insert, sort, filter, ImmutableArray<ImageElement>.Empty));
                 if (items.Count >= MaxItems) break;
             }
