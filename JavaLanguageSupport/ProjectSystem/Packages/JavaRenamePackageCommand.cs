@@ -15,6 +15,7 @@ using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.TextManager.Interop;
+using Microsoft.VisualStudio.Text.Operations;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -27,7 +28,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
     /// JDT LS driven rename of Java packages, including nested packages.
     /// Fail-closed: no dirty open documents, no external files or unsupported
     /// LSP resource operations. A backup is saved before any filesystem mutation.
-    /// Full CPS-linked undo and recursive package rename are subsequent work.
+    /// CPS package rename supports recursive refactoring and linked Undo/Redo (Pack U1).
     /// </summary>
     internal static partial class JavaRenamePackageCommand
     {
@@ -146,6 +147,9 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 Plan plan = Prepare(response, project, directory, newDirectory,
                     oldName, newName, sourceRoot);
                 if (new JavaPackageRenamePreviewDialog(plan).ShowDialog() != true) return;
+                // Pack U1: il documento di ancoraggio deve essere aperto PRIMA
+                // della rinomina per mantenere una cronologia VS utilizzabile.
+                EnsureUndoAnchorOpen(plan, services);
                 EnsureReady(plan, services);
                 Apply(plan);
                 // The physical rename is committed. Notify JDT LS explicitly:
@@ -161,8 +165,10 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     "\nFile con modifiche: " + plan.Files.Count +
                     "\nModifiche al codice: " + plan.EditCount +
                     "\n\nBackup: " + plan.BackupDirectory +
-                    "\n\nL'annullamento globale con Ctrl+Z non è disponibile. " +
-                    "Per ripristinare l'intera rinomina usa Git o il backup." +
+                    "\n\nCTRL+Z: annulla la rinomina del package. " +
+                    "CTRL+Y: ripeti la rinomina, dalla scheda Java attivata. " +
+                    "Non chiudere tale scheda prima di annullare/ripetere. " +
+                    "In caso di conflitti utilizza Git o il backup." +
                     (string.IsNullOrWhiteSpace(workspaceNotice) ? "" :
                         "\n\n" + workspaceNotice), false);
             }
@@ -930,11 +936,24 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             // Live buffers, rename notifications and disk writes run on the UI thread.
-            // As in F2H.1a, global Ctrl+Z remains unsupported; persistent backup is
-            // mandatory. A future pack will combine these with linked Undo/Redo.
+            // Pack U1: le modifiche di testo avvengono in una transazione VS
+            // collegata e una primitive gestisce cartella, file chiusi, CPS e RDT.
             var rdt = Package.GetGlobalService(typeof(SVsRunningDocumentTable))
                 as IVsRunningDocumentTable;
             if (rdt == null) throw new InvalidOperationException("RDT non disponibile.");
+            var dte = Package.GetGlobalService(typeof(SDTE)) as DTE;
+            var model = Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel;
+            var registry = model == null ? null : model.GetService<ITextUndoHistoryRegistry>();
+            if (dte == null || dte.UndoContext == null || dte.UndoContext.IsOpen ||
+                registry == null)
+                throw new InvalidOperationException("Undo globale Java CPS non disponibile o già in corso.");
+            string anchorPath = plan.MovedJavaFiles.FirstOrDefault();
+            var anchor = plan.OpenFiles.FirstOrDefault(x => FileComparer.Equals(x.From, anchorPath));
+            if (anchor == null)
+                throw new InvalidOperationException("Apri un sorgente Java nel package per poter usare CTRL+Z/CTRL+Y.");
+            var history = registry.GetHistory(anchor.Buffer);
+            if (history == null || plan.OpenFiles.Any(x => registry.GetHistory(x.Buffer) == null))
+                throw new InvalidOperationException("Cronologia Undo Java non disponibile: rinomina annullata.");
             foreach (var live in plan.OpenFiles)
             {
                 if (!ReferenceEquals(live.Buffer.CurrentSnapshot, live.Snapshot) ||
@@ -967,8 +986,14 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             var written = new List<DocumentChange>();
             var renamed = new List<LiveDocument>();
             bool moved = false;
+            bool linkedOpen = false;
+            ITextUndoTransaction packageUndo = null;
             try
             {
+                dte.UndoContext.Open("Java: Rinomina package " + plan.OldName + " -> " +
+                    plan.NewName, true);
+                linkedOpen = true;
+                packageUndo = history.CreateTransaction("Java: rinomina package CPS");
                 foreach (var doc in plan.Files)
                 {
                     var live = plan.OpenFiles.FirstOrDefault(x => FileComparer.Equals(x.From, doc.Path));
@@ -996,10 +1021,29 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 }
                 if (!plan.ProjectBefore.SequenceEqual(plan.ProjectAfter))
                     File.WriteAllBytes(plan.ProjectFile, plan.ProjectAfter);
+
+                // Registro lo spostamento e i file non-UI sulla stessa cronologia
+                // collegata dei buffer: un singolo CTRL+Z deve annullare tutto.
+                packageUndo.AddUndo(new PackageRenameUndoPrimitive(plan));
+                packageUndo.Complete();
+                packageUndo.Dispose();
+                packageUndo = null;
+                dte.UndoContext.Close();
+                linkedOpen = false;
             }
             catch (Exception error)
             {
                 var rollbackErrors = new List<string>();
+                if (packageUndo != null)
+                {
+                    try { packageUndo.Cancel(); packageUndo.Dispose(); }
+                    catch (Exception ex) { rollbackErrors.Add("undo: " + ex.Message); }
+                }
+                if (linkedOpen)
+                {
+                    try { dte.UndoContext.SetAborted(); dte.UndoContext.Close(); }
+                    catch (Exception ex) { rollbackErrors.Add("undo globale: " + ex.Message); }
+                }
                 // RDT document paths must match their original file names again.
                 foreach (var live in renamed.AsEnumerable().Reverse())
                 {
