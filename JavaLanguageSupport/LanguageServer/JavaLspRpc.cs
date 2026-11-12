@@ -62,6 +62,44 @@ namespace JavaLanguageSupport.LanguageServer
             }
         }
 
+        // U2.3: OnBeginShutdown puo' arrivare quando l'evento
+        // ILanguageClient.StopAsync non ha piu' iscritti. La richiesta diretta
+        // sfrutta lo STESSO canale JsonRpc gia' usato da Visual Studio; nessuna
+        // seconda connessione LSP. Il risultato puo' essere JSON null: una
+        // risposta valida prova il completamento della richiesta.
+        internal static async Task<bool> ShutdownStrictAsync(CancellationToken token)
+        {
+            var current = Volatile.Read(ref rpc);
+            if (current == null)
+            {
+                JavaLanguageStatus.LogLifecycle(
+                    "[U2.3 lifecycle] shutdown diretto non disponibile: RPC assente");
+                return false;
+            }
+            try
+            {
+                JavaLanguageStatus.LspRequest("shutdown");
+                await current.InvokeWithParameterObjectAsync<JToken>(
+                    "shutdown", new { }, token).ConfigureAwait(false);
+                JavaLanguageStatus.LogLifecycle(
+                    "[U2.3 lifecycle] shutdown diretto completato");
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                JavaLanguageStatus.LogLifecycle(
+                    "[U2.3 lifecycle] shutdown diretto timeout/annullato");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                JavaLanguageStatus.LogLifecycle(
+                    "[U2.3 lifecycle] shutdown diretto non riuscito: " +
+                    ex.GetType().Name + ": " + ex.Message);
+                return false;
+            }
+        }
+
         // Send a protocol notification (not a request). Used after successful
         // CPS package changes so JDT LS can reconcile its Java project model.
         internal static async Task<bool> NotifyAsync(string method, object parameters)

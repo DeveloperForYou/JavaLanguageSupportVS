@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using JavaLanguageSupport.LanguageServer;
 
@@ -19,7 +20,63 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         private static readonly StringComparer Paths =
             StringComparer.OrdinalIgnoreCase;
 
+        // Pack U2: le rinomine CPS e Undo/Redo possono arrivare in raffiche.
+        // Debounce (ultimo stato vince) + una sola richiesta di sync attiva.
+        // Non garantisce la fine dei job Eclipse, ma evita refresh RPC accavallati.
+        private static readonly SemaphoreSlim DispatchGate = new SemaphoreSlim(1, 1);
+        private static int revision;
+        private static int shuttingDown;
+
+        internal static bool IsShuttingDown => Volatile.Read(ref shuttingDown) != 0;
+
+        internal static void BeginSession()
+        {
+            Interlocked.Increment(ref revision);
+            Volatile.Write(ref shuttingDown, 0);
+            JavaLanguageStatus.LogLifecycle("sync CPS: nuova sessione");
+        }
+
+        // Prima di shutdown LSP: impedisce nuove notifiche e aspetta
+        // quelle che hanno gia' acquisito il gate. I job Eclipse interni
+        // possono comunque proseguire, quindi serve anche lo shutdown pulito.
+        internal static async Task<bool> BeginShutdownAndDrainAsync(int milliseconds)
+        {
+            Volatile.Write(ref shuttingDown, 1);
+            Interlocked.Increment(ref revision);
+            bool entered = await DispatchGate.WaitAsync(milliseconds).ConfigureAwait(false);
+            if (entered) DispatchGate.Release();
+            JavaLanguageStatus.LogLifecycle("sync CPS drain=" + entered);
+            return entered;
+        }
+
         internal static async Task<string> NotifyRenameAsync(string projectFile, string oldDirectory,
+            string newDirectory, IEnumerable<string> movedFiles,
+            IEnumerable<string> changedFiles)
+        {
+            if (IsShuttingDown) return "JDT LS in arresto: sincronizzazione differita al prossimo avvio.";
+            int requestRevision = Interlocked.Increment(ref revision);
+            // Le primitive Undo/Redo possono essere accodate su ApplicationIdle.
+            // Aspetta che il filesystem si assesti e ignora stati intermedi.
+            await Task.Delay(650).ConfigureAwait(false);
+            if (IsShuttingDown || requestRevision != Volatile.Read(ref revision))
+            {
+                JavaLanguageStatus.LogLifecycle("sync CPS: stato intermedio superato");
+                return null;
+            }
+            await DispatchGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (IsShuttingDown || requestRevision != Volatile.Read(ref revision))
+                    return null;
+                JavaLanguageStatus.LogLifecycle("sync CPS: " +
+                    Path.GetFileName(oldDirectory) + " -> " + Path.GetFileName(newDirectory));
+                return await NotifyRenameCoreAsync(projectFile, oldDirectory, newDirectory,
+                    movedFiles, changedFiles).ConfigureAwait(false);
+            }
+            finally { DispatchGate.Release(); }
+        }
+
+        private static async Task<string> NotifyRenameCoreAsync(string projectFile, string oldDirectory,
             string newDirectory, IEnumerable<string> movedFiles,
             IEnumerable<string> changedFiles)
         {

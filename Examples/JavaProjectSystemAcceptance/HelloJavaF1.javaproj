@@ -2,33 +2,33 @@
 <!-- Pack F1 CPS acceptance. The .javaproj is optional VS-only metadata.
      pom.xml remains the authoritative portable Maven project. -->
 <Project ToolsVersion="Current" DefaultTargets="Build">
-  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.props" />
-  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.targets" />
-  <PropertyGroup Label="Globals">
-    <ProjectGuid>5c418638-4fd1-67ad-0eef-9ee49536e724</ProjectGuid>
-  </PropertyGroup>
-  <PropertyGroup>
-    <JavaBuildSystem>Maven</JavaBuildSystem>
-  </PropertyGroup>
-  <ItemGroup>
-    <JavaCompile Include="src\**\*.java" Exclude="**\bin\**;**\obj\**;**\target\**;**\build\**" />
-    <None Include="src\**\*.*" Exclude="**\bin\**;**\obj\**;**\target\**;**\build\**;src\**\*.java" />
-    <None Include="pom.xml" />
-    <None Include="README.md" Condition="Exists('README.md')" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="src\test\resources\" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="src\main\resources\" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="src\main\java\com\restApi\services\" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="src\main\java\com\restApi\controllers\" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="src\main\java\com\restApi\entities\abstractEntities\" />
-  </ItemGroup>
+	<Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.props" />
+	<Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.targets" />
+	<PropertyGroup Label="Globals">
+		<ProjectGuid>5c418638-4fd1-67ad-0eef-9ee49536e724</ProjectGuid>
+	</PropertyGroup>
+	<PropertyGroup>
+		<JavaBuildSystem>Maven</JavaBuildSystem>
+	</PropertyGroup>
+	<ItemGroup>
+		<JavaCompile Include="src\**\*.java" Exclude="**\bin\**;**\obj\**;**\target\**;**\build\**" />
+		<None Include="src\**\*.*" Exclude="**\bin\**;**\obj\**;**\target\**;**\build\**;src\**\*.java" />
+		<None Include="pom.xml" />
+		<None Include="README.md" Condition="Exists('README.md')" />
+	</ItemGroup>
+	<ItemGroup>
+		<Folder Include="src\test\resources\" />
+	</ItemGroup>
+	<ItemGroup>
+		<Folder Include="src\main\resources\" />
+	</ItemGroup>
+	<ItemGroup>
+		<Folder Include="src\main\java\com\restApi\services\" />
+	</ItemGroup>
+	<ItemGroup>
+		<Folder Include="src\main\java\com\restApi\controllers\" />
+	</ItemGroup>
+	<ItemGroup>
+		<Folder Include="src\main\java\com\restApi\entities\**" />
+	</ItemGroup>
 </Project>

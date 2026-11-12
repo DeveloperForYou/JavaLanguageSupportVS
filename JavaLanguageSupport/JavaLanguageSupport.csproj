@@ -39,6 +39,8 @@
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
+    <!-- U2.2: WMI read-only per verificare la JVM figlia di JDT LS. -->
+    <Reference Include="System.Management" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Design" />
   </ItemGroup>

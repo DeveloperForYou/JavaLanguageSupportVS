@@ -155,6 +155,14 @@ namespace JavaLanguageSupport.LanguageServer
             Trace.WriteLine("[JDT LS] " + line);
         }
 
+        // Pack U2: log separato per shutdown, lease e notifiche del modello Java.
+        internal static void LogLifecycle(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return;
+            lock (Sync) WriteInternal("[U2 lifecycle] " + message);
+            Trace.WriteLine("[JDT LS U2] " + message);
+        }
+
         internal static void LspRequest(string method)
         {
             lock (Sync)
