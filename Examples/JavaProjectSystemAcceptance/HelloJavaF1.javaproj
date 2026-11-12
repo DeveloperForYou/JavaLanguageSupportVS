@@ -29,6 +29,6 @@
 		<Folder Include="src\main\java\com\restApi\controllers\" />
 	</ItemGroup>
 	<ItemGroup>
-		<Folder Include="src\main\java\com\restApi\entities\**" />
+		<Folder Include="src\main\java\com\restApi\entities\" />
 	</ItemGroup>
 </Project>
