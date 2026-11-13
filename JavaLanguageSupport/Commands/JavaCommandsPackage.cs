@@ -58,6 +58,7 @@ namespace JavaLanguageSupport.Commands
         private const int GenerateGettersSettersId = 0x0124;
         private const int OverrideImplementMethodsId = 0x0125;
         private JavaCpsLanguageServerStartup cpsLanguageServerStartup;
+        private JavaPackageGlobalUndoTarget globalPackageUndoTarget;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
@@ -107,6 +108,16 @@ namespace JavaLanguageSupport.Commands
             };
             service.AddCommand(renamePackage);
 
+            try
+            {
+                globalPackageUndoTarget = new JavaPackageGlobalUndoTarget(this);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine(
+                    "[Java U3.C] Priority command target non disponibile: " + ex);
+            }
+
             // Load JDT LS when a CPS Java project is loaded, even without
             // an open .java editor. This uses the existing MEF language client.
             var solution = await GetServiceAsync(typeof(SVsSolution)) as IVsSolution;
@@ -122,6 +133,11 @@ namespace JavaLanguageSupport.Commands
 
         protected override void Dispose(bool disposing)
         {
+            if (disposing && globalPackageUndoTarget != null)
+            {
+                globalPackageUndoTarget.Dispose();
+                globalPackageUndoTarget = null;
+            }
             if (disposing && cpsLanguageServerStartup != null)
             {
                 cpsLanguageServerStartup.Dispose();

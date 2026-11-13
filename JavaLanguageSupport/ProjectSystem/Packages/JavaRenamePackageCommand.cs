@@ -997,6 +997,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             bool moved = false;
             bool linkedOpen = false;
             ITextUndoTransaction packageUndo = null;
+            PackageRenameUndoPrimitive globalPrimitive = null;
             try
             {
                 dte.UndoContext.Open("Java: Rinomina package " + plan.OldName + " -> " +
@@ -1033,12 +1034,26 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
 
                 // Registro lo spostamento e i file non-UI sulla stessa cronologia
                 // collegata dei buffer: un singolo CTRL+Z deve annullare tutto.
-                packageUndo.AddUndo(new PackageRenameUndoPrimitive(plan));
+                globalPrimitive = new PackageRenameUndoPrimitive(plan);
+                packageUndo.AddUndo(globalPrimitive);
                 packageUndo.Complete();
                 packageUndo.Dispose();
                 packageUndo = null;
                 dte.UndoContext.Close();
                 linkedOpen = false;
+                // U3.C: registra la STESSA transazione collegata all'Undo
+                // globale, non una seconda operazione che sposta file.
+                // Un problema nel bridge non deve invalidare il commit CPS.
+                try
+                {
+                    JavaPackageGlobalUndo.Remember(history, globalPrimitive,
+                        () => globalPrimitive.IsApplied, plan.OldName, plan.NewName);
+                }
+                catch (Exception globalError)
+                {
+                    System.Diagnostics.Trace.WriteLine(
+                        "[Java U3.C] Undo globale non registrato: " + globalError);
+                }
             }
             catch (Exception error)
             {

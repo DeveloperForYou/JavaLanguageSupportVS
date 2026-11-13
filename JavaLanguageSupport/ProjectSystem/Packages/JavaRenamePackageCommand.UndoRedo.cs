@@ -67,6 +67,9 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             private readonly HashSet<string> directories = new HashSet<string>(FileComparer);
             private readonly HashSet<string> openPaths;
             private bool lastDirectionIsRedo = true;
+            // U3.C: stato reale aggiornato da Undo()/Do(), anche quando
+            // Visual Studio esegue direttamente la cronologia nativa.
+            internal bool IsApplied { get { return lastDirectionIsRedo; } }
 
             internal PackageRenameUndoPrimitive(Plan source)
             {
