@@ -215,7 +215,19 @@ namespace JavaLanguageSupport.Editor.Navigation
             Uri uri;
             if (!Uri.TryCreate(address, UriKind.Absolute, out uri))
             { log("URI restituito da JDT LS non valido: " + address); return null; }
-            if (uri.IsFile) return uri.LocalPath;
+            if (uri.IsFile)
+            {
+                string path = uri.LocalPath;
+                if (!File.Exists(path))
+                {
+                    // U3.A: destinazione Java non esistente. Non aprire un
+                    // vecchio URI dopo il rename del package; log esplicito.
+                    log("JDT LS ha restituito una destinazione non piu' presente: " + path +
+                        ". Possibile modello Java non ancora sincronizzato.");
+                    return null;
+                }
+                return path;
+            }
             if (!string.Equals(uri.Scheme, "jdt", StringComparison.OrdinalIgnoreCase))
             { log("URI non supportato: " + uri.Scheme); return null; }
 

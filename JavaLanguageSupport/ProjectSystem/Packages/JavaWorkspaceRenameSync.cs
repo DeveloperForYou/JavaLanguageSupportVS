@@ -20,60 +20,119 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
         private static readonly StringComparer Paths =
             StringComparer.OrdinalIgnoreCase;
 
-        // Pack U2: le rinomine CPS e Undo/Redo possono arrivare in raffiche.
-        // Debounce (ultimo stato vince) + una sola richiesta di sync attiva.
-        // Non garantisce la fine dei job Eclipse, ma evita refresh RPC accavallati.
+        // U3.A: ogni commit CPS costituisce una transizione, non un semplice
+        // stato finale. Non scartare transizioni Undo/Redo con il debounce U2.
         private static readonly SemaphoreSlim DispatchGate = new SemaphoreSlim(1, 1);
-        private static int revision;
-        private static int shuttingDown;
+        private static readonly object PendingGate = new object();
+        private static TaskCompletionSource<bool> pendingIdle = CompletedSignal();
+        private static int pendingCount;
+        private static long sequence;
+        private static bool shuttingDown;
 
-        internal static bool IsShuttingDown => Volatile.Read(ref shuttingDown) != 0;
+        private static TaskCompletionSource<bool> CompletedSignal()
+        {
+            var value = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            value.TrySetResult(true);
+            return value;
+        }
+
+        internal static bool IsShuttingDown
+        {
+            get { lock (PendingGate) return shuttingDown; }
+        }
 
         internal static void BeginSession()
         {
-            Interlocked.Increment(ref revision);
-            Volatile.Write(ref shuttingDown, 0);
-            JavaLanguageStatus.LogLifecycle("sync CPS: nuova sessione");
+            lock (PendingGate)
+            {
+                if (pendingCount != 0)
+                    throw new InvalidOperationException(
+                        "Non riaprire una sessione JDT LS con sincronizzazioni CPS pendenti.");
+                shuttingDown = false;
+            }
+            JavaLanguageStatus.LogLifecycle("sync CPS U3A: nuova sessione");
         }
 
-        // Prima di shutdown LSP: impedisce nuove notifiche e aspetta
-        // quelle che hanno gia' acquisito il gate. I job Eclipse interni
-        // possono comunque proseguire, quindi serve anche lo shutdown pulito.
+        // La chiusura attende anche le operazioni in coda, non solo quelle
+        // che hanno gia' acquisito DispatchGate.
         internal static async Task<bool> BeginShutdownAndDrainAsync(int milliseconds)
         {
-            Volatile.Write(ref shuttingDown, 1);
-            Interlocked.Increment(ref revision);
-            bool entered = await DispatchGate.WaitAsync(milliseconds).ConfigureAwait(false);
-            if (entered) DispatchGate.Release();
-            JavaLanguageStatus.LogLifecycle("sync CPS drain=" + entered);
-            return entered;
+            Task pending;
+            lock (PendingGate)
+            {
+                shuttingDown = true;
+                pending = pendingIdle.Task;
+            }
+            var timeout = Task.Delay(Math.Max(1, milliseconds));
+            bool drained = await Task.WhenAny(pending, timeout).ConfigureAwait(false) == pending;
+            JavaLanguageStatus.LogLifecycle("sync CPS drain=" + drained);
+            return drained;
+        }
+
+        // La navigazione non deve interrogare il modello mentre la nostra
+        // riconciliazione CPS e' ancora pendente. Non promette la fine dei
+        // job di indicizzazione interni a Eclipse.
+        internal static async Task<bool> WaitForPendingAsync(int milliseconds,
+            CancellationToken cancellationToken)
+        {
+            Task pending;
+            lock (PendingGate) pending = pendingIdle.Task;
+            if (pending.IsCompleted) return true;
+            var timeout = Task.Delay(Math.Max(1, milliseconds), cancellationToken);
+            bool done = await Task.WhenAny(pending, timeout).ConfigureAwait(false) == pending;
+            cancellationToken.ThrowIfCancellationRequested();
+            return done;
+        }
+
+        private static bool TryRegister(out long id)
+        {
+            lock (PendingGate)
+            {
+                id = 0;
+                if (shuttingDown) return false;
+                if (pendingCount++ == 0)
+                    pendingIdle = new TaskCompletionSource<bool>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                id = ++sequence;
+                return true;
+            }
+        }
+
+        private static void FinishRegistered()
+        {
+            lock (PendingGate)
+            {
+                if (--pendingCount == 0) pendingIdle.TrySetResult(true);
+            }
         }
 
         internal static async Task<string> NotifyRenameAsync(string projectFile, string oldDirectory,
             string newDirectory, IEnumerable<string> movedFiles,
             IEnumerable<string> changedFiles)
         {
-            if (IsShuttingDown) return "JDT LS in arresto: sincronizzazione differita al prossimo avvio.";
-            int requestRevision = Interlocked.Increment(ref revision);
-            // Le primitive Undo/Redo possono essere accodate su ApplicationIdle.
-            // Aspetta che il filesystem si assesti e ignora stati intermedi.
-            await Task.Delay(650).ConfigureAwait(false);
-            if (IsShuttingDown || requestRevision != Volatile.Read(ref revision))
-            {
-                JavaLanguageStatus.LogLifecycle("sync CPS: stato intermedio superato");
-                return null;
-            }
-            await DispatchGate.WaitAsync().ConfigureAwait(false);
+            // Copia la fotografia dei percorsi all'atto del commit: le sequenze
+            // differite non devono leggere un IEnumerable mutato in seguito.
+            string[] moved = (movedFiles ?? Enumerable.Empty<string>()).ToArray();
+            string[] edited = (changedFiles ?? Enumerable.Empty<string>()).ToArray();
+            long id;
+            if (!TryRegister(out id))
+                return "JDT LS in arresto: riconciliazione CPS non eseguita.";
+            bool entered = false;
             try
             {
-                if (IsShuttingDown || requestRevision != Volatile.Read(ref revision))
-                    return null;
-                JavaLanguageStatus.LogLifecycle("sync CPS: " +
+                await DispatchGate.WaitAsync().ConfigureAwait(false);
+                entered = true;
+                JavaLanguageStatus.LogLifecycle("sync CPS U3A #" + id + ": " +
                     Path.GetFileName(oldDirectory) + " -> " + Path.GetFileName(newDirectory));
-                return await NotifyRenameCoreAsync(projectFile, oldDirectory, newDirectory,
-                    movedFiles, changedFiles).ConfigureAwait(false);
+                return await NotifyRenameCoreAsync(projectFile, oldDirectory,
+                    newDirectory, moved, edited).ConfigureAwait(false);
             }
-            finally { DispatchGate.Release(); }
+            finally
+            {
+                if (entered) DispatchGate.Release();
+                FinishRegistered();
+            }
         }
 
         private static async Task<string> NotifyRenameCoreAsync(string projectFile, string oldDirectory,
@@ -87,7 +146,15 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 string oldRoot = Path.GetFullPath(oldDirectory).TrimEnd('\\', '/');
                 string newRoot = Path.GetFullPath(newDirectory).TrimEnd('\\', '/');
                 if (Directory.Exists(oldRoot) || !Directory.Exists(newRoot))
-                    return "Le cartelle sono cambiate: impossibile notificare l'indice Java.";
+                {
+                    // Un Undo/Redo piu' recente ha gia' modificato il disco:
+                    // la notifica incrementale precedente sarebbe falsa.
+                    // Richiedi una scansione del progetto nel suo stato ATTUALE.
+                    JavaLanguageStatus.LogLifecycle(
+                        "sync CPS U3A: transizione superata, refresh progetto completo");
+                    return await RefreshProjectModelAsync(projectFile, oldRoot, newRoot)
+                        .ConfigureAwait(false);
+                }
 
                 var moved = (movedFiles ?? Enumerable.Empty<string>())
                     .Select(Path.GetFullPath).Distinct(Paths).ToArray();
@@ -111,7 +178,12 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     string relative = source.Substring(oldRoot.Length).TrimStart('\\', '/');
                     string destination = Path.Combine(newRoot, relative);
                     if (!File.Exists(destination))
-                        return "File Java spostato non trovato: sincronizzazione Java non inviata.";
+                    {
+                        JavaLanguageStatus.LogLifecycle(
+                            "sync CPS U3A: file spostato nuovamente, refresh progetto completo");
+                        return await RefreshProjectModelAsync(projectFile, oldRoot, newRoot)
+                            .ConfigureAwait(false);
+                    }
                     notifications.Add(new { uri = FileUri(destination), type = 1 });
                 }
                 var movedSet = new HashSet<string>(moved, Paths);
@@ -120,7 +192,12 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     // Moved Java files have already received Deleted/Created.
                     if (movedSet.Contains(file)) continue;
                     if (!File.Exists(file))
-                        return "Un file modificato non esiste più: sincronizzazione Java non inviata.";
+                    {
+                        JavaLanguageStatus.LogLifecycle(
+                            "sync CPS U3A: file modificato non piu' presente, refresh progetto completo");
+                        return await RefreshProjectModelAsync(projectFile, oldRoot, newRoot)
+                            .ConfigureAwait(false);
+                    }
                     notifications.Add(new { uri = FileUri(file), type = 2 });
                 }
 
@@ -132,43 +209,8 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 if (!transmitted)
                     return "JDT LS si è scollegato: riapri il progetto per aggiornare l'indice Java.";
 
-                // F2I3-JAVA-MODEL-REFRESH: didChangeWatchedFiles does not
-                // guarantee refreshLocal on an Eclipse package directory which
-                // was moved by CPS rather than by JDT itself. Ask JDT LS to
-                // update its imported project (refreshLocal DEPTH_INFINITE).
-                // JDT LS executes this operation as a background WorkspaceJob:
-                // successful RPC means scheduled, NOT indexing completed.
-                if (string.IsNullOrWhiteSpace(projectFile) ||
-                    !string.Equals(Path.GetExtension(projectFile), ".javaproj",
-                        StringComparison.OrdinalIgnoreCase) || !File.Exists(projectFile))
-                    return "Progetto CPS non disponibile: aggiornamento modello Java non richiesto.";
-                string projectRoot = Path.GetDirectoryName(Path.GetFullPath(projectFile));
-                if (!Inside(projectRoot, oldRoot) || !Inside(projectRoot, newRoot))
-                    return "La rinomina è esterna al progetto Java: aggiornamento modello non richiesto.";
-                string projectUri = DirectoryUri(projectRoot);
-
-                // In JDT LS, java.project.changeImportedProjects accepts three
-                // lists: project roots to IMPORT, to UPDATE, and to DELETE.
-                // The UPDATE list is index 1 in ProjectsManager's dispatcher.
-                // Never delete or replace the imported project here.
-                bool queued;
-                try
-                {
-                    queued = await JavaLspRpc.ExecuteWorkspaceCommandStrictAsync(
-                        "java.project.changeImportedProjects",
-                        new object[] { new string[0], new[] { projectUri }, new string[0] })
-                        .ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    Trace.WriteLine("[Java CPS] Aggiornamento modello Java: " + ex);
-                    return "File sincronizzati, ma JDT LS non ha accettato la richiesta " +
-                        "di aggiornamento del progetto: " + ex.Message;
-                }
-                if (!queued)
-                    return "Connessione JDT LS interrotta prima dell'aggiornamento del progetto.";
-                Trace.WriteLine("[Java CPS] Richiesto aggiornamento modello Java: " + projectUri);
-                return null;
+                return await RefreshProjectModelAsync(projectFile, oldRoot, newRoot)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -177,6 +219,39 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 Trace.WriteLine("[Java CPS] Sincronizzazione JDT LS: " + ex);
                 return "Package rinominato, ma la sincronizzazione di JDT LS non è riuscita: " +
                     ex.Message + ". Riapri il progetto per aggiornare l'indice.";
+            }
+        }
+
+        // Forza un refresh coerente con i file attualmente presenti sul disco,
+        // anche quando un'operazione Undo/Redo precedente e' stata superata.
+        // RPC completata significa refresh ACCETTATO, NON indice completato.
+        private static async Task<string> RefreshProjectModelAsync(
+            string projectFile, string oldRoot, string newRoot)
+        {
+            if (string.IsNullOrWhiteSpace(projectFile) ||
+                !string.Equals(Path.GetExtension(projectFile), ".javaproj",
+                    StringComparison.OrdinalIgnoreCase) || !File.Exists(projectFile))
+                return "Progetto CPS non disponibile: aggiornamento modello non richiesto.";
+            string projectRoot = Path.GetDirectoryName(Path.GetFullPath(projectFile));
+            if (!Inside(projectRoot, oldRoot) || !Inside(projectRoot, newRoot))
+                return "Rinomina fuori dal progetto: aggiornamento modello non richiesto.";
+            string projectUri = DirectoryUri(projectRoot);
+            try
+            {
+                bool queued = await JavaLspRpc.ExecuteWorkspaceCommandStrictAsync(
+                    "java.project.changeImportedProjects",
+                    new object[] { new string[0], new[] { projectUri }, new string[0] })
+                    .ConfigureAwait(false);
+                if (!queued)
+                    return "Connessione JDT LS interrotta prima dell'aggiornamento modello.";
+                JavaLanguageStatus.LogLifecycle(
+                    "sync CPS U3A: refresh del modello richiesto per " + projectUri);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine("[Java CPS U3A] Refresh Java model: " + ex);
+                return "JDT LS non ha accettato il refresh del modello: " + ex.Message;
             }
         }
 

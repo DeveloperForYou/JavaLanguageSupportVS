@@ -142,6 +142,15 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                             position = new { line, character = column },
                             newName = newName
                         }, CancellationToken.None);
+                    // U3.A single source: JDT LS puo' non produrre un
+                    // WorkspaceEdit per un package senza riferimenti esterni.
+                    // Verificare prima la source root; Prepare applichera'
+                    // solo dichiarazioni locali e rifiutera' riferimenti vecchi.
+                    if (response == null || response.Type == JTokenType.Null)
+                    {
+                        await VerifySourceRootIndexedAsync(sourceRoot);
+                        response = new JObject { ["changes"] = new JObject() };
+                    }
                 }
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Plan plan = Prepare(response, project, directory, newDirectory,
@@ -444,9 +453,9 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 throw new NotSupportedException(
                     "Non tutti i file Java del package risultano inclusi nello spostamento. Nessuna modifica applicata.");
             plan.MovedJavaFiles.AddRange(sourceFiles);
-            if (!recursive && (groups.Count == 0 || groups.All(g => g.Value.Count == 0)))
-                throw new InvalidOperationException(
-                    "Il servizio Java non ha proposto modifiche al codice. Nessuna rinomina eseguita.");
+            // U3.A single source: nessun edit LSP non equivale ad errore.
+            // Le dichiarazioni locali sono verificate qui sotto e
+            // CheckNoStalePackageReferences impedisce refactoring incompleti.
 
             foreach (var group in groups.OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
             {

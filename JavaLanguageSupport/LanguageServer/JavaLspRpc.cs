@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using JavaLanguageSupport.ProjectSystem.Packages;
 using Microsoft.VisualStudio.Text;
 using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
@@ -28,6 +29,30 @@ namespace JavaLanguageSupport.LanguageServer
         {
             var current = Volatile.Read(ref rpc);
             if (current == null) return null;
+            // U3.A navigation barrier: non rispondere con destinazioni ormai
+            // superate mentre il commit CPS aspetta l'aggiornamento LSP.
+            // L'indice Eclipse puo' comunque richiedere altro tempo: questo
+            // e' un limite di coordinamento, non un segnale di readiness.
+            if (method == "textDocument/definition" ||
+                method == "textDocument/implementation" ||
+                method == "textDocument/typeDefinition" ||
+                method == "workspace/symbol" ||
+                method == "textDocument/prepareTypeHierarchy" ||
+                method == "textDocument/prepareCallHierarchy" ||
+                method == "typeHierarchy/subtypes" ||
+                method == "typeHierarchy/supertypes" ||
+                method == "callHierarchy/incomingCalls" ||
+                method == "callHierarchy/outgoingCalls")
+            {
+                bool ready = await JavaWorkspaceRenameSync.WaitForPendingAsync(
+                    6000, token).ConfigureAwait(false);
+                if (!ready)
+                {
+                    JavaLanguageStatus.LogLifecycle(
+                        "U3.A navigation barrier: sincronizzazione CPS ancora pendente; " + method);
+                    return null;
+                }
+            }
             JavaLanguageStatus.LspRequest(method);
             bool gated = string.Equals(method, "textDocument/documentSymbol",
                 StringComparison.Ordinal);
