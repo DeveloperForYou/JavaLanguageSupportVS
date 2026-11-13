@@ -998,12 +998,17 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             bool linkedOpen = false;
             ITextUndoTransaction packageUndo = null;
             PackageRenameUndoPrimitive globalPrimitive = null;
+            // U3C5: conservare la transazione restituita da CreateTransaction;
+            // l'accesso a LastUndoTransaction non e' supportato da alcuni host VS.
+            ITextUndoTransaction completedPackageUndo = null;
+            string undoMarker = "JAVACPS-" + Guid.NewGuid().ToString("N").Substring(0, 12);
             try
             {
                 dte.UndoContext.Open("Java: Rinomina package " + plan.OldName + " -> " +
-                    plan.NewName, true);
+                    plan.NewName + " [" + undoMarker + "]", true);
                 linkedOpen = true;
-                packageUndo = history.CreateTransaction("Java: rinomina package CPS");
+                packageUndo = history.CreateTransaction(
+                    "Java: rinomina package CPS [" + undoMarker + "]");
                 foreach (var doc in plan.Files)
                 {
                     var live = plan.OpenFiles.FirstOrDefault(x => FileComparer.Equals(x.From, doc.Path));
@@ -1037,6 +1042,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 globalPrimitive = new PackageRenameUndoPrimitive(plan);
                 packageUndo.AddUndo(globalPrimitive);
                 packageUndo.Complete();
+                completedPackageUndo = packageUndo;
                 packageUndo.Dispose();
                 packageUndo = null;
                 dte.UndoContext.Close();
@@ -1046,11 +1052,25 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 // Un problema nel bridge non deve invalidare il commit CPS.
                 try
                 {
-                    JavaPackageGlobalUndo.Remember(history, globalPrimitive,
-                        () => globalPrimitive.IsApplied, plan.OldName, plan.NewName);
+                    // U3C.4: verifica che l'esecuzione raggiunga il bridge.
+                    JavaLanguageStatus.LogLifecycle("U3C4 Undo: ingresso Remember; " +
+                        plan.OldName + " -> " + plan.NewName);
+                    // U3C7 COM anchor: risolve il manager nativo del buffer,
+                    // senza interrogare le proprieta' dello stack .NET non supportate.
+                    JavaPackageGlobalUndo.Remember(history, anchor.Buffer,
+                        completedPackageUndo, globalPrimitive, undoMarker,
+                        () => globalPrimitive.IsApplied,
+                        plan.OldName, plan.NewName,
+                        anchor.To, anchor.From, globalPrimitive.CanReplayDetached,
+                        globalPrimitive.ReplayDetached);
+                    JavaLanguageStatus.LogLifecycle("U3C4 Undo: ritorno Remember");
                 }
                 catch (Exception globalError)
                 {
+                    // Le vecchie versioni scrivevano soltanto in Trace,
+                    // non nel file jdtls-*.log utilizzato per il collaudo.
+                    JavaLanguageStatus.LogLifecycle(
+                        "U3C4 Undo: ECCEZIONE Remember: " + globalError);
                     System.Diagnostics.Trace.WriteLine(
                         "[Java U3.C] Undo globale non registrato: " + globalError);
                 }

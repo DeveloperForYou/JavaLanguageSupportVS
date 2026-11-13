@@ -53,7 +53,7 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             dte.ItemOperations.OpenFile(anchorPath, EnvDTE.Constants.vsViewKindTextView);
         }
 
-        private sealed class PackageRenameUndoPrimitive : ITextUndoPrimitive
+        private sealed partial class PackageRenameUndoPrimitive : ITextUndoPrimitive
         {
             private sealed class FileSignature
             {
