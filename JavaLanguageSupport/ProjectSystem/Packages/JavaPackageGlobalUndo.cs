@@ -650,6 +650,17 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                  id == (uint)VSConstants.VSStd97CmdID.MultiLevelRedo);
         }
 
+        // U3C15 multi-level caption list. IDs from the VS97 standard command
+        // set: cmdidMultiLevelUndoList=298; cmdidMultiLevelRedoList=299.
+        // The toolbar's combo/list requests these SEPARATELY from the actual
+        // MultiLevelUndo (44) and MultiLevelRedo (30) commands.
+        private static bool IsMultiLevelListCommand(Guid group, uint id, out bool redo)
+        {
+            redo = group == VSConstants.GUID_VSStandardCommandSet97 && id == 299U;
+            return group == VSConstants.GUID_VSStandardCommandSet97 &&
+                (id == 298U || redo);
+        }
+
         private static bool IsUndoCommand(Guid group, uint id, out bool redo)
         {
             redo = false;
@@ -883,6 +894,33 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 pguidCmdGroup == VSConstants.VSStd2K;
             if (prgCmds == null || cCmds == 0 || cCmds > (uint)prgCmds.Length)
                 return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+            // U3C15: the VS97 native multi-level drop-down requests the
+            // operation labels through its own GetList commands (298/299).
+            // Never claim the list while a Java local Undo has precedence.
+            bool listRedo;
+            if (cCmds == 1 && IsMultiLevelListCommand(
+                pguidCmdGroup, prgCmds[0].cmdID, out listRedo))
+            {
+                try
+                {
+                    ThreadHelper.ThrowIfNotOnUIThread();
+                    string reason;
+                    bool handle = ShouldIntercept(listRedo, out reason);
+                    LogRoute("U3C15 QueryStatus/List/" +
+                        (listRedo ? "Redo" : "Undo"),
+                        (handle ? "Enabled; " : "Delegated; ") + reason);
+                    if (!handle)
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    prgCmds[0].cmdf = (uint)(OLECMDF.OLECMDF_SUPPORTED |
+                        OLECMDF.OLECMDF_ENABLED);
+                    return VSConstants.S_OK;
+                }
+                catch (Exception ex)
+                {
+                    LogRoute("U3C15 QueryStatus/List/Error", ex.GetType().Name);
+                    return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                }
+            }
             if (!knownGroup)
             {
                 // Only sample foreign groups that use an Undo-like numeric ID.
@@ -960,6 +998,36 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             if (pguidCmdGroup != VSConstants.GUID_VSStandardCommandSet97 &&
                 pguidCmdGroup != VSConstants.VSStd2K)
                 return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_UNKNOWNGROUP;
+            // U3C15: list GetList command. Return a SAFEARRAY of BSTR via
+            // a native VARIANT, as for Visual Studio toolbar Combo GetList.
+            // Exactly one item is published: the one validated CPS candidate.
+            bool listRedo;
+            if (IsMultiLevelListCommand(pguidCmdGroup, nCmdID, out listRedo))
+            {
+                try
+                {
+                    ThreadHelper.ThrowIfNotOnUIThread();
+                    if (nCmdexecopt != 0 || pvaOut == IntPtr.Zero ||
+                        pvaIn != IntPtr.Zero)
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    string reason;
+                    if (!ShouldIntercept(listRedo, out reason))
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    string caption = JavaPackageGlobalUndo.CandidateCaption(listRedo);
+                    if (string.IsNullOrEmpty(caption))
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    System.Runtime.InteropServices.Marshal.GetNativeVariantForObject(
+                        new string[] { caption }, pvaOut);
+                    LogRoute("U3C15 Exec/List/" + (listRedo ? "Redo" : "Undo"),
+                        "Caption=" + caption);
+                    return VSConstants.S_OK;
+                }
+                catch (Exception ex)
+                {
+                    LogRoute("U3C15 Exec/List/Error", ex.GetType().Name);
+                    return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                }
+            }
             bool redo;
             if (!IsUndoCommand(pguidCmdGroup, nCmdID, out redo))
             {
@@ -970,15 +1038,55 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             try
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
-                // MultiLevel commands can carry a selection/count. We only
-                // support the default single-click action; never silently
-                // replace a requested multi-step Undo with one operation.
+                // U3C15: toolbar may query current combo text via pvaOut.
+                // A string array is returned by List (298/299) above; here
+                // only the current operation's string is returned.
+                if (IsMultiLevelCommand(pguidCmdGroup, nCmdID) &&
+                    pvaOut != IntPtr.Zero)
+                {
+                    if (nCmdexecopt != 0 || pvaIn != IntPtr.Zero)
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    string captionReason;
+                    if (!ShouldIntercept(redo, out captionReason))
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    string caption = JavaPackageGlobalUndo.CandidateCaption(redo);
+                    if (string.IsNullOrEmpty(caption))
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    System.Runtime.InteropServices.Marshal.GetNativeVariantForObject(
+                        caption, pvaOut);
+                    LogRoute("U3C15 Exec/Current/" + (redo ? "Redo" : "Undo"),
+                        "Caption=" + caption);
+                    return VSConstants.S_OK;
+                }
+
+                // MultiLevel accepts a single item chosen from our own list,
+                // but must NEVER interpret a multi-step request as one step.
                 if (IsMultiLevelCommand(pguidCmdGroup, nCmdID) &&
                     (nCmdexecopt != 0 || pvaIn != IntPtr.Zero))
                 {
-                    LogRoute("Exec/VS97/MultiLevel", "DelegatedNonDefault; opt=" +
-                        nCmdexecopt + "; hasInput=" + (pvaIn != IntPtr.Zero));
-                    return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    if (nCmdexecopt != 0 || pvaIn == IntPtr.Zero)
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    object selected;
+                    try
+                    {
+                        selected = System.Runtime.InteropServices.Marshal
+                            .GetObjectForNativeVariant(pvaIn);
+                    }
+                    catch (Exception)
+                    {
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    }
+                    string caption = JavaPackageGlobalUndo.CandidateCaption(redo);
+                    bool singleSelection =
+                        (selected is string && string.Equals((string)selected, caption,
+                            StringComparison.Ordinal)) ||
+                        (selected is int && ((int)selected == 0 || (int)selected == 1));
+                    if (!singleSelection)
+                    {
+                        LogRoute("U3C15 Exec/Selection", "DelegatedUnknownSelection");
+                        return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
+                    }
+                    LogRoute("U3C15 Exec/Selection", "Single CPS item");
                 }
                 string reason;
                 bool handle = ShouldIntercept(redo, out reason);
