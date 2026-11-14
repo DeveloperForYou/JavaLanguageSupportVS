@@ -27,10 +27,6 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 internal string TargetPath;
             }
 
-            // U3C13 detached gate: log only on changed state to avoid
-            // flooding QueryStatus and to preserve the original safety gate.
-            private string lastDetachedGateDiagnostics;
-
             // QueryStatus e' chiamato molto spesso: qui niente hashing o COM.
             // La verifica completa viene sempre ripetuta PRIMA del commit.
             internal bool CanReplayDetached(bool redo)
@@ -42,15 +38,6 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 bool toExists = Directory.Exists(to);
                 bool projectExists = File.Exists(plan.ProjectFile);
                 bool accepted = directionOk && fromExists && !toExists && projectExists;
-                string observation = "redo=" + redo + "; directionOk=" + directionOk +
-                    "; fromExists=" + fromExists + "; toExists=" + toExists +
-                    "; projectExists=" + projectExists + "; accepted=" + accepted;
-                if (!string.Equals(lastDetachedGateDiagnostics, observation,
-                    StringComparison.Ordinal))
-                {
-                    lastDetachedGateDiagnostics = observation;
-                    JavaLanguageStatus.LogLifecycle("U3C13 detached gate: " + observation);
-                }
                 return accepted;
             }
 
@@ -226,8 +213,8 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
 
                 ReopenDetachedTabs(dte, closed, true);
                 RefreshExplorer(plan);
-                JavaLanguageStatus.LogLifecycle("U3C11 detached " +
-                    (redo ? "Redo" : "Undo") + ": commit completato; schede=" + closed.Count);
+                Trace.WriteLine("[Java CPS Undo] Detached " +
+                    (redo ? "Redo" : "Undo") + ": commit; schede=" + closed.Count);
 
                 string[] movedFiles = plan.MovedJavaFiles.Select(x =>
                     redo ? x : DestinationForMovedFile(

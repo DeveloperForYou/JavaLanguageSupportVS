@@ -1052,9 +1052,6 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 // Un problema nel bridge non deve invalidare il commit CPS.
                 try
                 {
-                    // U3C.4: verifica che l'esecuzione raggiunga il bridge.
-                    JavaLanguageStatus.LogLifecycle("U3C4 Undo: ingresso Remember; " +
-                        plan.OldName + " -> " + plan.NewName);
                     // U3C7 COM anchor: risolve il manager nativo del buffer,
                     // senza interrogare le proprieta' dello stack .NET non supportate.
                     JavaPackageGlobalUndo.Remember(history, anchor.Buffer,
@@ -1063,14 +1060,9 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                         plan.OldName, plan.NewName,
                         anchor.To, anchor.From, globalPrimitive.CanReplayDetached,
                         globalPrimitive.ReplayDetached);
-                    JavaLanguageStatus.LogLifecycle("U3C4 Undo: ritorno Remember");
                 }
                 catch (Exception globalError)
                 {
-                    // Le vecchie versioni scrivevano soltanto in Trace,
-                    // non nel file jdtls-*.log utilizzato per il collaudo.
-                    JavaLanguageStatus.LogLifecycle(
-                        "U3C4 Undo: ECCEZIONE Remember: " + globalError);
                     System.Diagnostics.Trace.WriteLine(
                         "[Java U3.C] Undo globale non registrato: " + globalError);
                 }
