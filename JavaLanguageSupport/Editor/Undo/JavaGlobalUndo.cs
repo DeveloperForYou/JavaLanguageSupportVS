@@ -35,6 +35,7 @@ namespace JavaLanguageSupport.Editor.Undo
             internal string RedoCaption;
             internal string AnchorPath;
             internal string OriginalAnchorPath;
+            internal string[] RequiredOpenDocumentPaths;
             internal bool AnchorClosed;
             internal Func<bool, bool> CanDetached;
             internal Action<bool> ReplayDetached;
@@ -113,6 +114,11 @@ namespace JavaLanguageSupport.Editor.Undo
                 AnchorPath = System.IO.Path.GetFullPath(operation.AnchorPath),
                 OriginalAnchorPath = System.IO.Path.GetFullPath(
                     operation.OriginalAnchorPath),
+                RequiredOpenDocumentPaths = (operation.RequiredOpenDocumentPaths ??
+                    Enumerable.Empty<string>())
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(System.IO.Path.GetFullPath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 CanDetached = operation.CanReplayDetached,
                 ReplayDetached = operation.ReplayDetached
             });
@@ -137,7 +143,11 @@ namespace JavaLanguageSupport.Editor.Undo
                 if (!entry.AnchorClosed &&
                     (string.Equals(entry.AnchorPath, full, StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(entry.OriginalAnchorPath, full,
-                         StringComparison.OrdinalIgnoreCase)))
+                         StringComparison.OrdinalIgnoreCase) ||
+                     (entry.RequiredOpenDocumentPaths != null &&
+                      entry.RequiredOpenDocumentPaths.Any(x =>
+                          string.Equals(x, full,
+                              StringComparison.OrdinalIgnoreCase)))))
                 {
                     entry.AnchorClosed = true;
                     changed = true;

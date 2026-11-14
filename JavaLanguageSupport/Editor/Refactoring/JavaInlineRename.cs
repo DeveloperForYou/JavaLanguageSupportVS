@@ -425,7 +425,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
     }
 
 
-    internal static class JavaProjectRenameEdits
+    internal static partial class JavaProjectRenameEdits
     {
         internal sealed class Edit
         {
@@ -1790,6 +1790,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
             private readonly List<FileRename> moves;
             private readonly List<Target> targets;
             private readonly string projectRoot;
+            // U4A-SYMBOL-GLOBAL-UNDO: state follows successful linked Undo/Redo.
+            private bool applied = true;
+            internal bool IsApplied { get { return applied; } }
             internal RenameFileUndoPrimitive(IEnumerable<FileRename> fileMoves,
                 IEnumerable<Target> documents, string javaProjectRoot)
             {
@@ -1810,6 +1813,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
             private void Move(bool redo)
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
+                if (applied == redo)
+                    throw new InvalidOperationException(
+                        "Sequenza Undo/Redo della rinomina simbolo non coerente.");
                 var ordered = redo ? moves : moves.AsEnumerable().Reverse();
                 var done = new List<FileRename>();
                 try {
@@ -1842,6 +1848,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 }
                 RefreshExplorerFiles(redo ? moves : moves.Select(x =>
                     new FileRename { From = x.To, To = x.From }), null);
+                applied = redo; // All physical moves succeeded (or text-only rename).
                 // VS linked undo reverts sibling buffers after individual primitives.
                 // Persist only AFTER the entire undo/redo cycle reaches the dispatcher.
                 System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
@@ -1936,14 +1943,19 @@ namespace JavaLanguageSupport.Editor.Refactoring
             var applied = new List<Target>();
             var moved = new List<FileRename>();
             ITextUndoTransaction fileUndo = null;
+            ITextUndoTransaction completedUndo = null;
+            RenameFileUndoPrimitive undoPrimitive = null;
+            string undoMarker = "JAVASYMBOL-" + Guid.NewGuid().ToString("N");
             bool linkedOpen = false;
             try {
                 // EnvDTE.UndoContext uses the VS linked-undo service; a single
                 // Ctrl+Z in any participating document must undo the whole rename.
-                dte.UndoContext.Open("Java: Rinomina " + plan.OldName + " -> " + plan.NewName, true);
+                dte.UndoContext.Open("Java: Rinomina " + plan.OldName + " -> " +
+                    plan.NewName + " [" + undoMarker + "]", true);
                 linkedOpen = true;
-                if (plan.moves.Count > 0)
-                    fileUndo = history.CreateTransaction("Java: rinomina file .java");
+                // The shared bridge needs a primitive even for text-only
+                // symbol renames (methods, fields and local variables).
+                fileUndo = history.CreateTransaction("Java: rinomina simbolo e file .java");
 
                 foreach (var target in plan.targets) {
                     if (target.Edits.Count == 0) continue;
@@ -1961,13 +1973,13 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     var target = plan.targets.First(x => PathCompare.Equals(x.Path, move.From));
                     RenameOpenDocument(target, move.From, move.To);
                 }
-                if (fileUndo != null) {
-                    fileUndo.AddUndo(new RenameFileUndoPrimitive(
-                        plan.moves, plan.targets, plan.Root));
-                    fileUndo.Complete();
-                    fileUndo.Dispose();
-                    fileUndo = null;
-                }
+                undoPrimitive = new RenameFileUndoPrimitive(
+                    plan.moves, plan.targets, plan.Root);
+                fileUndo.AddUndo(undoPrimitive);
+                fileUndo.Complete();
+                completedUndo = fileUndo;
+                fileUndo.Dispose();
+                fileUndo = null;
                 dte.UndoContext.Close();
                 linkedOpen = false;
                 RefreshExplorerFiles(plan.moves, log);
@@ -2003,6 +2015,25 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     throw new InvalidOperationException("Errore nella rinomina: " + ex.Message +
                         ". Ripristino incompleto: " + string.Join("; ", rollbackErrors), ex);
                 throw;
+            }
+
+            // Registration failures must NEVER start a rollback now that the
+            // linked UndoContext has closed. Native buffer Undo remains.
+            try
+            {
+                if (!RegisterSharedSymbolUndo(plan, anchor, history,
+                    completedUndo, undoPrimitive, undoMarker))
+                {
+                    if (log != null) log("Rinomina completata; Undo globale Java non " +
+                        "registrato (Undo locale dell'editor disponibile).");
+                }
+            }
+            catch (Exception registrationError)
+            {
+                System.Diagnostics.Trace.WriteLine(
+                    "[Java Symbol Undo] Registrazione globale non riuscita: " + registrationError);
+                if (log != null) log("Rinomina completata; " +
+                    "registrazione Undo globale non riuscita.");
             }
 
             // Pack C1 Undo Hotfix: persist *each changed buffer* after the linked
