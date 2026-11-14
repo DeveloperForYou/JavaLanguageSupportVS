@@ -27,15 +27,31 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 internal string TargetPath;
             }
 
+            // U3C13 detached gate: log only on changed state to avoid
+            // flooding QueryStatus and to preserve the original safety gate.
+            private string lastDetachedGateDiagnostics;
+
             // QueryStatus e' chiamato molto spesso: qui niente hashing o COM.
             // La verifica completa viene sempre ripetuta PRIMA del commit.
             internal bool CanReplayDetached(bool redo)
             {
-                if (lastDirectionIsRedo == redo) return false;
+                bool directionOk = lastDirectionIsRedo != redo;
                 string from = redo ? plan.OldDirectory : plan.NewDirectory;
                 string to = redo ? plan.NewDirectory : plan.OldDirectory;
-                return Directory.Exists(from) && !Directory.Exists(to) &&
-                    File.Exists(plan.ProjectFile);
+                bool fromExists = Directory.Exists(from);
+                bool toExists = Directory.Exists(to);
+                bool projectExists = File.Exists(plan.ProjectFile);
+                bool accepted = directionOk && fromExists && !toExists && projectExists;
+                string observation = "redo=" + redo + "; directionOk=" + directionOk +
+                    "; fromExists=" + fromExists + "; toExists=" + toExists +
+                    "; projectExists=" + projectExists + "; accepted=" + accepted;
+                if (!string.Equals(lastDetachedGateDiagnostics, observation,
+                    StringComparison.Ordinal))
+                {
+                    lastDetachedGateDiagnostics = observation;
+                    JavaLanguageStatus.LogLifecycle("U3C13 detached gate: " + observation);
+                }
+                return accepted;
             }
 
             private void VerifyDetachedState(bool redo)

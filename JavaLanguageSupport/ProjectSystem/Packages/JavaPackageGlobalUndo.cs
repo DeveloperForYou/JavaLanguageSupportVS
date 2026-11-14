@@ -299,6 +299,15 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 nativeTop + (reason.Length == 0 ? "" : "; err=" + reason);
         }
 
+        // U3C13 local COM HRESULT: distinguish empty OLE undo (E_FAIL) from
+        // disabled/failed managers. CanUndo true alone is NOT a reason to
+        // override this history, even when the document is saved.
+        internal static bool IsTrackedAnchorHistory(ITextUndoHistory history)
+        {
+            return history != null && Entries.Any(x => !x.AnchorClosed &&
+                ReferenceEquals(x.History, history));
+        }
+
         internal static string DescribeBufferTop(ITextBuffer buffer, bool redo)
         {
             string status;
@@ -312,7 +321,52 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 return string.IsNullOrWhiteSpace(description) ? "<empty>" :
                     description.Substring(0, Math.Min(description.Length, 96));
             }
+            catch (System.Runtime.InteropServices.COMException ex)
+            {
+                string code = unchecked((uint)ex.ErrorCode).ToString("X8");
+                return "COM:0x" + code +
+                    (ex.ErrorCode == unchecked((int)0x80004005) ? "(E_FAIL)" :
+                    ex.ErrorCode == unchecked((int)0x8000FFFF) ? "(E_UNEXPECTED)" : "");
+            }
             catch (Exception ex) { return "COM:" + ex.GetType().Name; }
+        }
+
+        // U3C14: OLE stack empty override (only for a clean, unrelated Java tab).
+        // An editor may report CanUndo/CanRedo=true on its MEF history while its
+        // native buffer undo manager reports E_FAIL for BOTH stacks. E_FAIL means
+        // the queried OLE stack has no top-level undo unit. Any other result,
+        // including a nonempty description, E_UNEXPECTED, unsupported COM, or a
+        // missing manager, must preserve the editor's local Undo precedence.
+        internal static bool AreNativeStacksEmpty(ITextBuffer buffer)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            string status;
+            IOleUndoManager manager = GetNativeUndoManager(buffer, out status);
+            if (manager == null) return false;
+            const int EmptyOleStack = unchecked((int)0x80004005);
+            bool undoEmpty = false, redoEmpty = false;
+            try
+            {
+                string description;
+                manager.GetLastUndoDescription(out description);
+            }
+            catch (System.Runtime.InteropServices.COMException ex)
+            {
+                undoEmpty = ex.ErrorCode == EmptyOleStack;
+            }
+            catch (Exception) { return false; }
+            if (!undoEmpty) return false;
+            try
+            {
+                string description;
+                manager.GetLastRedoDescription(out description);
+            }
+            catch (System.Runtime.InteropServices.COMException ex)
+            {
+                redoEmpty = ex.ErrorCode == EmptyOleStack;
+            }
+            catch (Exception) { return false; }
+            return redoEmpty;
         }
 
         // Keep the priority command target cheap for unrelated commands.
@@ -789,9 +843,35 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 reason = "JavaTopIsSamePackage";
                 return true;
             }
+            // A freshly opened clean Java tab can report BOTH managed CanUndo
+            // and CanRedo even though the native OLE manager has neither stack.
+            // Never infer emptiness merely from IsDirty=false: a clean document
+            // can still have real edit history. Require explicit E_FAIL from
+            // BOTH OLE stacks, no open text transaction, and a different history
+            // from the original package anchor. Otherwise delegate to VS.
+            if (!textDocument.IsDirty &&
+                !JavaPackageGlobalUndo.IsTrackedAnchorHistory(local))
+            {
+                bool localTransactionKnownClosed = false;
+                try { localTransactionKnownClosed = local.CurrentTransaction == null; }
+                catch (Exception) { /* NotSupported: cannot prove safety. */ }
+                if (localTransactionKnownClosed &&
+                    JavaPackageGlobalUndo.AreNativeStacksEmpty(view.TextBuffer))
+                {
+                    reason = "U3C14 JavaLocalOleEmptyOverride; doc=" +
+                        System.IO.Path.GetFileName(textDocument.FilePath) +
+                        "; localCanUndo=" + local.CanUndo +
+                        "; localCanRedo=" + local.CanRedo;
+                    return true;
+                }
+            }
             reason = "JavaLocalUndoPrecedence; doc=" +
                 System.IO.Path.GetFileName(textDocument.FilePath) +
-                "; dirty=" + textDocument.IsDirty + "; localTop=" +
+                "; dirty=" + textDocument.IsDirty +
+                "; sameAnchorHistory=" +
+                JavaPackageGlobalUndo.IsTrackedAnchorHistory(local) +
+                "; localCanUndo=" + local.CanUndo +
+                "; localCanRedo=" + local.CanRedo + "; localTop=" +
                 JavaPackageGlobalUndo.DescribeBufferTop(view.TextBuffer, redo);
             return false;
         }
