@@ -12,7 +12,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
     {
         private static bool RegisterSharedSymbolUndo(RenamePlan plan, Target anchor,
             ITextUndoHistory history, ITextUndoTransaction transaction,
-            RenameFileUndoPrimitive primitive, string marker)
+            RenameFileUndoPrimitive primitive, string marker,
+            SymbolRenameDetachedState detached)
         {
             if (plan == null || anchor == null || history == null ||
                 transaction == null || primitive == null)
@@ -24,6 +25,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 PathCompare.Equals(x.From, anchor.Path));
             string afterAnchorPath = anchorMove == null ? anchor.Path : anchorMove.To;
             string operation = plan.OldName + " -> " + plan.NewName;
+            // U4B-PERSISTENT-SYMBOL-UNDO: callbacks use disk snapshots, not closed buffers.
+            if (detached != null) detached.Bind(primitive);
 
             return JavaGlobalUndo.Register(new JavaGlobalUndoOperation
             {
@@ -43,11 +46,13 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 // disposed history, even when the anchor itself remains open.
                 RequiredOpenDocumentPaths = plan.targets.Select(x => x.Path)
                     .Concat(plan.moves.Select(x => x.To))
-                    .Distinct(PathCompare).ToArray()
-                // Deliberately omit detached callbacks. The original symbol
-                // rename retains references to live Target buffers; replaying
-                // those after their window closes is unsafe. The shared bridge
-                // refuses this operation once its anchor has been closed.
+                    .Distinct(PathCompare).ToArray(),
+                // U4.B: use disk/RDT replay only when every file was clean
+                // before Apply and both snapshots completed after Save.
+                CanReplayDetached = detached == null ? null :
+                    new Func<bool, bool>(detached.CanReplayDetached),
+                ReplayDetached = detached == null ? null :
+                    new Action<bool>(detached.ReplayDetached)
             });
         }
     }

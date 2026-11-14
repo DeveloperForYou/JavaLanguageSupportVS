@@ -1793,6 +1793,14 @@ namespace JavaLanguageSupport.Editor.Refactoring
             // U4A-SYMBOL-GLOBAL-UNDO: state follows successful linked Undo/Redo.
             private bool applied = true;
             internal bool IsApplied { get { return applied; } }
+            // U4B-PERSISTENT-SYMBOL-UNDO: only the verified detached replay updates this state.
+            internal void SetAppliedFromDetached(bool redo)
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                if (applied == redo)
+                    throw new InvalidOperationException("Replay detached duplicato.");
+                applied = redo;
+            }
             internal RenameFileUndoPrimitive(IEnumerable<FileRename> fileMoves,
                 IEnumerable<Target> documents, string javaProjectRoot)
             {
@@ -1940,6 +1948,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     throw new IOException("Sorgente di sola lettura: " + checkedPath);
             }
 
+            // Capture a small, fully clean, exact snapshot BEFORE any change.
+            // If unavailable, keep the already tested U4.A native path.
+            var detachedSnapshot = SymbolRenameDetachedState.TryCaptureBefore(plan);
             var applied = new List<Target>();
             var moved = new List<FileRename>();
             ITextUndoTransaction fileUndo = null;
@@ -2022,7 +2033,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
             try
             {
                 if (!RegisterSharedSymbolUndo(plan, anchor, history,
-                    completedUndo, undoPrimitive, undoMarker))
+                    completedUndo, undoPrimitive, undoMarker, detachedSnapshot))
                 {
                     if (log != null) log("Rinomina completata; Undo globale Java non " +
                         "registrato (Undo locale dell'editor disponibile).");
@@ -2048,6 +2059,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 throw new IOException("Rinomina applicata, ma alcuni file NON sono stati salvati: " +
                     string.Join(" | ", saveErrors) +
                     ". Il comando Annulla globale resta disponibile; verifica i file prima di continuare.");
+            // Enable detached callbacks only after ALL saves have succeeded.
+            // This does not create any new text/native Undo transaction.
+            if (detachedSnapshot != null) detachedSnapshot.CompleteAfterSave();
             return plan.targets.Count;
         }
 
