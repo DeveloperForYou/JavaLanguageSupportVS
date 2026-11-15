@@ -2,7 +2,7 @@
 
 Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 2026** (non Visual Studio Code). Le funzionalità semantiche si basano su [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls) tramite **Language Server Protocol (LSP)**; compilazione, esecuzione e test utilizzano JDK, Maven o Gradle.
 
-> **Stato del progetto (novembre 2026):** le fasi editor **A1–E3** e il **Java Project System CPS `.javaproj` (F1)** sono stati verificati manualmente in Visual Studio 2026 Experimental. I Pack **F2E–F2G** introducono rilevamento delle source root Maven/Gradle/Plain, creazione e visualizzazione dei package Java (anche vuoti), sette template Java con selezione del package di destinazione, creazione del package durante il wizard del template, `module-info.java` (JDK 9+) e cartelle `resources`. La creazione dei template e il flusso F2G.2 sono stati collaudati manualmente. Il **refactoring dei package e l'aggiornamento automatico degli `import` (F2H)** sono ancora da implementare; la build Java nativa via MSBuild, il debug Java integrato e JUnit/TestNG in Test Explorer non sono disponibili. I collaudi non garantiscono compatibilità con ogni workspace o versione di JDT LS.
+> **Stato del progetto (15 novembre 2026):** le fasi editor **A1–E3**, il Project System CPS **F1–F2G** e la rinomina semantica di package **F2H/U3.A** sono stati verificati manualmente in Visual Studio 2026 Experimental. Il lifecycle JDT LS è stato stabilizzato con **U2**, e l’infrastruttura condivisa **U3.C.16 / U4.A–U4.D** porta Undo/Redo nativo alle rinomine, alle Code Actions, a Organize Imports e ai refactoring che applicano WorkspaceEdit locali. **Rimangono limiti intenzionali e funzionali:** vedere il [registro tecnico dei limiti](docs/IMPLEMENTATION_LIMITS.md). Build Java nativa MSBuild, debug F5 e JUnit/TestNG in Test Explorer non sono ancora disponibili. I collaudi sono manuali e non equivalgono a compatibilità garantita per ogni workspace/JDT LS.
 
 ## Funzionalità
 
@@ -15,9 +15,10 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | Diagnostica e Quick Actions (`Ctrl + .`) | **Pack A3 collaudato**; le azioni disponibili dipendono da JDT LS |
 | Definizioni, implementazioni, riferimenti, Ctrl+Click e Peek (`Alt + F12`) | **Pack B1–B2 collaudati**, inclusa navigazione ai sorgenti JDK quando disponibile |
 | Gerarchia chiamate e gerarchia tipi | Implementate su richieste LSP; disponibilità dei risultati dipendente da JDT LS |
-| Rinomina di simboli, classi e file `.java` | **Pack C1 collaudato**: anteprima, selezione delle modifiche, salvataggio e Undo/Redo |
-| Modifiche LSP a più file (`WorkspaceEdit`) | **Pack C2 collaudato**: anteprima, applicazione coordinata, salvataggio e Undo/Redo collegati |
-| Estrai metodo/variabile/costante, Inline variabile, Cambia firma | **Pack C3 collaudato**; risultati e proposte forniti da JDT LS |
+| Rinomina di simboli, classi e file `.java` | **C1 + U4.A/U4.B/U4.B.1 collaudati**: anteprima, Undo/Redo globale e replay nella sessione; riaggancio schede dopo rinomina |
+| Modifiche LSP a più file (`WorkspaceEdit`) | **C2 + U4.C collaudati**: anteprima, salvataggio, Undo/Redo globale e replay detached sicuro |
+| Undo/Redo nativo di Visual Studio 2026 | **U3.C.16 + U4.A–U4.D collaudati**: package CPS, simboli, Quick Fix, Code Actions, Organize Imports e refactoring basati su WorkspaceEdit; cronologia limitata alla sessione |
+| Estrai metodo/variabile/costante, Inline variabile, Cambia firma | **C3 + U4.D collaudati**; la proposta dipende da JDT LS, Undo globale quando è applicato un WorkspaceEdit locale |
 | Genera costruttori, getter/setter, Override/Implement | **Pack D1 collaudato**: comandi e finestre di generazione codice |
 | Completamento di `()`, `[]`, `{}`, virgolette e Javadoc | **Pack D2 collaudato** |
 | Formattazione documento / selezione e commenti Java | **Pack D3 collaudato**: comandi nativi Visual Studio Ctrl+K,D/F/C/U; organizza import resta nel menu Strumenti |
@@ -30,7 +31,7 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | Nuovo package Java | **Pack F2E/F2F**: riconoscimento root Maven/Gradle/Plain, finestra WPF, validazione, package nidificati e registrazione delle cartelle vuote come `Folder` in `.javaproj` |
 | Nuovo package durante la creazione di un elemento | **Pack F2G.2**: pulsante «Nuovo package...» nel selettore dei sette template; il package appena creato viene selezionato automaticamente; collaudato |
 | Moduli Java e cartelle risorse | **Pack F2G.2**: `module-info.java` per JDK 9+ (anche `open module`), più `src/main/resources` e `src/test/resources`; collaudato |
-| Refactoring dei package Java | **Pack F2H pianificato**: rinomina/spostamento semantico di package, sincronizzazione CPS, aggiornamento di dichiarazioni `package` e `import` |
+| Refactoring dei package Java | **F2H + U3.A/U3.C + U4.B.1 collaudati**: rinomina semantica di package/sottopackage, aggiornamento dichiarazioni e riferimenti, CPS e Undo/Redo; non è un trasferimento arbitrario fra progetti |
 | Icone in Esplora soluzioni | **Pack F2C/F2D**: icona del progetto verificata; moniker custom per sorgenti Java, Maven, Gradle e file di configurazione presenti nel repository; verifica grafica F2D ancora in corso |
 | Debug Java integrato (F5/F9/F10/F11) | **Non implementato** |
 | JUnit/TestNG in Test Explorer | **Non implementato** |
@@ -61,7 +62,13 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | **F2F** | Creazione package, icona, UI WPF, package vuoti e integrazione in Aggiungi → Nuovo elemento | ✅ Collaudato manualmente |
 | **F2G.1** | Sette template Java con scelta package e generazione del file nella directory corretta | ✅ Collaudato su tutti e sette i template |
 | **F2G.2** | Nuovo package dal wizard dei template, modulo JDK 9+ e cartelle risorse | ✅ Collaudato manualmente |
-| **F2H** | Refactoring package/import e spostamento sorgenti Java | 📋 Da implementare |
+| **F2H** | Rinomina semantica di package e sottopackage tramite JDT LS, CPS e import | ✅ Collaudato con vincoli (LIM-010–017) |
+| **U2.3** | Lifecycle JDT LS, chiusura pulita e riuso cache | ✅ Collaudato |
+| **U3.A** | Coerenza del modello Java dopo rinomina package | ✅ Collaudato |
+| **U3.C.16** | Undo/Redo nativo condiviso, descrizioni toolbar e cleanup | ✅ Collaudato |
+| **U4.A–U4.B.1** | Undo/Redo simboli, replay detached e riaggancio CPS/RDT | ✅ Collaudati |
+| **U4.C** | Quick Fix, Code Actions e Organize Imports tramite WorkspaceEdit | ✅ Collaudato |
+| **U4.D** | Refactoring Java con titoli e Undo/Redo nativo | ✅ Collaudato |
 | **Spring Boot** | Integrazione dedicata ai progetti Spring Boot | 📋 Pianificata |
 | **Localizzazione** | Interfaccia multilingua dell'estensione (italiano/inglese) | 📋 Pianificata |
 
@@ -85,6 +92,12 @@ I dati della cache risiedono sotto `%LOCALAPPDATA%\JavaLanguageSupportVS\jdtls\p
 **Verifica manuale consigliata:** aprire una cartella Java con **File → Apri → Cartella**, attendere l'importazione, controllare colori, Navigation Bar, riferimenti CodeLens e Inlay Hints; poi chiudere e riaprire Visual Studio Experimental con lo stesso workspace e ripetere le prove. Controllare il log JDT LS e **Java: Stato IntelliSense**. Eventuali errori di risorse interne `jdt.ls-java-project` durante l'importazione vanno distinti dai malfunzionamenti persistenti: l'ultimo collaudo è risultato pulito, ma una regressione in altri workspace o versioni di JDT LS resta possibile.
 
 Le indicazioni *collaudato* si riferiscono a verifiche **manuali**, non a test automatici su tutte le versioni di Visual Studio o JDT LS; non costituiscono una garanzia di assenza di regressioni.
+
+### U2–U4 — Lifecycle JDT LS e Undo/Redo globale (collaudati)
+
+Le fasi **U2.3** e **U3.A** stabilizzano l’arresto e il riuso della cache JDT LS e la coerenza del modello dopo la rinomina di package. **U3.C.16** introduce `Editor/Undo/JavaGlobalUndo` e un unico command target per i comandi Annulla/Ripeti nativi di Visual Studio; **U4.A/U4.B/U4.B.1** lo integrano con la rinomina simboli e la riapertura controllata delle schede dopo un cambio fisico di percorso. **U4.C/U4.D** estendono il percorso condiviso a Quick Fix, Code Actions, Organize Imports e refactoring che applicano un `WorkspaceEdit` locale.
+
+**Vincoli da non nascondere:** la cronologia globale è in memoria e non sopravvive a un riavvio di Visual Studio; la registrazione e il replay richiedono verifiche OLE e/o snapshot coerenti; i comandi JDT LS eseguiti senza WorkspaceEdit locale non hanno Undo globale garantito. Per numero massimo di operazioni, limiti sugli snapshot e modalità di blocco, vedere **LIM-021, LIM-022, LIM-030–034 e LIM-040–041** nel [registro dei limiti](docs/IMPLEMENTATION_LIMITS.md).
 
 ### Pack F1 e F2 — Project System Java CPS e icone
 
@@ -123,6 +136,10 @@ Per le icone di Esplora soluzioni, `ProjectSystem/Icons/JavaProjectTreeIconProvi
 | Gradle / Kotlin DSL | `build.gradle`, `settings.gradle`, `*.gradle.kts`, `gradle.properties`, `gradlew` |
 | Altri linguaggi JVM e pacchetti | `*.kt`, `*.kts`, `*.groovy`, `*.class`, `*.jar`, `*.war`, `*.ear` |
 | Configurazioni e strumenti | `*.properties`, `*.yaml`, `*.yml`, `*.toml`, `MANIFEST.MF`, `.project`, `.classpath`, `.iml`, `.gitignore`, `Dockerfile`, `README*` |
+
+#### F2H — Rinomina semantica dei package (collaudata)
+
+Il comando di rinomina package CPS usa JDT LS per proporre modifiche a dichiarazioni `package`, riferimenti e `import`, verifica il progetto e la source root, aggiorna le cartelle e gli item `Folder` del `.javaproj`, salva un backup e registra Undo/Redo nell’infrastruttura condivisa. Gestisce anche package padre e sottopackage con sorgenti Java. Il riaggancio delle schede dopo la rinomina fisica è integrato con U4.B.1. **Non** è ancora un meccanismo generale per spostare tipi tra source root o progetti: file esterni, link/reparse point, file sporchi, UTF-16 e item espliciti non `Folder` possono impedire l’operazione (vedere **LIM-010–017**).
 
 #### Anteprima delle icone personalizzate
 
@@ -248,6 +265,7 @@ JavaLanguageSupportVS/
 ├── .gitignore
 ├── Scripts/
 ├── Examples/
+├── docs/
 └── JavaLanguageSupport/
     ├── Editor/
     │   ├── JavaContentType.cs
@@ -256,7 +274,8 @@ JavaLanguageSupportVS/
     │   ├── Javadoc/
     │   ├── Intelligence/
     │   ├── Navigation/
-    │   └── Refactoring/
+    │   ├── Refactoring/
+    │   └── Undo/
     ├── LanguageServer/
     ├── Commands/
     ├── Build/
@@ -283,7 +302,9 @@ JavaLanguageSupportVS/
 | `Editor/Javadoc` | Quick Info WPF, Javadoc, tag e continuazione commenti |
 | `Editor/Intelligence` | Classificazione semantica, evidenziazione, CodeLens, Inlay Hints |
 | `Editor/Navigation` | Definizioni, implementazioni, riferimenti, Ctrl+Click, Peek, gerarchie |
-| `Editor/Refactoring` | Rinomina, WorkspaceEdit, estrazioni, firma metodi, generazione membri |
+| `Editor/Refactoring` | Rinomina package/simboli, WorkspaceEdit, replay detached, estrazioni, firma e generazione membri |
+| `Editor/Undo` | `JavaGlobalUndo`, marker OLE, target nativo condiviso e contratto delle operazioni Java |
+| `docs/IMPLEMENTATION_LIMITS.md` | Registro tecnico dei limiti attivi e risolti, con ID, fonti e criteri di verifica |
 | `LanguageServer` | Client JDT LS, comunicazione JSON-RPC, diagnostica, stato e attività workspace |
 | `Commands` | Registrazione e implementazione dei comandi, `Commands.vsct` |
 | `Build` | Rilevamento workspace, build/run/test tramite JDK, Maven e Gradle |
@@ -326,18 +347,22 @@ I log locali e i workspace temporanei di JDT LS **non devono essere aggiunti al 
 
 **Package Java e risorse:** la creazione di package richiede una source root Java valida; `src/main/resources` e `src/test/resources` sono cartelle risorse, non package. `_JavaResources.marker` è previsto solo nei sorgenti/archivi del template: se compare nel progetto dell'utente, va trattato come un problema del wizard.
 
-## Limiti conosciuti
+## Limiti conosciuti e registro tecnico
 
-- Il **Project System CPS `.javaproj` esiste** (Pack F1), ma la build Java tramite il target MSBuild `Build` non è ancora implementata; usare Maven/Gradle o i comandi Java esistenti.
-- **F2H non è implementato:** la normale rinomina/spostamento di una cartella CPS non garantisce l'aggiornamento delle dichiarazioni `package` né degli `import` Java. È previsto un refactoring semantico tramite JDT LS con anteprima e gestione delle operazioni sulle risorse.
-- **F2G.2:** il template `module-info.java` crea il descrittore di base, non imposta automaticamente `requires`, `exports` o i parametri di build; le cartelle risorse seguono i percorsi convenzionali e non rilevano ancora configurazioni personalizzate nei source set Gradle o nel POM.
-- I template e le icone di progetto/file sono sperimentali: F2C è stato verificato, mentre la resa completa delle icone dei file F2D nei diversi temi richiede ancora collaudo.
-- Il debugging Java con i comandi nativi dell'IDE e l'integrazione con Test Explorer sono **futuri**.
-- Non è ancora presente un'integrazione specifica per **Spring Boot**: il supporto Maven/Gradle è generico e non equivale a un riconoscimento o un avvio dedicato delle applicazioni Spring Boot.
-- Non è ancora presente un sistema completo di **localizzazione dell'estensione**: molte etichette dei menu, finestre e messaggi sono attualmente definite in italiano nei sorgenti.
-- **Pack E2 (Inlay Hints) collaudato manualmente**, inclusi gli hotfix per stringhe, generici espliciti, array e diamond `<>`; possono restare limitazioni nei casi di inferenza che dipendono da JDT LS.
-- **Pack E3 collaudato manualmente:** la perdita intermittente dei colori e le anomalie transitorie di recupero di simboli/riferimenti non sono riapparse nell'ultimo collaudo; la prima indicizzazione di progetti nuovi può comunque richiedere tempo e il risultato può variare in base al workspace, a Maven/Gradle e alla versione di JDT LS.
-- La semantica, la navigazione e i refactoring dipendono dalle funzionalità e dalle risposte del server JDT LS; non vengono inventati riferimenti o modifiche quando il server non restituisce risultati.
+**Registro centralizzato:** [docs/IMPLEMENTATION_LIMITS.md](docs/IMPLEMENTATION_LIMITS.md). Ogni limite ha un **ID stabile**, l'indicazione se è una restrizione intenzionale, una funzionalità parziale o una voce di roadmap, il **file/metodo sorgente** che lo determina, l'impatto e un test di regressione proposto. Le voci risolte restano tracciate con pack e collaudo.
+
+| Area | Principali limiti verificati nel codice | ID nel registro |
+| --- | --- | --- |
+| Project System / build | `.javaproj` non compila tramite MSBuild; Maven POM letto staticamente; source set Gradle personalizzati con root esplicite | LIM-001–004, LIM-006 |
+| Template e moduli | `module-info.java` iniziale senza `requires`/`exports` automatici; cartelle risorse convenzionali | LIM-005 |
+| Rinomina package CPS | Richiede sorgenti e root riconosciuta; soglie 1.000 cartelle / 10.000 file `.java` / 16 MiB per file; UTF-16, link, file sporchi e item CPS espliciti non gestiti | LIM-010–017 |
+| Rinomina simboli | Niente rename file solo maiuscole/minuscole o spostamenti fra directory; replay detached con snapshot e riapertura schede condizionati | LIM-020–022 |
+| WorkspaceEdit / refactoring | Solo TextEdit su `.java` locali; massimo 50 documenti, 5.000 edit, 2 MiB/file; replay detached budget 16 MiB; command-only senza Undo globale garantito | LIM-030–034 |
+| Undo/Redo condiviso | Cronologia **in memoria**, massimo **32 operazioni**, replay rifiutato dopo cambiamenti non verificati | LIM-040–041 |
+| Lifecycle JDT LS | Disponibilità semantica subordinata a importazione e indicizzazione, anche con cache persistente | LIM-042 |
+| Funzioni future | Debug Java IDE, Test Explorer, designer visuale, supporto Spring Boot dedicato e localizzazione completa | LIM-050–051 |
+
+**Interpretazione:** i blocchi per file sporchi, destinazioni esterne, cambiamenti successivi e snapshot incoerenti sono **vincoli di sicurezza**, non difetti da aggirare. La chiusura manuale di un editor può restare necessaria quando non è possibile un riaggancio CPS/RDT sicuro (LIM-022). I pack U3/U4 sono collaudati manualmente, ma i test negativi indicati nel registro non devono essere considerati implicitamente collaudati.
 
 ## Roadmap
 
@@ -362,7 +387,10 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 | **F2F** | Nuovo package Java con WPF e nodi `Folder` CPS vuoti | ✅ Collaudato manualmente |
 | **F2G.1** | Selezione package per tutti e sette i template Java | ✅ Collaudato manualmente |
 | **F2G.2** | Nuovo package durante la creazione dei template, `module-info.java`, directory `resources` | ✅ Collaudato manualmente |
-| **F2H** | Rinomina/spostamento package e aggiornamento `package`/`import` via JDT LS | 📋 Prossima fase |
+| **F2H** | Rinomina semantica di package e sottopackage con CPS e JDT LS | ✅ Collaudata; LIM-010–017 |
+| **U2.3 / U3.A** | Lifecycle cache JDT LS e coerenza modello dopo rinomina | ✅ Collaudati |
+| **U3.C.16 / U4.A–U4.D** | Undo/Redo nativo condiviso, replay e refactoring | ✅ Collaudati; LIM-020–042 |
+| **U5** | Consolidamento documentazione, limiti tracciati e futuri miglioramenti CPS | 🔄 In corso |
 | **Spring Boot** | Riconoscimento progetti, strumenti Spring e avvio dell'applicazione | 📋 Pianificato |
 | **Localizzazione** | Risorse testuali traducibili, italiano/inglese e selezione della lingua | 📋 Pianificata |
 | **Integrazione IDE** | Build Java nativa, debugger Java e JUnit/TestNG in Test Explorer; estensione delle funzioni CPS già presenti | 📋 Evoluzione futura |
@@ -371,7 +399,7 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 ### Evoluzioni successive
 
 1. Consolidare i comandi di **compilazione, esecuzione e test**, lanciati oggi da **Strumenti → Java**.
-2. **Completare il refactoring dei package Java (F2H)**: rinomina/spostamento tramite JDT LS, aggiornamento delle dichiarazioni `package` e degli `import`, anteprima, gestione delle rinomine di cartelle/file e sincronizzazione CPS. Successivamente evolvere build integrata e dipendenze Maven/Gradle.
+2. **Estendere il refactoring package F2H già collaudato** ai casi ancora esclusi dal codice (package senza sorgenti, item CPS espliciti, limiti documentati), senza perdere le protezioni di Undo/Redo; poi evolvere integrazione build e dipendenze Maven/Gradle.
 3. Integrare **debug Java** (breakpoint, step, variabili) con il flusso IDE.
 4. Integrare **JUnit/TestNG** nel Test Explorer.
 5. Progettare un **Designer Swing/AWT/JavaFX** con toolbox, proprietà, gerarchia componenti, anteprima e generazione/sincronizzazione del codice. Nessun designer visuale è attualmente disponibile.
@@ -393,4 +421,4 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 
 ---
 
-**Repository:** [DeveloperForYou/JavaLanguageSupportVS](https://github.com/DeveloperForYou/JavaLanguageSupportVS). Documentazione aggiornata al **7 novembre 2026**: distingue i **collaudi manuali completati**, le **funzionalità sperimentali** e quelle **ancora pianificate**. Non costituisce una garanzia di compatibilità su tutte le versioni di Visual Studio, JDK e JDT LS.
+**Repository:** [DeveloperForYou/JavaLanguageSupportVS](https://github.com/DeveloperForYou/JavaLanguageSupportVS). Documentazione aggiornata al **15 novembre 2026**, con stato dei collaudi U2–U4 e [registro tecnico dei limiti](docs/IMPLEMENTATION_LIMITS.md). I collaudi riportati sono manuali; nessuna garanzia di compatibilità su tutte le versioni di Visual Studio, JDK, Maven/Gradle e JDT LS.
