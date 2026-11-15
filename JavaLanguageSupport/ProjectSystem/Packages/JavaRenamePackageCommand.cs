@@ -66,6 +66,9 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
             internal int LocalPackageDeclarations;
             internal byte[] ProjectBefore, ProjectAfter;
             internal string BackupDirectory;
+            // U4B1-DOCUMENT-LIFECYCLE: post-commit rebinding permitted only if
+            // the shared native Undo registered its detached replay.
+            internal bool ReopenMovedTabsAfterCommit;
             internal int EditCount { get { return Files.Sum(x => x.EditCount); } }
         }
 
@@ -174,12 +177,20 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                     "\nFile con modifiche: " + plan.Files.Count +
                     "\nModifiche al codice: " + plan.EditCount +
                     "\n\nBackup: " + plan.BackupDirectory +
-                    "\n\nCTRL+Z: annulla la rinomina del package. " +
-                    "CTRL+Y: ripeti la rinomina, dalla scheda Java attivata. " +
-                    "Non chiudere tale scheda prima di annullare/ripetere. " +
+                    "\n\nAnnulla/Ripeti: usa i comandi nativi di Visual Studio. " +
+                    "Le schede spostate e pulite vengono riaperte dopo " +
+                    "il commit quando il replay sicuro e disponibile. " +
                     "In caso di conflitti utilizza Git o il backup." +
                     (string.IsNullOrWhiteSpace(workspaceNotice) ? "" :
                         "\n\n" + workspaceNotice), false);
+                // U4B1-DOCUMENT-LIFECYCLE: after commit, save and JDT LS sync.
+                // Reopening only moved clean tabs resets the stale CPS
+                // itemId and causes didClose/didOpen for the new Java URI.
+                if (plan.ReopenMovedTabsAfterCommit)
+                    JavaLanguageSupport.Editor.Refactoring.JavaRenamedDocumentReopen.Refresh(
+                        plan.OpenFiles.Where(x => !FileComparer.Equals(x.From, x.To))
+                            .Select(x => new KeyValuePair<string, string>(x.From, x.To)),
+                        message => JavaLanguageStatus.LogLifecycle(message));
             }
             catch (Exception ex)
             {
@@ -1054,12 +1065,14 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 {
                     // U3C7 COM anchor: risolve il manager nativo del buffer,
                     // senza interrogare le proprieta' dello stack .NET non supportate.
-                    JavaPackageGlobalUndo.Remember(history, anchor.Buffer,
-                        completedPackageUndo, globalPrimitive, undoMarker,
-                        () => globalPrimitive.IsApplied,
-                        plan.OldName, plan.NewName,
-                        anchor.To, anchor.From, globalPrimitive.CanReplayDetached,
-                        globalPrimitive.ReplayDetached);
+                    plan.ReopenMovedTabsAfterCommit =
+                        JavaPackageGlobalUndo.Remember(history, anchor.Buffer,
+                            completedPackageUndo, globalPrimitive, undoMarker,
+                            () => globalPrimitive.IsApplied,
+                            plan.OldName, plan.NewName,
+                            anchor.To, anchor.From, globalPrimitive.CanReplayDetached,
+                            globalPrimitive.ReplayDetached) &&
+                        globalPrimitive.CanReplayDetached(false);
                 }
                 catch (Exception globalError)
                 {

@@ -312,6 +312,26 @@ namespace JavaLanguageSupport.Editor.Refactoring
                             return;
                         }
                         int changed = JavaProjectRenameEdits.Apply(plan, log);
+                         // U4B1-DOCUMENT-LIFECYCLE: capture paths while live, BEFORE
+                         // the clean renamed tabs are reopened. No await
+                         // here: users cannot edit a stale CPS tab between
+                         // the physical move and its itemId rebind.
+                         string[] editedAfterRename = plan.targets
+                             .Where(x => x.Edits.Count != 0)
+                             .Select(x => x.Document.FilePath).ToArray();
+                         if (plan.moves.Count != 0)
+                         {
+                             if (plan.ReopenMovedTabsAfterCommit)
+                                 JavaRenamedDocumentReopen.Refresh(
+                                     plan.moves.Select(m =>
+                                         new KeyValuePair<string, string>(m.From, m.To)),
+                                     message => Report(log, message));
+                             else
+                                 Report(log, "Scheda rinominata: aggiornamento automatico " +
+                                     "non eseguito (Undo detached non disponibile). " +
+                                     "Se Salva/Navigazione non funzionano, salva e riapri " +
+                                     "manualmente il documento.");
+                         }
                         // F2I6-SYMBOL-FILE-SYNC: a class rename can also rename
                         // Foo.java. The VS editor didChange does not guarantee
                         // that Eclipse notices the old/new filesystem paths.
@@ -321,8 +341,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
                             string syncWarning = await JavaSymbolRenameSync.NotifyAsync(
                                 plan.Root,
                                 plan.moves.Select(x => new KeyValuePair<string, string>(x.From, x.To)),
-                                plan.targets.Where(x => x.Edits.Count != 0)
-                                    .Select(x => x.Document.FilePath));
+                                 editedAfterRename);
                             if (!string.IsNullOrEmpty(syncWarning))
                                 Report(log, "JDT LS: " + syncWarning);
                         }
@@ -457,6 +476,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
             internal string Origin;
             internal string Root;
             internal string OldName, NewName;
+            // U4B1-DOCUMENT-LIFECYCLE: refresh permitted only with a safe detached replay.
+            internal bool ReopenMovedTabsAfterCommit;
         }
         private static readonly StringComparer PathCompare = StringComparer.OrdinalIgnoreCase;
 
@@ -2030,10 +2051,14 @@ namespace JavaLanguageSupport.Editor.Refactoring
 
             // Registration failures must NEVER start a rollback now that the
             // linked UndoContext has closed. Native buffer Undo remains.
+            // U4B1-DOCUMENT-LIFECYCLE: auto-reopen is safe only if global Undo
+            // registration actually succeeded.
+            bool sharedUndoRegistered = false;
             try
             {
-                if (!RegisterSharedSymbolUndo(plan, anchor, history,
-                    completedUndo, undoPrimitive, undoMarker, detachedSnapshot))
+                sharedUndoRegistered = RegisterSharedSymbolUndo(plan, anchor, history,
+                    completedUndo, undoPrimitive, undoMarker, detachedSnapshot);
+                if (!sharedUndoRegistered)
                 {
                     if (log != null) log("Rinomina completata; Undo globale Java non " +
                         "registrato (Undo locale dell'editor disponibile).");
@@ -2062,6 +2087,11 @@ namespace JavaLanguageSupport.Editor.Refactoring
             // Enable detached callbacks only after ALL saves have succeeded.
             // This does not create any new text/native Undo transaction.
             if (detachedSnapshot != null) detachedSnapshot.CompleteAfterSave();
+            // U4B1-DOCUMENT-LIFECYCLE: never close the anchor without a verified
+            // detached Undo/Redo fallback for its newly saved files.
+            plan.ReopenMovedTabsAfterCommit = sharedUndoRegistered &&
+                plan.moves.Count != 0 && detachedSnapshot != null &&
+                detachedSnapshot.CanReplayDetached(false);
             return plan.targets.Count;
         }
 

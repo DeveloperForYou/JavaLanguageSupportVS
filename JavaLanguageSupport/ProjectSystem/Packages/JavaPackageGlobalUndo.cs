@@ -10,14 +10,16 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
     internal static class JavaPackageGlobalUndo
     {
         // Keep the original call signature to avoid changing tested CPS code.
-        internal static void Remember(ITextUndoHistory history, ITextBuffer anchorBuffer,
+        // U4B1-DOCUMENT-LIFECYCLE: expose registration result to the post-commit
+        // rebind gate; no change to the existing native Undo registration.
+        internal static bool Remember(ITextUndoHistory history, ITextBuffer anchorBuffer,
             ITextUndoTransaction completedTransaction, ITextUndoPrimitive primitive,
             string marker, Func<bool> isApplied, string oldPackage, string newPackage,
             string anchorPath, string originalAnchorPath,
             Func<bool, bool> canDetached, Action<bool> replayDetached)
         {
             string label = oldPackage + " -> " + newPackage;
-            if (!JavaGlobalUndo.Register(new JavaGlobalUndoOperation {
+            bool registered = JavaGlobalUndo.Register(new JavaGlobalUndoOperation {
                 History = history,
                 AnchorBuffer = anchorBuffer,
                 Transaction = completedTransaction,
@@ -31,9 +33,11 @@ namespace JavaLanguageSupport.ProjectSystem.Packages
                 OriginalAnchorPath = originalAnchorPath,
                 CanReplayDetached = canDetached,
                 ReplayDetached = replayDetached
-            }))
+            });
+            if (!registered)
                 System.Diagnostics.Trace.WriteLine(
                     "[Java Undo] Impossibile registrare la rinomina package: " + label);
+            return registered;
         }
     }
 
