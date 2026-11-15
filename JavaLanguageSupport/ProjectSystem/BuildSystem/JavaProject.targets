@@ -34,10 +34,10 @@
       <Context>File;BrowseObject</Context>
     </PropertyPageSchema>
   </ItemGroup>
-  <!-- F1 non compila Java via MSBuild: eseguire Maven/Gradle o comandi Java esistenti. -->
+  <!-- Build/Clean/Rebuild sono definiti in JavaProject.NativeBuild.targets. -->
   <!-- Java CPS F1: file del progetto inclusi automaticamente (disattivabile con EnableDefaultJavaItems=false). -->
   <PropertyGroup>
-    <JavaDefaultItemExcludes>$(JavaDefaultItemExcludes);**\bin\**;**\obj\**;**\target\**;**\build\**;**\out\**;**\.git\**;**\.vs\**;**\.idea\**;**\.gradle\**;**\node_modules\**;**\*.class;**\*.javaproj;**\*.javaproj.user;**\*.suo;**\JavaProject.props;**\JavaProject.targets;**\JavaProject.*.xaml;**\*.before-cps-fulltree.bak;**\*.f1-visibility.bak</JavaDefaultItemExcludes>
+    <JavaDefaultItemExcludes>$(JavaDefaultItemExcludes);**\bin\**;**\obj\**;**\target\**;**\build\**;**\out\**;**\.git\**;**\.vs\**;**\.java-vs\**;**\.idea\**;**\.gradle\**;**\node_modules\**;**\*.class;**\*.javaproj;**\*.javaproj.user;**\*.suo;**\JavaProject.props;**\JavaProject.targets;**\JavaProject.*.xaml;**\*.before-cps-fulltree.bak;**\*.f1-visibility.bak</JavaDefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup Condition="'$(EnableDefaultJavaItems)' == 'true'">
     <!-- JavaCompile viene incluso per primo, affinche' None escluda i sorgenti Java. -->
@@ -48,10 +48,6 @@
           Exclude="$(DefaultItemExcludes);$(DefaultExcludesInProjectFolder);$(JavaDefaultItemExcludes);**\*.java;@(JavaCompile);@(None)" />
   </ItemGroup>
   <!-- Fine Java CPS F1: elementi predefiniti. -->
-  <Target Name="Build">
-    <Error Condition="'$(DesignTimeBuild)' != 'true'"
-           Text="Pack F1: Java Build di Visual Studio non ancora implementato. Usa Maven (mvn package) o Java: Compila progetto." />
-  </Target>
-  <Target Name="Clean" />
-  <Target Name="Rebuild" DependsOnTargets="Clean;Build" />
+  <!-- Import after file globs. Keep .javaproj imports unchanged. -->
+  <Import Project="$(MSBuildThisFileDirectory)JavaProject.NativeBuild.targets" />
 </Project>

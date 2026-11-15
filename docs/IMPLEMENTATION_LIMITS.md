@@ -14,10 +14,10 @@ Questo documento è il **registro tecnico dei limiti attivi**. Integra il [READM
 
 ## Project System, build e source root
 
-### LIM-001 — `.javaproj` non compila Java con MSBuild
-**Stato:** `ATTIVO / FUNZIONALE` · **Impatto:** il CPS fornisce il progetto in Esplora soluzioni, ma il target nativo MSBuild `Build` non equivale a `javac`/Maven/Gradle. Usare i comandi Java o la build esterna.
+### LIM-001 — `.javaproj`: target Build storicamente segnaposto (F3.A in verifica)
+**Stato:** `IN VERIFICA / F3.A` · **Impatto:** il vecchio `Build` falliva intenzionalmente. Il pack F3.A aggiunge Build/Rebuild/Clean reali in MSBuild, invocando gli strumenti Java esterni, ma **il collaudo VS 2026 Exp non è ancora stato eseguito**. Non segnare come `RISOLTO` prima della prova.
 
-**Traccia:** [`JavaProject.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.targets) (`JavaCompile`/`None`; nessun task compilatore Java); [README Project System](../JavaLanguageSupport/ProjectSystem/README.md) e README principale. **Verifica:** aprire `.javaproj`, confrontare inclusione file e compilazione tramite Maven/Gradle.
+**Traccia:** [`JavaProject.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.targets) (import), [`JavaProject.NativeBuild.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.NativeBuild.targets) (`Build`, `Rebuild`, `Clean`) e [`JavaProject.PlainBuild.ps1`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.PlainBuild.ps1). **Verifica:** Build/Clean/Rebuild Maven, Gradle e Plain da VS Experimental e da Developer PowerShell, inclusi fallimenti di compilazione.
 
 ### LIM-002 — Maven source root: lettura statica e proprietà limitate
 **Stato:** `ATTIVO / FUNZIONALE` · **Impatto:** il resolver legge `build/sourceDirectory` e `build/testSourceDirectory` dal POM e sostituisce solo `${project.basedir}` e `${basedir}`; altre espressioni `${...}` vengono rifiutate e si torna alle root convenzionali. Non esegue Maven né calcola l'effective POM.
@@ -43,6 +43,36 @@ Questo documento è il **registro tecnico dei limiti attivi**. Integra il [READM
 **Stato:** `ATTIVO / FUNZIONALE` · **Impatto:** le icone Java/Maven/Gradle custom vengono associate ai nodi del Project System con capability `JavaLanguageSupportCps`, non a ogni file aperto in Visual Studio o all'associazione Windows. La resa effettiva F2D su tutti i temi resta da verificare; la presenza delle PNG nella VSIX non basta.
 
 **Traccia:** [`JavaProjectTreeIconProvider`](../JavaLanguageSupport/ProjectSystem/Icons/JavaProjectTreeIconProvider.cs#L10-L43), [`JavaProjectItemIcons`](../JavaLanguageSupport/ProjectSystem/Icons/JavaProjectItemIcons.cs). **Verifica:** file `.java`, `pom.xml`, `build.gradle` nel `.javaproj` in tema Light/Dark e nella vista cartella non CPS.
+
+### LIM-007 — F3.A richiede tool Java esterni e usa wrapper locali
+**Stato:** `ATTIVO / FUNZIONALE` · **Impatto:** MSBuild richiama `mvnw.cmd`/`gradlew.bat` se presenti, altrimenti `mvn.cmd`/`gradle.bat` nel `PATH`. Nessun Maven/Gradle è incorporato; un wrapper è eseguibile del progetto e va considerato attendibile prima dell'avvio. `JavaBuildSystem` resta esplicito e il default storico di `JavaProject.props` è `Maven`.
+
+**Traccia:** [`JavaProject.NativeBuild.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.NativeBuild.targets) (`JavaF3Validate`, `Exec`); [`JavaProject.props`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.props). **Verifica:** wrapper presenti/assenti, tool fuori dal PATH, valore `JavaBuildSystem` errato, `pom.xml` mancante.
+
+### LIM-008 — F3.A Plain JDK è una compilazione di base, non un build system completo
+**Stato:** `ATTIVO / FUNZIONALE` · **Impatto:** `Plain` compila ogni volta tutti gli elementi CPS `JavaCompile` tramite `javac` (massimo 10.000), `-encoding UTF-8`, output `.java-vs/classes`, senza classpath esterno, dipendenze, test né gestione automatica di module path. Il task Clean elimina solo la cartella classi prevista. Non usare `Plain` come surrogato di Maven/Gradle.
+
+**Traccia:** [`JavaProject.NativeBuild.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.NativeBuild.targets) (elenco sorgenti); [`JavaProject.PlainBuild.ps1`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.PlainBuild.ps1) (validazione, argfile, javac, Clean). **Verifica:** progetto semplice, package annidato, percorso con spazi, assenza `javac`, compilation error, clean con directory linkata.
+
+### LIM-009 — Integrazione output/errori MSBuild F3.A ancora parziale
+**Stato:** `ATTIVO / FUNZIONALE` · **Impatto:** `Exec` propaga il codice d'uscita degli strumenti e i log alla finestra Output; `javac` riformatta alcuni errori file/riga. La conversione completa dei messaggi Maven/Gradle in diagnostiche navigabili di Elenco errori, l'incremental build e le configurazioni avanzate sono future. I target saltano le richieste `DesignTimeBuild=true` per non compilare durante le interrogazioni CPS.
+
+**Traccia:** [`JavaProject.NativeBuild.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.NativeBuild.targets) e [`JavaProject.PlainBuild.ps1`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.PlainBuild.ps1). **Verifica:** errore javac/Maven/Gradle, output VS, build design-time, build su soluzione con più `.javaproj`.
+
+### LIM-043 — Progetti F1 con item espliciti duplicati rispetto agli item glob CPS
+**Stato:** `ATTIVO / FUNZIONALE` · **Impatto:** quando un `.javaproj` importa `JavaProject.targets` *prima* dei propri `<JavaCompile Include="..." />` e `<None Include="..." />`, gli item espliciti del file possono duplicare quelli aggiunti dai glob. F3.A.1 elimina le quattro inclusioni ridondanti **solo nell'esempio** `HelloJavaF1.javaproj`, senza modificare i nodi `Folder`. Altri progetti F1 già creati possono ancora contenere duplicati: rimuovere gli `Include` espliciti equivalenti, oppure disabilitare i glob con `EnableDefaultJavaItems=false` se si vuole gestire manualmente ogni file (perdendo l'aggiunta automatica).
+
+**Traccia:** [`JavaProject.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.targets) (default globs), [`HelloJavaF1.javaproj`](../Examples/JavaProjectSystemAcceptance/HelloJavaF1.javaproj) (fix dell'esempio). **Verifica:** `msbuild .\HelloJavaF1.javaproj /v:diagnostic`, sezione `JavaCompile`/`None`; poi creazione nuovo sorgente e aggiornamento Esplora soluzioni.
+
+### F3.A.1 — Tool resolution verificata solo con percorso assoluto
+**Stato:** `IN COLLAUDO / F3.A.1` · **Impatto:** il test precedente ha dimostrato Build Maven da MSBuild con `/p:JavaF3MavenCommand=...`, ma `mvn.cmd` non veniva risolto con `call` nel contesto `Exec`. Il nuovo helper individua i launcher .cmd/.bat ed esegue il comando con percorso completo. Va verificato su installazioni Maven e Gradle diverse, e con il wrapper di progetto presente. Gli errori del tool continuano a far fallire la build; è intenzionale.
+
+**Traccia:** [`JavaProject.NativeBuild.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.NativeBuild.targets), [`JavaProject.ToolRunner.ps1`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.ToolRunner.ps1). **Verifica:** Build/Clean/Rebuild senza override, con PATH privo di Maven, con wrapper e con `/p:JavaF3MavenCommand` esplicito.
+
+### F3.A.3 — Nomenclatura pubblica MSBuild senza identificativi di pack
+**Stato:** `RINOMINA API / DA VERIFICARE` · **Impatto:** la pulizia dei nomi XML sostituisce `JavaF3MavenCommand`, `JavaF3GradleCommand`, `JavaF3SourceList`, `JavaF3PlainScript`, `JavaF3ToolRunner`, `JavaF3Validate` con `JavaMavenCommand`, `JavaGradleCommand`, `JavaCompilerSourceList`, `JavaPlainBuildScript`, `JavaBuildToolRunner`, `JavaValidateBuild`. Gli override MSBuild locali che usavano i nomi vecchi (es. `/p:JavaF3MavenCommand=`) **devono essere migrati**. I target standard `Build`, `Rebuild` e `Clean` non cambiano; né cambiano i backend o il comportamento runtime. I tag delle implementazioni non codificano più le fasi di sviluppo.
+
+**Traccia:** [`JavaProject.NativeBuild.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.NativeBuild.targets), [`JavaProject.ToolRunner.ps1`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.ToolRunner.ps1), [`JavaProject.PlainBuild.ps1`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.PlainBuild.ps1). **Verifica:** `msbuild .\HelloJavaF1.javaproj /t:Build`, `Rebuild`, `Clean`, verifica del log senza `[F3.A]`/`[F3.A.1]` e test dell'override `/p:JavaMavenCommand=...`.
 
 ## Rinomina semantica package CPS (F2H, U3.A, U3.C)
 
@@ -160,6 +190,8 @@ Questo documento è il **registro tecnico dei limiti attivi**. Integra il [READM
 | **FIX-001** | `itemId` CPS obsoleto dopo rinomina fisica, con salvataggio/navigazione bloccati fino a riapertura manuale | U4.B.1 (riaggancio controllato delle schede, `JavaRenamedDocumentReopen`) | **Collaudato manualmente**; vedere anche il limite residuo **LIM-022** |
 | **FIX-002** | Rinomina package con singolo sorgente e riferimenti/navigazione non coerenti | U3.A (controlli di modello e fallback dichiarazione locale) | **Collaudato manualmente**; vedere **LIM-011** per le condizioni attuali |
 | **FIX-003** | Descrizioni «Dummy Item» nelle tendine native Undo/Redo | U3.C.15, consolidato da U3.C.16 | **Collaudato manualmente**; vedere **LIM-040** |
+| **FIX-004** | F3.A.1: il ciclo `foreach ($home in $homes)` collide con la variabile PowerShell automatica `$HOME` (sola lettura), bloccando l’avvio Maven/Gradle dalla UI | **F3.A.2**: variabile locale rinominata `$toolHome` in `JavaProject.ToolRunner.ps1`, senza cambiare i backend | **Corretto nel codice; collaudo VS 2026 Experimental richiesto** |
+| **FIX-005** | Gradle installato con Chocolatey non rilevato perché `gradle.bat` risiede in `lib/gradle/tools/gradle-<versione>/bin` (o percorso analogo in `gradle.portable`), mentre il resolver cercava solo `bin` nella directory del pacchetto e nel primo livello | **F3.A.4**: ricerca limitata alle distribuzioni Gradle nella cartella Chocolatey `tools`; nessuna modifica ai target XML | **Corretto nel codice; collaudo Visual Studio 2026 richiesto** |
 
 ## Checklist minima per nuovi pack
 

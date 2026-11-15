@@ -11,12 +11,6 @@
 		<JavaBuildSystem>Maven</JavaBuildSystem>
 	</PropertyGroup>
 	<ItemGroup>
-		<JavaCompile Include="src\**\*.java" Exclude="**\bin\**;**\obj\**;**\target\**;**\build\**" />
-		<None Include="src\**\*.*" Exclude="**\bin\**;**\obj\**;**\target\**;**\build\**;src\**\*.java" />
-		<None Include="pom.xml" />
-		<None Include="README.md" Condition="Exists('README.md')" />
-	</ItemGroup>
-	<ItemGroup>
 		<Folder Include="src\test\resources\" />
 	</ItemGroup>
 	<ItemGroup>

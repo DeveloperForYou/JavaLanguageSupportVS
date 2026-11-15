@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <!-- Native MSBuild entry points for Java CPS. No compiler is embedded in the VSIX.
+       pom.xml / build.gradle remain authoritative. Only Windows is supported. -->
+  <Target Name="JavaValidateBuild" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(OS)' != 'Windows_NT'"
+           Text="Java Project: la build CPS e' supportata solo in Visual Studio per Windows." />
+    <Error Condition="'$(JavaBuildSystem)' != 'Maven' and '$(JavaBuildSystem)' != 'Gradle' and '$(JavaBuildSystem)' != 'Plain'"
+           Text="Java Project: JavaBuildSystem='$(JavaBuildSystem)' non supportato. Impostare Maven, Gradle o Plain nel .javaproj." />
+    <Error Condition="'$(JavaBuildSystem)' == 'Maven' and !Exists('$(MSBuildProjectDirectory)\pom.xml')"
+           Text="Java Project: JavaBuildSystem=Maven ma pom.xml non esiste nella cartella del .javaproj. Correggere JavaBuildSystem o usare un progetto Maven valido." />
+    <Error Condition="'$(JavaBuildSystem)' == 'Gradle' and !Exists('$(MSBuildProjectDirectory)\build.gradle') and !Exists('$(MSBuildProjectDirectory)\build.gradle.kts')"
+           Text="Java Project: JavaBuildSystem=Gradle ma build.gradle/build.gradle.kts non esiste. Correggere JavaBuildSystem." />
+    <PropertyGroup>
+      <!-- Local wrappers take precedence. No wildcard command or arbitrary shell text. -->
+      <JavaMavenCommand Condition="Exists('$(MSBuildProjectDirectory)\mvnw.cmd')">$(MSBuildProjectDirectory)\mvnw.cmd</JavaMavenCommand>
+      <JavaMavenCommand Condition="'$(JavaMavenCommand)' == ''">mvn.cmd</JavaMavenCommand>
+      <JavaGradleCommand Condition="Exists('$(MSBuildProjectDirectory)\gradlew.bat')">$(MSBuildProjectDirectory)\gradlew.bat</JavaGradleCommand>
+      <JavaGradleCommand Condition="'$(JavaGradleCommand)' == ''">gradle.bat</JavaGradleCommand>
+      <JavaCompilerSourceList>$(MSBuildProjectDirectory)\.java-vs\build\javac-sources.txt</JavaCompilerSourceList>
+      <JavaPlainBuildScript>$(MSBuildThisFileDirectory)JavaProject.PlainBuild.ps1</JavaPlainBuildScript>
+      <JavaBuildToolRunner>$(MSBuildThisFileDirectory)JavaProject.ToolRunner.ps1</JavaBuildToolRunner>
+    </PropertyGroup>
+    <Error Condition="'$(JavaBuildSystem)' == 'Plain' and !Exists('$(JavaPlainBuildScript)')"
+           Text="Java Project: manca JavaProject.PlainBuild.ps1 accanto ai target MSBuild. Copiare anche lo script helper." />
+    <Error Condition="('$(JavaBuildSystem)' == 'Maven' or '$(JavaBuildSystem)' == 'Gradle') and !Exists('$(JavaBuildToolRunner)')"
+           Text="Java Project: manca JavaProject.ToolRunner.ps1 accanto a JavaProject.NativeBuild.targets." />
+    <Message Importance="high" Text="Java Project: $(MSBuildProjectName), backend $(JavaBuildSystem)." />
+  </Target>
+
+  <Target Name="Build" DependsOnTargets="JavaValidateBuild"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Condition="'$(JavaBuildSystem)' == 'Maven'"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaBuildToolRunner)&quot; -Tool Maven -Action Build -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -CommandPath &quot;$(JavaMavenCommand)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <Exec Condition="'$(JavaBuildSystem)' == 'Gradle'"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaBuildToolRunner)&quot; -Tool Gradle -Action Build -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -CommandPath &quot;$(JavaGradleCommand)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <Error Condition="'$(JavaBuildSystem)' == 'Plain' and '@(JavaCompile)' == ''"
+           Text="Java Project: progetto Plain senza JavaCompile. Includere almeno un file .java." />
+    <MakeDir Condition="'$(JavaBuildSystem)' == 'Plain'"
+             Directories="$(MSBuildProjectDirectory)\.java-vs\build" />
+    <WriteLinesToFile Condition="'$(JavaBuildSystem)' == 'Plain'"
+                      File="$(JavaCompilerSourceList)"
+                      Lines="@(JavaCompile->'%(FullPath)')"
+                      Overwrite="true" Encoding="UTF-8" />
+    <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Build -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
+
+  <Target Name="Clean" DependsOnTargets="JavaValidateBuild"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Condition="'$(JavaBuildSystem)' == 'Maven'"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaBuildToolRunner)&quot; -Tool Maven -Action Clean -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -CommandPath &quot;$(JavaMavenCommand)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <Exec Condition="'$(JavaBuildSystem)' == 'Gradle'"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaBuildToolRunner)&quot; -Tool Gradle -Action Clean -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -CommandPath &quot;$(JavaGradleCommand)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Clean -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
+
+  <Target Name="Rebuild" DependsOnTargets="JavaValidateBuild"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <!-- Single external invocation avoids duplicate Maven/Gradle import and preserves exit code. -->
+    <Exec Condition="'$(JavaBuildSystem)' == 'Maven'"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaBuildToolRunner)&quot; -Tool Maven -Action Rebuild -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -CommandPath &quot;$(JavaMavenCommand)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <Exec Condition="'$(JavaBuildSystem)' == 'Gradle'"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaBuildToolRunner)&quot; -Tool Gradle -Action Rebuild -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -CommandPath &quot;$(JavaGradleCommand)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <Error Condition="'$(JavaBuildSystem)' == 'Plain' and '@(JavaCompile)' == ''"
+           Text="Java Project: progetto Plain senza JavaCompile. Includere almeno un file .java." />
+    <MakeDir Condition="'$(JavaBuildSystem)' == 'Plain'"
+             Directories="$(MSBuildProjectDirectory)\.java-vs\build" />
+    <WriteLinesToFile Condition="'$(JavaBuildSystem)' == 'Plain'"
+                      File="$(JavaCompilerSourceList)"
+                      Lines="@(JavaCompile->'%(FullPath)')"
+                      Overwrite="true" Encoding="UTF-8" />
+    <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Rebuild -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
+</Project>

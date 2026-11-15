@@ -2,7 +2,7 @@
 
 Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 2026** (non Visual Studio Code). Le funzionalità semantiche si basano su [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls) tramite **Language Server Protocol (LSP)**; compilazione, esecuzione e test utilizzano JDK, Maven o Gradle.
 
-> **Stato del progetto (15 novembre 2026):** le fasi editor **A1–E3**, il Project System CPS **F1–F2G** e la rinomina semantica di package **F2H/U3.A** sono stati verificati manualmente in Visual Studio 2026 Experimental. Il lifecycle JDT LS è stato stabilizzato con **U2**, e l’infrastruttura condivisa **U3.C.16 / U4.A–U4.D** porta Undo/Redo nativo alle rinomine, alle Code Actions, a Organize Imports e ai refactoring che applicano WorkspaceEdit locali. **Rimangono limiti intenzionali e funzionali:** vedere il [registro tecnico dei limiti](docs/IMPLEMENTATION_LIMITS.md). Build Java nativa MSBuild, debug F5 e JUnit/TestNG in Test Explorer non sono ancora disponibili. I collaudi sono manuali e non equivalgono a compatibilità garantita per ogni workspace/JDT LS.
+> **Stato del progetto (15 novembre 2026):** le fasi editor **A1–E3**, il Project System CPS **F1–F2G** e la rinomina semantica di package **F2H/U3.A** sono stati verificati manualmente in Visual Studio 2026 Experimental. Il lifecycle JDT LS è stato stabilizzato con **U2**, e l’infrastruttura condivisa **U3.C.16 / U4.A–U4.D** porta Undo/Redo nativo alle rinomine, alle Code Actions, a Organize Imports e ai refactoring che applicano WorkspaceEdit locali. **Rimangono limiti intenzionali e funzionali:** vedere il [registro tecnico dei limiti](docs/IMPLEMENTATION_LIMITS.md). La patch **F3.A Native Build** introduce Build/Rebuild/Clean tramite MSBuild (collaudo VS Experimental ancora da eseguire); debug F5 e JUnit/TestNG in Test Explorer rimangono futuri. I collaudi sono manuali e non equivalgono a compatibilità garantita per ogni workspace/JDT LS.
 
 ## Funzionalità
 
@@ -26,7 +26,7 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | Compilazione, esecuzione e test | Comandi **Strumenti → Java** per JDK, Maven e Gradle |
 | Progetti Spring Boot | **Supporto dedicato pianificato**; i comandi Maven/Gradle esistenti possono essere usati con progetti Spring Boot compatibili, ma non includono ancora funzionalità specifiche del framework |
 | Traduzione dell'interfaccia dell'estensione (localizzazione) | **Pianificata**: separazione delle stringhe dell'interfaccia e scelta della lingua, a partire da italiano e inglese |
-| Project System Java (`.javaproj`) in Esplora soluzioni | **Pack F1 implementato e collaudato manualmente**: apertura e struttura CPS, cartelle e file, rinomina, aggiunta/rimozione e proprietà; build MSBuild Java non ancora implementata |
+| Project System Java (`.javaproj`) in Esplora soluzioni | **F1/F2 collaudati**: apertura CPS, file e package; **F3.A preparato**: Build/Rebuild/Clean MSBuild per Maven/Gradle/Plain (collaudo VS Experimental pendente) |
 | Aggiungi → Nuovo elemento — sorgenti Java | **Pack F2G.1**: sette template nativi (classe, classe astratta, interfaccia, enum, record, annotation, file vuoto), con scelta di source root, package e nome file; collaudati manualmente |
 | Nuovo package Java | **Pack F2E/F2F**: riconoscimento root Maven/Gradle/Plain, finestra WPF, validazione, package nidificati e registrazione delle cartelle vuote come `Folder` in `.javaproj` |
 | Nuovo package durante la creazione di un elemento | **Pack F2G.2**: pulsante «Nuovo package...» nel selettore dei sette template; il package appena creato viene selezionato automaticamente; collaudato |
@@ -63,6 +63,7 @@ Estensione **VSIX sperimentale** per sviluppare **Java nell'IDE Visual Studio 20
 | **F2G.1** | Sette template Java con scelta package e generazione del file nella directory corretta | ✅ Collaudato su tutti e sette i template |
 | **F2G.2** | Nuovo package dal wizard dei template, modulo JDK 9+ e cartelle risorse | ✅ Collaudato manualmente |
 | **F2H** | Rinomina semantica di package e sottopackage tramite JDT LS, CPS e import | ✅ Collaudato con vincoli (LIM-010–017) |
+| **F3.A/F3.A.1** | Target MSBuild Build/Rebuild/Clean e risoluzione eseguibili Maven/Gradle | 🧪 Maven riuscito da MSBuild con path assoluto; autodiscovery e VS Exp ancora da collaudare |
 | **U2.3** | Lifecycle JDT LS, chiusura pulita e riuso cache | ✅ Collaudato |
 | **U3.A** | Coerenza del modello Java dopo rinomina package | ✅ Collaudato |
 | **U3.C.16** | Undo/Redo nativo condiviso, descrizioni toolbar e cleanup | ✅ Collaudato |
@@ -103,7 +104,7 @@ Le fasi **U2.3** e **U3.A** stabilizzano l’arresto e il riuso della cache JDT 
 
 Il **Pack F1** introduce il tipo di progetto `.javaproj` tramite CPS (Common Project System), limitato alla capability `JavaLanguageSupportCps`. Il file `.javaproj` contiene metadati per Visual Studio: **non sostituisce** `pom.xml` o `build.gradle`, che restano le definizioni di build Maven/Gradle. Il progetto di accettazione è `Examples/JavaProjectSystemAcceptance/HelloJavaF1.javaproj`.
 
-I file del progetto vengono caricati da `ProjectSystem/BuildSystem/JavaProject.targets`: `JavaCompile` include i `**/*.java`, mentre `None` raccoglie gli altri file (per esempio POM, Gradle, risorse, wrapper, README e configurazioni). Sono esclusi automaticamente output e directory temporanee come `bin/`, `obj/`, `target/`, `build/`, `.git/` e `.vs/`. Le inclusioni automatiche sono disattivabili con `EnableDefaultJavaItems=false`. La gestione dei file è integrata in Esplora soluzioni, ma **il target MSBuild `Build` non compila ancora Java**: usare Maven/Gradle o i comandi Java già disponibili.
+I file del progetto vengono caricati da `ProjectSystem/BuildSystem/JavaProject.targets`: `JavaCompile` include i `**/*.java`, mentre `None` raccoglie gli altri file (per esempio POM, Gradle, risorse, wrapper, README e configurazioni). Sono esclusi automaticamente output e directory temporanee come `bin/`, `obj/`, `target/`, `build/`, `.git/` e `.vs/`. Le inclusioni automatiche sono disattivabili con `EnableDefaultJavaItems=false`. La gestione dei file è integrata in Esplora soluzioni. **F3.A sostituisce il vecchio target `Build` segnaposto con Build/Clean/Rebuild reali**; la compatibilità runtime CPS e le diagnostiche complete richiedono ancora collaudo.
 
 Il **Pack F2A** integra sette modelli nell'interfaccia nativa **Aggiungi → Nuovo elemento**: classe, classe astratta, interfaccia, enum, record (JDK 16+), annotation e file Java vuoto. I modelli sono distribuiti come template VSIX e sono associati alla capability CPS; **F2B** aggiunge le relative icone. Il manifest VSIX registra i template con l'asset `Microsoft.VisualStudio.ItemTemplate`.
 
@@ -157,6 +158,33 @@ Le immagini qui sotto sono **le vere risorse PNG presenti nel repository**, non 
 | Configurazioni XML | ![XML Light](JavaLanguageSupport/ProjectSystem/Icons/Files/XmlConfig.Light.32.png) | ![XML Dark](JavaLanguageSupport/ProjectSystem/Icons/Files/XmlConfig.Dark.32.png) |
 
 Per il collaudo visivo in IDE, aprire `HelloJavaF1.javaproj` in **Visual Studio Experimental**, espandere Esplora soluzioni e ripetere il controllo cambiando tema. L'anteprima qui sopra documenta le immagini distribuite; **non equivale a uno screenshot dell'effettiva resa in Visual Studio**.
+
+### F3.A — Build, Rebuild e Clean da Visual Studio (in collaudo)
+
+La patch F3.A sostituisce i tre target segnaposto di `JavaProject.targets` con un import a `JavaProject.NativeBuild.targets`. **Nessuna modifica a JDT LS, ai comandi Java dell'editor o all'Undo CPS.** I target vengono saltati quando `DesignTimeBuild=true` e si eseguono dalla directory del `.javaproj`.
+
+| `JavaBuildSystem` nel `.javaproj` | Build | Rebuild | Clean |
+| --- | --- | --- | --- |
+| `Maven` | `mvnw.cmd -B -DskipTests package` (o `mvn.cmd`) | `-B -DskipTests clean package` | `-B clean` |
+| `Gradle` | `gradlew.bat --console=plain build` (o `gradle.bat`) | `--console=plain clean build` | `--console=plain clean` |
+| `Plain` | `javac` su `@(JavaCompile)` verso `.java-vs/classes` | pulizia classi e ricompilazione | rimozione esclusiva di `.java-vs/classes` |
+
+Il wrapper locale, quando presente, è preferito allo strumento nel `PATH`. Per i progetti Plain serve `JAVA_HOME` valido oppure `javac.exe` nel `PATH`, e il file `JavaProject.PlainBuild.ps1` deve essere accanto ai target. Il backend è **esplicito**: il valore predefinito in `JavaProject.props` resta `Maven`; per Gradle/Plain impostare `<JavaBuildSystem>Gradle</JavaBuildSystem>` o `Plain` nel `.javaproj`.
+
+**Limiti:** F3.A esegue strumenti esterni (non include una JVM o Maven/Gradle); un wrapper può eseguire script del progetto. Maven `package` salta i test, Gradle `build` mantiene il comportamento dei task Gradle. Plain compila tutti i `JavaCompile` a ogni Build, senza risolvere automaticamente dipendenze esterne o classpath/moduli Maven/Gradle. Gli errori `javac` di base vengono riformattati in stile MSBuild, ma **diagnostica completa Maven/Gradle nell'Elenco errori, build incrementale e configurazioni avanzate** restano da verificare/implementare. Non considerare F3.A collaudato prima dei test nell'IDE (LIM-001, LIM-007–009).
+
+**Prova CLI locale** (Developer PowerShell for VS 2026, nella cartella del progetto):
+
+```powershell
+msbuild .\HelloJavaF1.javaproj /t:Build /p:Configuration=Debug /v:minimal
+msbuild .\HelloJavaF1.javaproj /t:Rebuild /v:minimal
+msbuild .\HelloJavaF1.javaproj /t:Clean /v:minimal
+```
+
+**F3.A.1 — Risoluzione Maven/Gradle e deduplicazione del progetto di prova.**
+Il test diagnostico del 15/11/2026 ha confermato `MSB3073` con `call "mvn.cmd"` (uscita 1 in 48 ms), ma **BUILD SUCCESS** con la medesima invocazione MSBuild e il percorso assoluto `C:\ProgramData\chocolatey\lib\maven\apache-maven-3.9.11\bin\mvn.cmd`. F3.A.1 usa `JavaProject.ToolRunner.ps1` per risolvere il percorso effettivo tramite wrapper, PATH, `MAVEN_HOME`/`M2_HOME`/`GRADLE_HOME` e installazioni Chocolatey, quindi lancia il tool e propaga il codice di uscita; non altera `pom.xml`/`build.gradle`. L'esempio `HelloJavaF1.javaproj` elimina gli `Include` F1 ridondanti, conservando i default glob per i nuovi file. **Non è una deduplicazione universale di tutti i `.javaproj` esistenti** (LIM-043). Restano da collaudare il resolver, Clean/Rebuild e l'integrazione da VS Experimental. Gli avvisi di Maven su `sun.misc.Unsafe` sono di una sua libreria e non bloccano la build.
+
+**Proprietà MSBuild per la build Java (`.javaproj`).** Le proprietà usate nei file `.targets` hanno nomi stabili e senza sigle di pack: `JavaBuildSystem`, `JavaMavenCommand`, `JavaGradleCommand`, `JavaCompilerSourceList`, `JavaPlainBuildScript` e `JavaBuildToolRunner`; il target interno di validazione si chiama `JavaValidateBuild`. I target pubblici restano `Build`, `Rebuild` e `Clean`. Se erano presenti override personalizzati dei precedenti `JavaF3MavenCommand` / `JavaF3GradleCommand`, rinominarli in `JavaMavenCommand` / `JavaGradleCommand` (anche quando passati con `/p:`). Le sigle F3 sono mantenute **solo nella documentazione storica**, non nei tag XML o nell'output di compilazione. **Stato:** nomenclatura aggiornata, collaudo VS Experimental dopo rinomina richiesto.
 
 ## Prerequisiti
 
@@ -248,6 +276,8 @@ Aprire **una cartella di esempio alla volta** e attendere l'indicizzazione inizi
 | `SemanticTokensAcceptance/`, `NavigationBarAcceptance/`, `EditorReliabilityAcceptance/` | Stabilità della colorazione, recupero dei simboli e verifica dell'editor (Pack E3); ripetere anche dopo il riavvio di VS Experimental |
 | `MavenHello/`, `GradleHello/` | Compilazione/esecuzione Maven e Gradle |
 | `JavaProjectSystemAcceptance/` | Progetto `HelloJavaF1.javaproj` per collaudo CPS F1, root e package F2E/F2F, sette template F2G, moduli/risorse F2G.2 e icone F2C/F2D |
+| `JavaProjectSystemPlainAcceptance/` | Copia dei sorgenti del progetto CPS di prova, backend **Plain/JDK** (`HelloJavaPlain.javaproj`): Build/Clean/Rebuild da collaudare |
+| `JavaProjectSystemGradleAcceptance/` | Copia dei sorgenti del progetto CPS di prova, backend **Gradle** (`HelloJavaGradle.javaproj`): Build/Clean/Rebuild da collaudare |
 
 I progetti di accettazione contengono spesso un proprio `README.md` con istruzioni dettagliate. **Alcuni README degli esempi più vecchi possono descrivere comportamenti anteriori agli hotfix**: per lo stato più recente fare riferimento a questa pagina e ai sorgenti correnti.
 
@@ -353,7 +383,7 @@ I log locali e i workspace temporanei di JDT LS **non devono essere aggiunti al 
 
 | Area | Principali limiti verificati nel codice | ID nel registro |
 | --- | --- | --- |
-| Project System / build | `.javaproj` non compila tramite MSBuild; Maven POM letto staticamente; source set Gradle personalizzati con root esplicite | LIM-001–004, LIM-006 |
+| Project System / build | **F3.A in collaudo**: MSBuild invoca Maven/Gradle o `javac` Plain; strumenti esterni e output/diagnostica presentano limiti; POM e Gradle DSL sono risolti staticamente | LIM-001–004, LIM-006–009 |
 | Template e moduli | `module-info.java` iniziale senza `requires`/`exports` automatici; cartelle risorse convenzionali | LIM-005 |
 | Rinomina package CPS | Richiede sorgenti e root riconosciuta; soglie 1.000 cartelle / 10.000 file `.java` / 16 MiB per file; UTF-16, link, file sporchi e item CPS espliciti non gestiti | LIM-010–017 |
 | Rinomina simboli | Niente rename file solo maiuscole/minuscole o spostamenti fra directory; replay detached con snapshot e riapertura schede condizionati | LIM-020–022 |
@@ -388,12 +418,14 @@ La stabilizzazione dell'editor segue un percorso incrementale che **consolida fu
 | **F2G.1** | Selezione package per tutti e sette i template Java | ✅ Collaudato manualmente |
 | **F2G.2** | Nuovo package durante la creazione dei template, `module-info.java`, directory `resources` | ✅ Collaudato manualmente |
 | **F2H** | Rinomina semantica di package e sottopackage con CPS e JDT LS | ✅ Collaudata; LIM-010–017 |
+| **F3.A** | Build/Rebuild/Clean nativi CPS via MSBuild con backend Maven, Gradle o JDK Plain | 🧪 Patch preparata; collaudo VS Exp richiesto |
+| **F3.B** | Diagnostica completa, configurazioni e miglioramenti build | 📋 Pianificata dopo F3.A |
 | **U2.3 / U3.A** | Lifecycle cache JDT LS e coerenza modello dopo rinomina | ✅ Collaudati |
 | **U3.C.16 / U4.A–U4.D** | Undo/Redo nativo condiviso, replay e refactoring | ✅ Collaudati; LIM-020–042 |
 | **U5** | Consolidamento documentazione, limiti tracciati e futuri miglioramenti CPS | 🔄 In corso |
 | **Spring Boot** | Riconoscimento progetti, strumenti Spring e avvio dell'applicazione | 📋 Pianificato |
 | **Localizzazione** | Risorse testuali traducibili, italiano/inglese e selezione della lingua | 📋 Pianificata |
-| **Integrazione IDE** | Build Java nativa, debugger Java e JUnit/TestNG in Test Explorer; estensione delle funzioni CPS già presenti | 📋 Evoluzione futura |
+| **Integrazione IDE** | Raffinamento build F3.B, dipendenze Maven/Gradle, debugger Java e Test Explorer; debug rimandato al completamento CPS | 📋 Evoluzione futura |
 | **Designer visuale** | Swing prima, quindi AWT e JavaFX | 📋 Evoluzione futura |
 
 ### Evoluzioni successive

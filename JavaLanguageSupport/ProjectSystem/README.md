@@ -1,4 +1,6 @@
-# Java Project System — Pack F1 (CPS prototype)
+# Java Project System — F1 (storico), F3.A (Native Build)
+
+> Nota: questo documento nasce con F1. F1 e il Project System sono stati collaudati manualmente in VS 2026 Experimental; F3.A è una patch successiva, **ancora da collaudare**. Il README principale e `docs/IMPLEMENTATION_LIMITS.md` contengono lo stato più recente.
 
 **No new C# project is added to `JavaLanguageSupportVS.sln`.** The CPS
 registration belongs to the already existing `JavaLanguageSupport.csproj`, in
@@ -41,10 +43,11 @@ Eclipse or NetBeans without `.javaproj`.
 5. Check portability in a terminal: in the **acceptance project directory**,
    run `mvn -B package`. Open `pom.xml` in IntelliJ or Eclipse; the `.javaproj`
    file is not required.
-6. F1 **does not implement native VS Build, project property pages, custom Java
-   item types, templates, dependencies tree, F5 Java debugging or complete JDT LS
-   solution-project synchronization**. These come in F2-F8. Native VS Build is
-   explicitly marked unsupported rather than reporting false success.
+6. Storicamente F1 non implementava Build/Clean/Rebuild. Con F3.A `JavaProject.targets`
+   importa `JavaProject.NativeBuild.targets`, che delega a Maven/Gradle o a javac
+   per Plain. L'integrazione completa dipendenze, Test Explorer e debugger resta
+   fuori ambito. Per importi e vincoli leggere il README principale.
 
-**Status:** implementation prepared, **not compiled or tested on VS 2026** in
-this environment. Do not mark F1 validated before a successful Experimental run.
+**Stato:** F1/F2 collaudati manualmente; F3.A implementato nella patch, non ancora
+verificato in VS 2026 Experimental. Eseguire i test descritti nel pack F3.A prima
+che `LIM-001` sia contrassegnato RISOLTO.
