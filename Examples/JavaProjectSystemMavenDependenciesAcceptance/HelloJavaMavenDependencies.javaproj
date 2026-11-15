@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" DefaultTargets="Build">
+  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.props" />
+  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.targets" />
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>77d54198-53a1-45da-9336-b317650dfe5d</ProjectGuid>
+  </PropertyGroup>
+  <PropertyGroup>
+    <JavaBuildSystem>Maven</JavaBuildSystem>
+  </PropertyGroup>
+</Project>

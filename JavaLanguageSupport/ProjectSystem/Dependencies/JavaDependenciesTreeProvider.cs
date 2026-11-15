@@ -17,7 +17,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
     [Export(ExportContractNames.ProjectTreeProviders.PhysicalViewRootGraft,
         typeof(IProjectTreeProvider))]
     [AppliesTo("JavaLanguageSupportCps")]
-    internal class JavaDependenciesTreeProvider : ProjectTreeProviderBase
+    internal partial class JavaDependenciesTreeProvider : ProjectTreeProviderBase
     {
         private readonly IActiveConfiguredProjectSubscriptionService subscriptionService;
         private IDisposable subscriptionLink;
@@ -68,6 +68,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
 
             // Evaluate only the authoritative .javaproj property. Never run Maven,
             // Gradle, javac, or JDT LS while generating the tree.
+            // F4B1-MAVEN-SCHEDULE
+            ScheduleMavenRefresh(backend, change);
             return SubmitTreeUpdateAsync((snapshot, exports, cancellationToken) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -98,9 +100,15 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             else if (string.Equals(backend, "Plain", StringComparison.OrdinalIgnoreCase))
                 category = "JAR Esterni";
 
+            // F4B1-MAVEN-TREE
             if (category != null)
-                root = root.Add(NewTree(category, icon: referenceIcon,
-                    expandedIcon: referenceIcon, flags: childFlags)).Parent;
+            {
+                IProjectTree categoryTree = NewTree(category, icon: referenceIcon,
+                    expandedIcon: referenceIcon, flags: childFlags);
+                if (string.Equals(backend, "Maven", StringComparison.OrdinalIgnoreCase))
+                    categoryTree = AddResolvedMavenDependencies(categoryTree);
+                root = root.Add(categoryTree).Parent;
+            }
 
             return root;
         }
@@ -116,6 +124,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
         {
             if (disposing)
             {
+                // F4B1-MAVEN-DISPOSE
+                DisposeMavenResolution();
                 if (subscriptionLink != null)
                 {
                     subscriptionLink.Dispose();

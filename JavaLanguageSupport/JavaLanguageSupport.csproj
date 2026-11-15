@@ -129,6 +129,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
+    <!-- Maven dependency tree helper: no changes to the MSBuild build targets. -->
+    <Content Include="ProjectSystem\BuildSystem\JavaProject.MavenDependencies.ps1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
     <!-- Shared build diagnostic normalizer for Maven, Gradle and javac. -->
     <Content Include="ProjectSystem\BuildSystem\JavaProject.BuildDiagnostics.ps1">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
