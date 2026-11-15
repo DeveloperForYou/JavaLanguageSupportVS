@@ -26,10 +26,13 @@
     <Error Condition="('$(JavaBuildSystem)' == 'Maven' or '$(JavaBuildSystem)' == 'Gradle') and !Exists('$(JavaBuildToolRunner)')"
            Text="Java Project: manca JavaProject.ToolRunner.ps1 accanto a JavaProject.NativeBuild.targets." />
     <Message Importance="high" Text="Java Project: $(MSBuildProjectName), backend $(JavaBuildSystem)." />
+  
+    <OnError ExecuteTargets="JavaBuildFailureMessage" />
   </Target>
 
   <Target Name="Build" DependsOnTargets="JavaValidateBuild"
           Condition="'$(DesignTimeBuild)' != 'true'">
+    <Message Importance="high" Text="[Java Build] $(MSBuildProjectName): avvio Build ($(JavaBuildSystem))." />
     <Exec Condition="'$(JavaBuildSystem)' == 'Maven'"
           Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaBuildToolRunner)&quot; -Tool Maven -Action Build -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -CommandPath &quot;$(JavaMavenCommand)&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
@@ -47,10 +50,14 @@
     <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
           Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Build -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
+  
+    <Message Importance="high" Text="[Java Build] $(MSBuildProjectName): Build completato ($(JavaBuildSystem))." />
+    <OnError ExecuteTargets="JavaBuildFailureMessage" />
   </Target>
 
   <Target Name="Clean" DependsOnTargets="JavaValidateBuild"
           Condition="'$(DesignTimeBuild)' != 'true'">
+    <Message Importance="high" Text="[Java Build] $(MSBuildProjectName): avvio Clean ($(JavaBuildSystem))." />
     <Exec Condition="'$(JavaBuildSystem)' == 'Maven'"
           Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaBuildToolRunner)&quot; -Tool Maven -Action Clean -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -CommandPath &quot;$(JavaMavenCommand)&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
@@ -60,10 +67,14 @@
     <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
           Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Clean -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
+  
+    <Message Importance="high" Text="[Java Build] $(MSBuildProjectName): Clean completato ($(JavaBuildSystem))." />
+    <OnError ExecuteTargets="JavaBuildFailureMessage" />
   </Target>
 
   <Target Name="Rebuild" DependsOnTargets="JavaValidateBuild"
           Condition="'$(DesignTimeBuild)' != 'true'">
+    <Message Importance="high" Text="[Java Build] $(MSBuildProjectName): avvio Rebuild ($(JavaBuildSystem))." />
     <!-- Single external invocation avoids duplicate Maven/Gradle import and preserves exit code. -->
     <Exec Condition="'$(JavaBuildSystem)' == 'Maven'"
           Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaBuildToolRunner)&quot; -Tool Maven -Action Rebuild -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -CommandPath &quot;$(JavaMavenCommand)&quot;"
@@ -82,5 +93,13 @@
     <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
           Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Rebuild -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
+  
+    <Message Importance="high" Text="[Java Build] $(MSBuildProjectName): Rebuild completato ($(JavaBuildSystem))." />
+    <OnError ExecuteTargets="JavaBuildFailureMessage" />
+  </Target>
+
+  <!-- F3.C.1 - build lifecycle: only informational messages; no extra MSBuild errors. -->
+  <Target Name="JavaBuildFailureMessage" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Message Importance="high" Text="[Java Build] $(MSBuildProjectName): operazione NON completata ($(JavaBuildSystem)); consultare le diagnostiche sopra." />
   </Target>
 </Project>
