@@ -1,0 +1,7 @@
+/target/
+/.vs/
+/.java-vs/
+/.settings/
+/.classpath
+/.project
+*.iml

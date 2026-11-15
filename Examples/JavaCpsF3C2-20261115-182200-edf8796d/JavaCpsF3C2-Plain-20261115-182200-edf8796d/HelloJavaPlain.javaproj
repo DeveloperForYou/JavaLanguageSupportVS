@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Esempio Java CPS indipendente; sorgenti copiati dal progetto Maven di prova. -->
+<Project ToolsVersion="Current" DefaultTargets="Build">
+  <Import Project="..\..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.props" />
+  <Import Project="..\..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.targets" />
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>f165c501-e227-5434-925a-929ee31e1611</ProjectGuid>
+  </PropertyGroup>
+  <PropertyGroup>
+    <JavaBuildSystem>Plain</JavaBuildSystem>
+  </PropertyGroup>
+  <ItemGroup>
+    <Folder Include="src\main\java\com\restApi\controllers\" />
+    <Folder Include="src\main\java\com\restApi\entities\" />
+    <Folder Include="src\main\java\com\restApi\services\" />
+    <Folder Include="src\main\resources\" />
+    <Folder Include="src\test\resources\" />
+  </ItemGroup>
+</Project>

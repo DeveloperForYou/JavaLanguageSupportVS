@@ -1,0 +1,33 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{286CDCBD-76DF-41EA-B49B-6407943CD24B}") = "HelloJavaF1", "./JavaCpsF3C2-Maven-20261115-182200-edf8796d/HelloJavaF1.javaproj", "{5C418638-4FD1-67AD-0EEF-9EE49536E724}"
+EndProject
+Project("{286CDCBD-76DF-41EA-B49B-6407943CD24B}") = "HelloJavaGradle", "./JavaCpsF3C2-Gradle-20261115-182200-edf8796d/HelloJavaGradle.javaproj", "{309706A0-3DCE-5C20-A5A7-09E0CA1D23CD}"
+EndProject
+Project("{286CDCBD-76DF-41EA-B49B-6407943CD24B}") = "HelloJavaPlain", "./JavaCpsF3C2-Plain-20261115-182200-edf8796d/HelloJavaPlain.javaproj", "{F165C501-E227-5434-925A-929EE31E1611}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5C418638-4FD1-67AD-0EEF-9EE49536E724}.Debug|Any CPU.ActiveCfg = Debug|AnyCPU
+		{5C418638-4FD1-67AD-0EEF-9EE49536E724}.Debug|Any CPU.Build.0 = Debug|AnyCPU
+		{5C418638-4FD1-67AD-0EEF-9EE49536E724}.Release|Any CPU.ActiveCfg = Release|AnyCPU
+		{5C418638-4FD1-67AD-0EEF-9EE49536E724}.Release|Any CPU.Build.0 = Release|AnyCPU
+		{309706A0-3DCE-5C20-A5A7-09E0CA1D23CD}.Debug|Any CPU.ActiveCfg = Debug|AnyCPU
+		{309706A0-3DCE-5C20-A5A7-09E0CA1D23CD}.Debug|Any CPU.Build.0 = Debug|AnyCPU
+		{309706A0-3DCE-5C20-A5A7-09E0CA1D23CD}.Release|Any CPU.ActiveCfg = Release|AnyCPU
+		{309706A0-3DCE-5C20-A5A7-09E0CA1D23CD}.Release|Any CPU.Build.0 = Release|AnyCPU
+		{F165C501-E227-5434-925A-929EE31E1611}.Debug|Any CPU.ActiveCfg = Debug|AnyCPU
+		{F165C501-E227-5434-925A-929EE31E1611}.Debug|Any CPU.Build.0 = Debug|AnyCPU
+		{F165C501-E227-5434-925A-929EE31E1611}.Release|Any CPU.ActiveCfg = Release|AnyCPU
+		{F165C501-E227-5434-925A-929EE31E1611}.Release|Any CPU.Build.0 = Release|AnyCPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

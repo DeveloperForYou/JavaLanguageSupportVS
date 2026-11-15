@@ -1,0 +1,14 @@
+plugins {
+    id 'java'
+}
+
+group = 'demo'
+version = '1.0.0-SNAPSHOT'
+
+// Il progetto Maven di riferimento usa <maven.compiler.release>21</...>.
+// Per evitare una richiesta implicita di download della toolchain, Gradle
+// usa il JDK con cui viene eseguito e richiede che supporti --release 21.
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
