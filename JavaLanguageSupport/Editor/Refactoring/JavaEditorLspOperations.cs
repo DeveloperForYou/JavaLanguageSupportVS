@@ -236,13 +236,16 @@ namespace JavaLanguageSupport.Editor.Refactoring
         /// single-document WorkspaceEdit path used by the Java action dialog.
         /// No partial multi-file edits; nothing runs until the user selects it.
         /// </summary>
+        // U4D-REFACTORING-UNDO-LABELS: optional canonical label, without replacing the actual JDT LS action.
         internal static async Task ApplySuggestedCodeActionAsync(JObject original,
             ITextBuffer buffer, ITextSnapshot snapshot, string uri,
-            Action<string> log, CancellationToken token)
+            Action<string> log, CancellationToken token, string refactoringLabel = null)
         {
             if (original == null || buffer == null || snapshot == null)
                 throw new InvalidOperationException("Azione Java senza documento.");
             var choice = (JObject)original.DeepClone();
+            // Preserve the user-selected title if codeAction/resolve omits it.
+            string initialTitle = (string)choice["title"];
             // Pack A3: command-only and delayed codeAction/resolve MUST obey
             // the same snapshot safety check already used for WorkspaceEdit.
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
@@ -279,6 +282,10 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     await JavaLspRpc.RequestAsync("workspace/executeCommand",
                         new { command = commandName, arguments = arguments ?? new JArray() },
                         token).ConfigureAwait(false);
+                    // Command-only actions do not return a locally applied WorkspaceEdit.
+                    // Do not claim a JavaGlobalUndo transaction that cannot be verified.
+                    if (log != null) log("Java U4.D: comando JDT LS eseguito senza " +
+                        "WorkspaceEdit locale; Undo/Redo globale non registrato per questa azione.");
                     return;
                 }
             }
@@ -287,8 +294,19 @@ namespace JavaLanguageSupport.Editor.Refactoring
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
             if (!ReferenceEquals(buffer.CurrentSnapshot, snapshot))
                 throw new InvalidOperationException("Il file Java e' cambiato. Richiama Ctrl + . e riprova.");
+            string selectedTitle = (string)choice["title"];
+            if (string.IsNullOrWhiteSpace(selectedTitle)) selectedTitle = initialTitle;
+            string canonicalLabel = string.IsNullOrWhiteSpace(refactoringLabel)
+                ? null : refactoringLabel.Trim();
+            // Include both the operation family and the exact JDT LS choice.
+            // U4.C bounds the final caption and removes control characters.
+            string undoCaption = canonicalLabel == null ? selectedTitle :
+                (string.IsNullOrWhiteSpace(selectedTitle) ||
+                 string.Equals(canonicalLabel, selectedTitle.Trim(),
+                     StringComparison.OrdinalIgnoreCase) ? canonicalLabel :
+                 canonicalLabel + " - " + selectedTitle);
             JavaWorkspaceEditService.ApplyWithPreview(edit, uri, buffer, snapshot,
-                log, (string)choice["title"]);
+                log, undoCaption);
         }
 
         private static bool IsOrganizeImports(JObject action)

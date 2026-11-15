@@ -181,8 +181,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }
             JObject chosen = choices.Count == 1 ? choices[0] : JavaEditorDialogs.Choose(choices);
             if (chosen == null) return;
+            // U4.D: all extract/inline WorkspaceEdits retain their own native Undo label.
             await JavaEditorLspOperations.ApplySuggestedCodeActionAsync(chosen,
-                buffer, snapshot, uri, log, token);
+                buffer, snapshot, uri, log, token, Label(operation));
         }
 
         // An action can be disabled by JDT LS even if it has a matching title.

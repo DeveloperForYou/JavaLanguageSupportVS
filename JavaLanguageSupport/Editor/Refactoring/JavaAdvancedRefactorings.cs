@@ -120,8 +120,9 @@ namespace JavaLanguageSupport.Editor.Refactoring
             JObject chosen = matching.Count == 1
                 ? matching[0] : JavaEditorDialogs.Choose(matching);
             if (chosen == null) return;
+            // U4.D: reuse U4.C even for advanced refactor actions.
             await JavaEditorLspOperations.ApplySuggestedCodeActionAsync(chosen,
-                buffer, snapshot, uri, log, token);
+                buffer, snapshot, uri, log, token, Name(operation));
         }
 
         private static async Task<JArray> QueryAsync(string uri, ITextSnapshot snapshot,
