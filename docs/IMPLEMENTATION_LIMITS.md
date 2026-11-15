@@ -74,6 +74,15 @@ Questo documento è il **registro tecnico dei limiti attivi**. Integra il [READM
 
 **Traccia:** [`JavaProject.NativeBuild.targets`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.NativeBuild.targets), [`JavaProject.ToolRunner.ps1`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.ToolRunner.ps1), [`JavaProject.PlainBuild.ps1`](../JavaLanguageSupport/ProjectSystem/BuildSystem/JavaProject.PlainBuild.ps1). **Verifica:** `msbuild .\HelloJavaF1.javaproj /t:Build`, `Rebuild`, `Clean`, verifica del log senza `[F3.A]`/`[F3.A.1]` e test dell'override `/p:JavaMavenCommand=...`.
 
+### LIM-044 — Diagnostiche di build Java: subset con sorgente `.java`
+**Stato:** `PARZIALE / F3.B IN COLLAUDO` · **Impatto:** il parser accetta errori e warning `javac` o del compiler plugin Maven con file Java, riga e colonna opzionale, solo per sorgenti esistenti dentro il progetto. Non trasforma diagnostiche di plugin arbitrari, righe non localizzabili, errori di `pom.xml`/`build.gradle` o messaggi Gradle non riconosciuti. Gli errori generici sono comunque riportati nel log e il fallimento e' propagato a MSBuild (tipicamente MSB3073). **Traccia:** `ProjectSystem/BuildSystem/JavaProject.BuildDiagnostics.ps1`; `JavaProject.ToolRunner.ps1` e `JavaProject.PlainBuild.ps1`. **Test:** errori Java in ciascun backend, warning, fallimento Maven per configurazione, percorsi esterni e file inesistenti.
+
+### LIM-045 — Deduplicazione solo dentro la stessa build, non con JDT LS
+**Stato:** `PARZIALE / F3.B IN COLLAUDO` · **Impatto:** `JavaProject.ToolRunner.ps1` rimuove le ripetizioni dello stesso errore normalizzato nella singola invocazione Maven/Gradle. L'Elenco errori di Visual Studio gestisce autonomamente le diagnostiche Build, mentre JDT LS pubblica diagnostiche IntelliSense indipendenti: lo stesso errore puo' apparire in entrambe le viste (non e' garantita una deduplicazione globale). Il comportamento di pulizia delle diagnostiche Build segue il ciclo delle build di Visual Studio; nessuna cache personalizzata viene introdotta. **Test:** errore, nuova build corretta, filtri Build/IntelliSense e riavvio JDT LS.
+
+### LIM-046 — Posizione diagnostica e compatibilita' di formato Maven/Gradle
+**Stato:** `PARZIALE / F3.B IN COLLAUDO` · **Impatto:** regex conservative per Maven compiler `[ERROR] ...java:[line,col]` e `javac` `...java:line: error:`. Output di compiler/plugin personalizzati o log trasformati da wrapper possono non corrispondere. Per tali casi sono necessari esempi reali per estendere il parser senza falsi positivi. **Test:** Maven compiler 3.13.0, Gradle con Java plugin, Plain JDK, e varianti di path con spazi e warning.
+
 ## Rinomina semantica package CPS (F2H, U3.A, U3.C)
 
 ### LIM-010 — Package privo di sorgenti Java: rinomina semantica rifiutata

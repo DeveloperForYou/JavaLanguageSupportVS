@@ -106,6 +106,12 @@ try {
     $project = [System.IO.Path]::GetFullPath($ProjectDirectory)
     if (![System.IO.Directory]::Exists($project)) { Fail ('Directory progetto assente: ' + $project) }
     $executable = FindExecutable $Tool $CommandPath $project
+    # Native Visual Studio build diagnostics for Java sources.
+    $diagnosticsScript = Join-Path $PSScriptRoot 'JavaProject.BuildDiagnostics.ps1'
+    if (-not [IO.File]::Exists($diagnosticsScript)) {
+        Fail ('Helper diagnostiche mancante: ' + $diagnosticsScript)
+    }
+    . $diagnosticsScript
     $parameters = if ($Tool -eq 'Maven') {
         switch ($Action) {
             'Build'   { @('-B', '-DskipTests', 'package') }
@@ -125,7 +131,22 @@ try {
         # Native launchers may write non-fatal warnings to stderr.
         # Respect their exit code rather than PowerShell error-stream heuristics.
         $ErrorActionPreference = 'Continue'
-        & $executable @parameters
+        # Convert source diagnostics while streaming. Preserve exit codes and
+        # all other Maven/Gradle messages verbatim. Maven may echo errors twice.
+        $reportedDiagnostics = New-Object 'System.Collections.Generic.HashSet[string]'
+        & $executable @parameters 2>&1 | ForEach-Object {
+            $outputLine = if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                $_.Exception.Message
+            } else { [string]$_ }
+            $mappedDiagnostic = Convert-JavaBuildDiagnostic -Text $outputLine -Tool $Tool -ProjectDirectory $project
+            if ($null -ne $mappedDiagnostic) {
+                if ($reportedDiagnostics.Add($mappedDiagnostic)) {
+                    [Console]::Out.WriteLine($mappedDiagnostic)
+                }
+            } else {
+                [Console]::Out.WriteLine($outputLine)
+            }
+        }
         $ErrorActionPreference = 'Stop'
         $code = $LASTEXITCODE
     } finally {

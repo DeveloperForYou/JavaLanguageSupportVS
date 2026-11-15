@@ -186,6 +186,25 @@ Il test diagnostico del 15/11/2026 ha confermato `MSB3073` con `call "mvn.cmd"` 
 
 **Proprietà MSBuild per la build Java (`.javaproj`).** Le proprietà usate nei file `.targets` hanno nomi stabili e senza sigle di pack: `JavaBuildSystem`, `JavaMavenCommand`, `JavaGradleCommand`, `JavaCompilerSourceList`, `JavaPlainBuildScript` e `JavaBuildToolRunner`; il target interno di validazione si chiama `JavaValidateBuild`. I target pubblici restano `Build`, `Rebuild` e `Clean`. Se erano presenti override personalizzati dei precedenti `JavaF3MavenCommand` / `JavaF3GradleCommand`, rinominarli in `JavaMavenCommand` / `JavaGradleCommand` (anche quando passati con `/p:`). Le sigle F3 sono mantenute **solo nella documentazione storica**, non nei tag XML o nell'output di compilazione. **Stato:** nomenclatura aggiornata, collaudo VS Experimental dopo rinomina richiesto.
 
+### F3.B — Diagnostiche Java nell'Elenco errori (in collaudo)
+
+`JavaProject.BuildDiagnostics.ps1` converte le diagnostiche del compilatore Java
+provenienti da Maven, Gradle e Plain in messaggi standard MSBuild del tipo
+`C:\\progetto\\src\\Foo.java(12,5): error JAVA0001: cannot find symbol`.
+Il parser riconosce solo file `.java` esistenti all'interno del progetto.
+`JavaProject.ToolRunner.ps1` effettua una deduplicazione **per singola esecuzione**
+delle diagnostiche Maven ripetute, senza nascondere gli altri messaggi.
+Il parser condiviso è distribuito nella VSIX con gli helper di build.
+**Non modifica JDT LS, l'Undo/Redo, i target Build/Rebuild/Clean o i comandi Maven/Gradle.**
+
+Visual Studio può mostrare tali messaggi nella vista **Compilazione (Build)**
+dell'Elenco errori, con file, riga e colonna navigabili. L'eventuale
+sovrapposizione con le diagnostiche **IntelliSense** pubblicate da JDT LS non è
+ancora deduplicata trasversalmente (LIM-045). Errori di POM, build.gradle,
+plugin e di configurazione senza posizione Java rimangono nell'Output, e la
+build continua a segnalare un exit code non-zero (LIM-044, LIM-046).
+Il collaudo effettivo in Visual Studio 2026 Experimental è necessario.
+
 ## Prerequisiti
 
 - **Windows** con **Visual Studio 2026** e workload **Sviluppo di estensioni per Visual Studio**.

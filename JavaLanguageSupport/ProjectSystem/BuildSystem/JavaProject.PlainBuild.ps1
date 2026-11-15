@@ -75,6 +75,13 @@ try {
         $normalized.Add($file.Replace('\', '/'))
     }
 
+    # Use the shared Java compiler diagnostic formatter.
+    $diagnosticsScript = Join-Path $PSScriptRoot 'JavaProject.BuildDiagnostics.ps1'
+    if (-not [IO.File]::Exists($diagnosticsScript)) {
+        throw ('Helper diagnostiche mancante: ' + $diagnosticsScript)
+    }
+    . $diagnosticsScript
+
     $javaHome = [Environment]::GetEnvironmentVariable('JAVA_HOME')
     if (-not [string]::IsNullOrWhiteSpace($javaHome)) {
         $javac = Join-Path $javaHome.Trim().Trim('"') 'bin\javac.exe'
@@ -106,13 +113,12 @@ try {
     try {
         $ErrorActionPreference = 'Continue' # javac stderr must not become a terminating PowerShell error.
         & $javac ('@' + $argfile) 2>&1 | ForEach-Object {
-            $line = [string]$_
-            if ($line -match '^(?<file>.+\.java):(?<line>\d+): (?<severity>error|warning): (?<message>.*)$') {
-                Write-Output ('{0}({1},1): {2} JAVA0001: {3}' -f
-                    $Matches['file'], $Matches['line'], $Matches['severity'], $Matches['message'])
-            } else {
-                Write-Output $line
-            }
+            $line = if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                $_.Exception.Message
+            } else { [string]$_ }
+            $mappedDiagnostic = Convert-JavaBuildDiagnostic -Text $line -Tool Plain -ProjectDirectory $root
+            if ($null -ne $mappedDiagnostic) { Write-Output $mappedDiagnostic }
+            else { Write-Output $line }
         }
         $exitCode = $LASTEXITCODE
     } finally {
