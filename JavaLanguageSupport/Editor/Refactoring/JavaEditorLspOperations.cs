@@ -122,6 +122,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }
             object args;
             string method;
+            string workspaceCaption = null;
             switch (operation)
             {
                 case JavaEditorOperation.OrganizeImports:
@@ -193,6 +194,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
                     choice = JavaEditorDialogs.Choose(candidates);
                 }
                 if (choice == null) { log("Nessuna azione selezionata."); return; }
+                workspaceCaption = operation == JavaEditorOperation.OrganizeImports
+                    ? "Organizza import Java" : (string)choice["title"];
                 if (choice["edit"] == null && choice["data"] != null)
                 {
                     response = await JavaLspRpc.RequestAsync("codeAction/resolve",
@@ -218,7 +221,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
             {
                 if (buffer.CurrentSnapshot.Version.VersionNumber != snapshot.Version.VersionNumber)
                     throw new InvalidOperationException("Il file e' cambiato durante la richiesta. Riprova.");
-                JavaWorkspaceEditService.ApplyWithPreview(response, uri, buffer, snapshot, log);
+                JavaWorkspaceEditService.ApplyWithPreview(response, uri, buffer, snapshot,
+                    log, workspaceCaption);
             }
             catch (Exception ex)
             {
@@ -283,7 +287,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
             if (!ReferenceEquals(buffer.CurrentSnapshot, snapshot))
                 throw new InvalidOperationException("Il file Java e' cambiato. Richiama Ctrl + . e riprova.");
-            JavaWorkspaceEditService.ApplyWithPreview(edit, uri, buffer, snapshot, log);
+            JavaWorkspaceEditService.ApplyWithPreview(edit, uri, buffer, snapshot,
+                log, (string)choice["title"]);
         }
 
         private static bool IsOrganizeImports(JObject action)

@@ -29,7 +29,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
     /// (rename/create/delete) are deliberately rejected before applying anything;
     /// class-file renaming continues to use the proven JavaInlineRename engine.
     /// </summary>
-    internal static class JavaWorkspaceEditService
+    internal static partial class JavaWorkspaceEditService
     {
         // PACK C2: linked undo, preview and persisted multi-document edits.
         private static readonly StringComparer Paths = StringComparer.OrdinalIgnoreCase;
@@ -56,6 +56,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
         private sealed class Plan
         {
             internal string SourcePath;
+            internal string Caption;
             internal readonly List<DocumentChange> Documents = new List<DocumentChange>();
             internal int EditCount { get { return Documents.Sum(d => d.Edits.Count); } }
         }
@@ -65,7 +66,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
         /// snapshot when asking JDT LS for its action. No files are saved here.
         /// </summary>
         internal static void ApplyWithPreview(JToken edit, string originUri,
-            ITextBuffer originBuffer, ITextSnapshot originSnapshot, Action<string> log)
+            ITextBuffer originBuffer, ITextSnapshot originSnapshot, Action<string> log,
+            string operationLabel = null)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (originBuffer == null || originSnapshot == null ||
@@ -85,7 +87,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 if (log != null) log("WorkspaceEdit multi-file annullato dall'utente.");
                 return;
             }
-            Apply(plan);
+            plan.Caption = SafeWorkspaceCaption(operationLabel, plan.Documents.Count);
+            Apply(plan, log);
             if (log != null)
                 log("WorkspaceEdit: applicate e salvate " + plan.EditCount + " modifiche in " +
                     plan.Documents.Count + " documenti Java; Undo/Redo collegati.");
@@ -626,8 +629,11 @@ namespace JavaLanguageSupport.Editor.Refactoring
             {
                 throw new NotSupportedException("WorkspaceEdit: annullamenti non aggregabili.");
             }
-            public void Do() { ScheduleSave(); }
-            public void Undo() { ScheduleSave(); }
+            private bool isApplied = true;
+            internal bool IsApplied { get { return isApplied; } }
+            internal void SetApplied(bool value) { isApplied = value; }
+            public void Do() { isApplied = true; ScheduleSave(); }
+            public void Undo() { isApplied = false; ScheduleSave(); }
             private void ScheduleSave()
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
@@ -644,7 +650,7 @@ namespace JavaLanguageSupport.Editor.Refactoring
             }
         }
 
-        private static void Apply(Plan plan)
+        private static void Apply(Plan plan, Action<string> log)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var dte = Package.GetGlobalService(typeof(SDTE)) as DTE;
@@ -673,14 +679,19 @@ namespace JavaLanguageSupport.Editor.Refactoring
             var anchor = plan.Documents.FirstOrDefault(x => Paths.Equals(x.Path, plan.SourcePath))
                 ?? plan.Documents.First();
             var history = registry.GetHistory(anchor.Buffer);
+            // U4.C: optional disk snapshot; never blocks the established C2 edit.
+            WorkspaceEditDetachedState detached = WorkspaceEditDetachedState.TryCaptureBefore(plan);
+            string undoMarker = "JAVAWSE-" + Guid.NewGuid().ToString("N").Substring(0, 12);
             var changed = new List<DocumentChange>();
             ITextUndoTransaction saveUndo = null;
+            ITextUndoTransaction completedUndo = null;
+            WorkspaceSaveUndoPrimitive undoPrimitive = null;
             bool linkedOpen = false;
             try
             {
-                dte.UndoContext.Open("Java: WorkspaceEdit su " + plan.Documents.Count + " file", true);
+                dte.UndoContext.Open("Java: " + plan.Caption + " [" + undoMarker + "]", true);
                 linkedOpen = true;
-                saveUndo = history.CreateTransaction("Java: salvataggi collegati Undo/Redo");
+                saveUndo = history.CreateTransaction("Java: WorkspaceEdit [" + undoMarker + "]");
                 foreach (DocumentChange doc in plan.Documents)
                 {
                     changed.Add(doc);
@@ -692,8 +703,10 @@ namespace JavaLanguageSupport.Editor.Refactoring
                             throw new InvalidOperationException("Modifica del buffer rifiutata: " + doc.Path);
                     }
                 }
-                saveUndo.AddUndo(new WorkspaceSaveUndoPrimitive(plan.Documents));
+                undoPrimitive = new WorkspaceSaveUndoPrimitive(plan.Documents);
+                saveUndo.AddUndo(undoPrimitive);
                 saveUndo.Complete();
+                completedUndo = saveUndo;
                 saveUndo.Dispose();
                 saveUndo = null;
                 dte.UndoContext.Close();
@@ -729,6 +742,11 @@ namespace JavaLanguageSupport.Editor.Refactoring
                 throw;
             }
 
+            // U4C-WORKSPACE-UNDO-REGISTERED: use the shared native Undo bridge,
+            // preserving the original linked transaction and all C2 safeguards.
+            RegisterSharedWorkspaceUndo(plan, anchor, history, completedUndo,
+                undoPrimitive, undoMarker, detached, log);
+
             // The linked transaction is closed before Save(), as verified by
             // the preceding Pack C1 (otherwise Ctrl+Z can lose the undo group).
             var failures = new List<string>();
@@ -740,6 +758,8 @@ namespace JavaLanguageSupport.Editor.Refactoring
             if (failures.Count > 0)
                 throw new IOException("WorkspaceEdit applicato, ma salvataggio INCOMPLETO: " +
                     string.Join(" | ", failures) + ". Undo/Redo rimangono disponibili; verifica i file.");
+            // Enable detached callbacks only after every document was saved.
+            if (detached != null) detached.CompleteAfterSave();
         }
 
     }
