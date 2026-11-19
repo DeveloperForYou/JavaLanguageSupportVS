@@ -63,6 +63,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 token = jdkCancellation.Token;
                 generation = jdkGeneration;
                 jdkSnapshot = null;
+                // F4D13-JDK-SOURCE-RESET
+                ClearJdkSourceRegistration();
                 jdkStatus = "Rilevamento del JDK in corso...";
             }
 
@@ -112,6 +114,9 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                         token.IsCancellationRequested) return;
                     jdkSnapshot = result;
                     jdkStatus = status;
+                    // F4D13-JDK-SOURCE-RESULT
+                    RememberJdkSourceRegistration(projectFile,
+                        result == null ? null : result.Home);
                 }
                 PublishJdkTree();
             });
@@ -192,6 +197,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             {
                 jdkDisposed = true;
                 StopJdkLocked();
+                // F4D13-JDK-SOURCE-DISPOSE
+                ClearJdkSourceRegistration();
                 jdkSnapshot = null;
             }
         }

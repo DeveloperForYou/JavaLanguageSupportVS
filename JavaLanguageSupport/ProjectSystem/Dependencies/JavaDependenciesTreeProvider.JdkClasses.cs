@@ -38,8 +38,10 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                     expandedIcon: folderIcon, flags: flags);
                 foreach (string className in package.Value)
                 {
+                    // F4D13-JDK-SOURCE-CLASS
                     packageFolder = packageFolder.Add(NewTree(className,
-                        icon: classIcon, expandedIcon: classIcon, flags: flags)).Parent;
+                        icon: classIcon, expandedIcon: classIcon,
+                        flags: flags.Union(JavaJdkSourceTreeFlags.ClassNode))).Parent;
                 }
                 classesFolder = classesFolder.Add(packageFolder).Parent;
             }

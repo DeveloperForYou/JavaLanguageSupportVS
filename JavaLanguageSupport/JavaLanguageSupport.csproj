@@ -43,6 +43,7 @@
     <Reference Include="System.Management" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Threading.Tasks.Dataflow" />
+    <Reference Include="System.IO.Compression" />
     <Reference Include="System.Design" />
   </ItemGroup>
   <ItemGroup>
