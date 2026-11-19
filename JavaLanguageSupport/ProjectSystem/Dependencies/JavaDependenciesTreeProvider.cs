@@ -72,6 +72,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             ScheduleMavenRefresh(backend, change);
             // F4C1-GRADLE-SCHEDULE
             ScheduleGradleRefresh(backend, change);
+            // F4D1-JDK-SCHEDULE
+            ScheduleJdkRefresh(backend, change);
             return SubmitTreeUpdateAsync((snapshot, exports, cancellationToken) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -91,8 +93,11 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 expandedIcon: referenceIcon, flags: rootFlags);
 
             // Only a category: actual JDK home/version is F4.B+ scope.
-            root = root.Add(NewTree("JDK", icon: libraryIcon,
-                expandedIcon: libraryIcon, flags: childFlags)).Parent;
+            // F4D1-JDK-TREE
+            IProjectTree jdkTree = NewTree(GetJdkCaption(), icon: libraryIcon,
+                expandedIcon: libraryIcon, flags: childFlags);
+            jdkTree = AddResolvedJdkModules(jdkTree);
+            root = root.Add(jdkTree).Parent;
 
             string category = null;
             if (string.Equals(backend, "Maven", StringComparison.OrdinalIgnoreCase))
@@ -133,6 +138,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 DisposeMavenResolution();
                 // F4C1-GRADLE-DISPOSE
                 DisposeGradleResolution();
+                // F4D1-JDK-DISPOSE
+                DisposeJdkResolution();
                 if (subscriptionLink != null)
                 {
                     subscriptionLink.Dispose();
