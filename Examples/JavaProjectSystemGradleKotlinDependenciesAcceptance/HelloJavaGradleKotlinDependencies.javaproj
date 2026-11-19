@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Progetto di test VS CPS Kotlin DSL, build.gradle.kts resta autorevole. -->
+<Project ToolsVersion="Current" DefaultTargets="Build">
+  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.props" />
+  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.targets" />
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>4a593252-78f8-4688-b852-f1892b1a3f12</ProjectGuid>
+  </PropertyGroup>
+  <PropertyGroup>
+    <JavaBuildSystem>Gradle</JavaBuildSystem>
+  </PropertyGroup>
+</Project>

@@ -134,6 +134,15 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
+    <!-- Gradle dependency snapshot helpers; read-only, no changes to F3 build targets. -->
+    <Content Include="ProjectSystem\BuildSystem\JavaProject.GradleDependencies.ps1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="ProjectSystem\BuildSystem\JavaProject.GradleDependencies.init.gradle">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
     <!-- Shared build diagnostic normalizer for Maven, Gradle and javac. -->
     <Content Include="ProjectSystem\BuildSystem\JavaProject.BuildDiagnostics.ps1">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

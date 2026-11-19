@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Progetto di test VS CPS, build.gradle resta autorevole. -->
+<Project ToolsVersion="Current" DefaultTargets="Build">
+  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.props" />
+  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.targets" />
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>c4880e15-dfd0-455e-9222-7c3d9d33f052</ProjectGuid>
+  </PropertyGroup>
+  <PropertyGroup>
+    <JavaBuildSystem>Gradle</JavaBuildSystem>
+  </PropertyGroup>
+</Project>

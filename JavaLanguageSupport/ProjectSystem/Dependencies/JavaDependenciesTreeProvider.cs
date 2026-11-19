@@ -70,6 +70,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             // Gradle, javac, or JDT LS while generating the tree.
             // F4B1-MAVEN-SCHEDULE
             ScheduleMavenRefresh(backend, change);
+            // F4C1-GRADLE-SCHEDULE
+            ScheduleGradleRefresh(backend, change);
             return SubmitTreeUpdateAsync((snapshot, exports, cancellationToken) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -107,6 +109,9 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                     expandedIcon: referenceIcon, flags: childFlags);
                 if (string.Equals(backend, "Maven", StringComparison.OrdinalIgnoreCase))
                     categoryTree = AddResolvedMavenDependencies(categoryTree);
+                // F4C1-GRADLE-TREE
+                if (string.Equals(backend, "Gradle", StringComparison.OrdinalIgnoreCase))
+                    categoryTree = AddResolvedGradleDependencies(categoryTree);
                 root = root.Add(categoryTree).Parent;
             }
 
@@ -126,6 +131,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             {
                 // F4B1-MAVEN-DISPOSE
                 DisposeMavenResolution();
+                // F4C1-GRADLE-DISPOSE
+                DisposeGradleResolution();
                 if (subscriptionLink != null)
                 {
                     subscriptionLink.Dispose();

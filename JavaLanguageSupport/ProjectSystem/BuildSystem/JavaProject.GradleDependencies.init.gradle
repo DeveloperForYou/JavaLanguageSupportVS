@@ -1,0 +1,124 @@
+// Java CPS dependency snapshot. Loaded only with Gradle -I by the F4.C.1 resolver.
+// Supports Groovy DSL and Kotlin DSL projects; does not modify project files.
+import groovy.json.JsonOutput
+import org.gradle.api.GradleException
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedDependencyResult
+import org.gradle.api.artifacts.result.UnresolvedDependencyResult
+
+// The launcher passes full paths as JVM system properties. Do not execute any
+// arbitrary project expression or accept a relative output path.
+def outputPath = System.getProperty('javaCps.outputFile')
+def selectedDirectory = System.getProperty('javaCps.projectDir')
+if (!outputPath || !selectedDirectory || !new File(outputPath).isAbsolute()) {
+    throw new GradleException('Java CPS: parametri output/progetto mancanti')
+}
+
+gradle.projectsEvaluated {
+    def canonicalDir = new File(selectedDirectory).canonicalFile
+    def targetProject = gradle.rootProject.allprojects.find {
+        it.projectDir.canonicalFile == canonicalDir
+    }
+    if (targetProject == null) {
+        throw new GradleException('Java CPS: progetto Gradle richiesto non trovato')
+    }
+
+    targetProject.tasks.register('javaCpsResolveDependenciesSnapshot') {
+        group = 'ide'
+        description = 'Produce uno snapshot JSON temporaneo delle dipendenze risolte.'
+        doLast {
+            int maxNodes = 2500
+            int maxDepth = 14
+            int counter = 0
+            def resultConfigurations = []
+
+            // Unlike parsing the human-readable 'gradle dependencies' output,
+            // ResolutionResult exposes the effective/mediated component graph.
+            def fromComponent
+            fromComponent = { component, int depth, Set<String> ancestors ->
+                if (counter >= maxNodes || depth >= maxDepth) return null
+                counter++
+                def identifier = component.id
+                def id = identifier.displayName.toString()
+                boolean projectDependency = identifier instanceof ProjectComponentIdentifier
+                def moduleVersion = component.moduleVersion
+                def entry = [
+                    group: projectDependency || moduleVersion == null ? '' : (moduleVersion.group ?: '').toString(),
+                    name: projectDependency ? ('project ' + id) :
+                        (moduleVersion == null ? id : (moduleVersion.name ?: id).toString()),
+                    version: projectDependency || moduleVersion == null ? '' :
+                        (moduleVersion.version ?: '').toString(),
+                    project: projectDependency,
+                    cycle: ancestors.contains(id),
+                    children: []
+                ]
+                if (entry.cycle) return entry
+                def nextAncestors = new LinkedHashSet<String>(ancestors)
+                nextAncestors.add(id)
+                if (depth + 1 >= maxDepth) return entry
+
+                component.dependencies.each { edge ->
+                    if (counter >= maxNodes) return
+                    if (edge instanceof ResolvedDependencyResult) {
+                        def child = fromComponent(edge.selected, depth + 1, nextAncestors)
+                        if (child != null) entry.children.add(child)
+                    } else if (edge instanceof UnresolvedDependencyResult) {
+                        if (counter < maxNodes) {
+                            counter++
+                            entry.children.add([
+                                group: '', name: edge.requested.displayName.toString(),
+                                version: '', project: false, unresolved: true,
+                                cycle: false, children: []
+                            ])
+                        }
+                    }
+                }
+                return entry
+            }
+
+            // runtimeClasspath includes production deps; testRuntimeClasspath
+            // contains test deps. Separate groups make scopes explicit.
+            def chosen = []
+            def runtime = targetProject.configurations.findByName('runtimeClasspath')
+            if (runtime != null && runtime.canBeResolved) {
+                chosen.add(runtime)
+            } else {
+                def fallback = targetProject.configurations.findByName('compileClasspath')
+                if (fallback != null && fallback.canBeResolved) chosen.add(fallback)
+            }
+            def testRuntime = targetProject.configurations.findByName('testRuntimeClasspath')
+            if (testRuntime != null && testRuntime.canBeResolved) {
+                chosen.add(testRuntime)
+            } else {
+                def fallback = targetProject.configurations.findByName('testCompileClasspath')
+                if (fallback != null && fallback.canBeResolved) chosen.add(fallback)
+            }
+
+            chosen.each { configuration ->
+                def root = configuration.incoming.resolutionResult.rootComponent.get()
+                def children = []
+                root.dependencies.each { edge ->
+                    if (counter >= maxNodes) return
+                    if (edge instanceof ResolvedDependencyResult) {
+                        def child = fromComponent(edge.selected, 0, new LinkedHashSet<String>())
+                        if (child != null) children.add(child)
+                    } else if (edge instanceof UnresolvedDependencyResult) {
+                        counter++
+                        children.add([
+                            group: '', name: edge.requested.displayName.toString(),
+                            version: '', project: false, unresolved: true,
+                            cycle: false, children: []
+                        ])
+                    }
+                }
+                resultConfigurations.add([name: configuration.name, children: children])
+            }
+
+            // This path is a uniquely named file under the OS temp directory.
+            // The parent directory already exists. Never write to the project.
+            new File(outputPath).withWriter('UTF-8') { writer ->
+                writer.write(JsonOutput.toJson([configurations: resultConfigurations]))
+            }
+        }
+    }
+}
