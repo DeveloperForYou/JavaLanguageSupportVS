@@ -74,6 +74,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             ScheduleGradleRefresh(backend, change);
             // F4D1-JDK-SCHEDULE
             ScheduleJdkRefresh(backend, change);
+            // F4D2-PLAIN-JARS-SCHEDULE
+            SchedulePlainJarRefresh(backend, change);
             return SubmitTreeUpdateAsync((snapshot, exports, cancellationToken) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -117,6 +119,9 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 // F4C1-GRADLE-TREE
                 if (string.Equals(backend, "Gradle", StringComparison.OrdinalIgnoreCase))
                     categoryTree = AddResolvedGradleDependencies(categoryTree);
+                // F4D2-PLAIN-JARS-TREE
+                if (string.Equals(backend, "Plain", StringComparison.OrdinalIgnoreCase))
+                    categoryTree = AddResolvedPlainJars(categoryTree);
                 root = root.Add(categoryTree).Parent;
             }
 
@@ -140,6 +145,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 DisposeGradleResolution();
                 // F4D1-JDK-DISPOSE
                 DisposeJdkResolution();
+                // F4D2-PLAIN-JARS-DISPOSE
+                DisposePlainJarResolution();
                 if (subscriptionLink != null)
                 {
                     subscriptionLink.Dispose();

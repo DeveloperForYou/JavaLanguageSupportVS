@@ -17,7 +17,9 @@
       <JavaMavenCommand Condition="'$(JavaMavenCommand)' == ''">mvn.cmd</JavaMavenCommand>
       <JavaGradleCommand Condition="Exists('$(MSBuildProjectDirectory)\gradlew.bat')">$(MSBuildProjectDirectory)\gradlew.bat</JavaGradleCommand>
       <JavaGradleCommand Condition="'$(JavaGradleCommand)' == ''">gradle.bat</JavaGradleCommand>
+      <!-- F4D2-PLAIN-CLASSPATH -->
       <JavaCompilerSourceList>$(MSBuildProjectDirectory)\.java-vs\build\javac-sources.txt</JavaCompilerSourceList>
+      <JavaCompilerJarList>$(MSBuildProjectDirectory)\.java-vs\build\javac-jars.txt</JavaCompilerJarList>
       <JavaPlainBuildScript>$(MSBuildThisFileDirectory)JavaProject.PlainBuild.ps1</JavaPlainBuildScript>
       <JavaBuildToolRunner>$(MSBuildThisFileDirectory)JavaProject.ToolRunner.ps1</JavaBuildToolRunner>
     </PropertyGroup>
@@ -47,8 +49,14 @@
                       File="$(JavaCompilerSourceList)"
                       Lines="@(JavaCompile->'%(FullPath)')"
                       Overwrite="true" Encoding="UTF-8" />
+    <Delete Condition="'$(JavaBuildSystem)' == 'Plain' and Exists('$(JavaCompilerJarList)')"
+            Files="$(JavaCompilerJarList)" />
+    <WriteLinesToFile Condition="'$(JavaBuildSystem)' == 'Plain' and '@(JavaJarReference)' != ''"
+                      File="$(JavaCompilerJarList)"
+                      Lines="@(JavaJarReference->'%(FullPath)')"
+                      Overwrite="true" Encoding="UTF-8" />
     <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
-          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Build -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot;"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Build -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot; -ClasspathFile &quot;$(JavaCompilerJarList)&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
   
     <Message Importance="high" Text="[Java Build] $(MSBuildProjectName): Build completato ($(JavaBuildSystem))." />
@@ -90,8 +98,14 @@
                       File="$(JavaCompilerSourceList)"
                       Lines="@(JavaCompile->'%(FullPath)')"
                       Overwrite="true" Encoding="UTF-8" />
+    <Delete Condition="'$(JavaBuildSystem)' == 'Plain' and Exists('$(JavaCompilerJarList)')"
+            Files="$(JavaCompilerJarList)" />
+    <WriteLinesToFile Condition="'$(JavaBuildSystem)' == 'Plain' and '@(JavaJarReference)' != ''"
+                      File="$(JavaCompilerJarList)"
+                      Lines="@(JavaJarReference->'%(FullPath)')"
+                      Overwrite="true" Encoding="UTF-8" />
     <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
-          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Rebuild -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot;"
+          Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Rebuild -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot; -ClasspathFile &quot;$(JavaCompilerJarList)&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
   
     <Message Importance="high" Text="[Java Build] $(MSBuildProjectName): Rebuild completato ($(JavaBuildSystem))." />

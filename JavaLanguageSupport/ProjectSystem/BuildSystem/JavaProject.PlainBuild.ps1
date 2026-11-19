@@ -7,7 +7,8 @@ param(
     [string]$Action,
     [Parameter(Mandatory = $true)]
     [string]$ProjectDirectory,
-    [string]$SourcesFile
+    [string]$SourcesFile,
+    [string]$ClasspathFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,6 +97,28 @@ try {
         $javac = $found.Source
     }
 
+    # F4D2-PLAIN-CLASSPATH: validate explicit JavaJarReference entries.
+    # JARs can reside outside the project, but they are never executed or modified.
+    $jarFiles = New-Object 'System.Collections.Generic.List[string]'
+    if (-not [string]::IsNullOrWhiteSpace($ClasspathFile) -and
+        (Test-Path -LiteralPath $ClasspathFile -PathType Leaf)) {
+        $jarItems = @(Get-Content -LiteralPath $ClasspathFile -Encoding UTF8 |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+        if ($jarItems.Count -gt 80) { throw 'Oltre 80 riferimenti JAR non supportati.' }
+        foreach ($jarItem in $jarItems) {
+            $jarPath = [IO.Path]::GetFullPath([string]$jarItem)
+            if (-not $jarPath.EndsWith('.jar', [StringComparison]::OrdinalIgnoreCase) -or
+                -not [IO.File]::Exists($jarPath)) {
+                throw ('JAR esterno non trovato o non valido: ' + $jarPath)
+            }
+            if ($jarPath.IndexOf(';') -ge 0 -or
+                $jarPath.IndexOfAny([char[]]@([char]34, [char]10, [char]13)) -ge 0) {
+                throw ('Percorso JAR non valido per il classpath javac: ' + $jarPath)
+            }
+            $jarFiles.Add($jarPath.Replace('\', '/'))
+        }
+    }
+
     $buildDirectory = Join-Path $cacheRoot 'build'
     [IO.Directory]::CreateDirectory($classes) | Out-Null
     [IO.Directory]::CreateDirectory($buildDirectory) | Out-Null
@@ -105,10 +128,15 @@ try {
     $entries.Add('UTF-8')
     $entries.Add('-d')
     $entries.Add('"' + $classes.Replace('\', '/') + '"')
+    if ($jarFiles.Count -gt 0) {
+        $entries.Add('-classpath')
+        $entries.Add('"' + [string]::Join(';', $jarFiles) + '"')
+    }
     foreach ($source in $normalized) { $entries.Add('"' + $source + '"') }
     [IO.File]::WriteAllLines($argfile, $entries, ([System.Text.UTF8Encoding]::new($false)))
 
     Write-Output ('[Java Build] javac: ' + $sources.Count + ' sorgenti, output ' + $classes)
+    Write-Output ('[Java Build] JAR esterni nel classpath: ' + $jarFiles.Count)
     Push-Location -LiteralPath $root
     try {
         $ErrorActionPreference = 'Continue' # javac stderr must not become a terminating PowerShell error.
