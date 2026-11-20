@@ -49,6 +49,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly TextBlock details = CaptionText("Seleziona una libreria per vedere i dettagli.");
         private readonly ListBox versionPicker = new ListBox(); // F4F21-THEMED-VERSIONS
         private readonly TextBlock versionInfo = CaptionText("");
+        // F4F26-ALL-VERSIONS-PAGINATION: 30 results per request, never cap the list at page 1.
+        private const int VersionPageSize = 30;
+        private readonly Button previousVersionsButton = ActionButton("◀");
+        private readonly Button nextVersionsButton = ActionButton("▶");
+        private readonly TextBlock versionsPageInfo = CaptionText("");
+        private readonly Button retryVersionsButton = ActionButton("Riprova versioni");
         private readonly TextBlock versionEmptyState = CaptionText("Seleziona una libreria."); // F4F24_EMPTY_VERSIONS
         private readonly ListBox installedResults = new ListBox();
         private readonly TextBlock installedNote = CaptionText("");
@@ -66,6 +72,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private int currentPage = 1;
         private int searchGeneration;
         private int versionsGeneration;
+        private int requestedVersionsPage = 1;
+        private JavaCentralPage<JavaCentralVersion> lastVersionsPage;
         private int updatesGeneration;
         private JavaCentralPage<JavaCentralArtifact> lastPage;
 
@@ -113,7 +121,17 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             cancelButton.Click += (s, e) => { CancelAll(); status.Text = "Richiesta annullata."; };
             previousButton.Click += (s, e) => { if (currentPage > 1) _ = StartSearchAsync(currentPage - 1); };
             nextButton.Click += (s, e) => { if (lastPage != null && lastPage.HasNextPage) _ = StartSearchAsync(currentPage + 1); };
-            browseResults.SelectionChanged += (s, e) => { _ = LoadVersionsAsync(); };
+            browseResults.SelectionChanged += (s, e) => { _ = LoadVersionsAsync(1, true); };
+            previousVersionsButton.Click += (s, e) =>
+            {
+                if (lastVersionsPage != null && lastVersionsPage.Page > 1)
+                    _ = LoadVersionsAsync(lastVersionsPage.Page - 1, false);
+            };
+            nextVersionsButton.Click += (s, e) =>
+            {
+                if (lastVersionsPage != null && lastVersionsPage.HasNextPage)
+                    _ = LoadVersionsAsync(lastVersionsPage.Page + 1, false);
+            };
             installedResults.SelectionChanged += (s, e) =>
             {
                 var dep = installedResults.SelectedItem as JavaInstalledDependency;
@@ -122,12 +140,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     "\nOrigine: " + (installed == null ? "-" : installed.Backend);
             };
             updateButton.Click += (s, e) => { _ = LoadUpdatesAsync(); };
+            retryVersionsButton.Click += (s, e) => { _ = LoadVersionsAsync(requestedVersionsPage, false); };
             tabs.SelectionChanged += (s, e) =>
             {
                 if (e.Source == tabs && tabs.SelectedIndex == 1) RefreshInstalled();
             };
             Unloaded += (s, e) => CancelAll();
             SetSearchBusy(false);
+            ResetVersionsPaging();
             versionPicker.IsHitTestVisible = false;
             ShowVersionPlaceholder("Seleziona una libreria per visualizzare le versioni.");
         }
@@ -147,7 +167,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             searchBox.Margin = new Thickness(0, 0, 8, 0);
             searchBox.Padding = new Thickness(8, 4, 8, 4);
             searchBox.ToolTip = "Cerca nome libreria o coordinate groupId:artifactId";
-            searchBox.Text = "gson";
+            searchBox.Text = "";
             searchBox.SetResourceReference(Control.BackgroundProperty,
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
             searchBox.SetResourceReference(Control.ForegroundProperty,
@@ -195,8 +215,28 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             versionEmptyState.IsHitTestVisible = false;
             versionHost.Children.Add(versionEmptyState);
             right.Children.Add(versionHost);
+            // Separate pager: package search pagination is independent of version pagination.
+            var versionsPager = new WrapPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 2, 0, 8)
+            };
+            previousVersionsButton.Margin = new Thickness(0, 0, 8, 0);
+            versionsPageInfo.Margin = new Thickness(0, 0, 8, 0);
+            versionsPageInfo.VerticalAlignment = VerticalAlignment.Center;
+            previousVersionsButton.ToolTip = "Pagina precedente delle versioni";
+            nextVersionsButton.ToolTip = "Pagina successiva delle versioni";
+            versionsPager.Children.Add(previousVersionsButton);
+            versionsPager.Children.Add(versionsPageInfo);
+            versionsPager.Children.Add(nextVersionsButton);
+            right.Children.Add(versionsPager);
             versionInfo.TextWrapping = TextWrapping.Wrap;
             right.Children.Add(versionInfo);
+            retryVersionsButton.Margin = new Thickness(0, 6, 0, 0);
+            retryVersionsButton.HorizontalAlignment = HorizontalAlignment.Left;
+            retryVersionsButton.Visibility = Visibility.Collapsed;
+            right.Children.Add(retryVersionsButton);
             var readOnly = CaptionText("Installazione, aggiornamento e rimozione arriveranno in F4.F.3–F4.F.5.");
             readOnly.Margin = new Thickness(0, 18, 0, 0);
             readOnly.TextWrapping = TextWrapping.Wrap;
@@ -291,6 +331,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             details.Text = "Seleziona una libreria per vedere i dettagli.";
             versionPicker.ItemsSource = null;
             versionPicker.IsHitTestVisible = false;
+            ResetVersionsPaging();
             ShowVersionPlaceholder("Seleziona una libreria per visualizzare le versioni.");
             pageInfo.Text = "";
             updatesResults.ItemsSource = null;
@@ -334,8 +375,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             ReplaceToken(ref searchCts);
             ReplaceToken(ref versionsCts);
             ++versionsGeneration;
+            ResetVersionsPaging();
             versionPicker.ItemsSource = null;
             versionPicker.IsHitTestVisible = false;
+            retryVersionsButton.Visibility = Visibility.Collapsed;
             ShowVersionPlaceholder("Seleziona una libreria per visualizzare le versioni.");
             details.Text = "Seleziona una libreria per vedere i dettagli.";
             versionInfo.Text = "";
@@ -364,16 +407,34 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             finally { if (generation == searchGeneration) SetSearchBusy(false); }
         }
 
-        private async Task LoadVersionsAsync()
+        private void ResetVersionsPaging()
+        {
+            requestedVersionsPage = 1;
+            lastVersionsPage = null;
+            previousVersionsButton.IsEnabled = false;
+            nextVersionsButton.IsEnabled = false;
+            versionsPageInfo.Text = "";
+        }
+
+        private async Task LoadVersionsAsync(int page, bool debounceSelection)
         {
             var artifact = browseResults.SelectedItem as JavaCentralArtifact;
             int generation = ++versionsGeneration;
             ReplaceToken(ref versionsCts);
+            // Keep the requested page on failures, so Retry does not silently jump to page 1.
+            requestedVersionsPage = page;
+            lastVersionsPage = null;
+            previousVersionsButton.IsEnabled = false;
+            nextVersionsButton.IsEnabled = false;
+            versionsPageInfo.Text = artifact == null ? "" : "Pagina " + page + " · caricamento...";
+            retryVersionsButton.Visibility = Visibility.Collapsed;
             versionPicker.ItemsSource = null;
             versionPicker.IsHitTestVisible = false;
             if (artifact == null)
             {
+                ResetVersionsPaging();
                 ShowVersionPlaceholder("Seleziona una libreria per visualizzare le versioni.");
+                versionInfo.Text = "";
                 return;
             }
             ShowVersionPlaceholder("Caricamento versioni...");
@@ -381,29 +442,52 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 "\nTipo: " + artifact.Packaging + "\nVersioni pubblicate: " + artifact.VersionCount +
                 "\nPubblicazione: " + (artifact.PublishedUtc.HasValue
                     ? artifact.PublishedUtc.Value.ToString("yyyy-MM-dd") : "n/d");
-            versionInfo.Text = "Caricamento versioni...";
+            versionInfo.Text = "Caricamento pagina " + page + "...";
             var token = versionsCts.Token;
             try
             {
+                // Only a newly selected artifact is debounced; page buttons should respond immediately.
+                if (debounceSelection)
+                    await Task.Delay(300, token);
                 var versions = await service.GetVersionsAsync(artifact.GroupId,
-                    artifact.ArtifactId, 1, 50, token);
+                    artifact.ArtifactId, page, VersionPageSize, token);
                 if (generation != versionsGeneration || token.IsCancellationRequested) return;
+                lastVersionsPage = versions;
                 versionPicker.ItemsSource = versions.Items.ToList();
                 versionPicker.IsHitTestVisible = versions.Items.Count > 0;
                 ShowVersionPlaceholder(versions.Items.Count == 0
-                    ? "Nessuna versione disponibile." : null);
+                    ? "Nessuna versione disponibile in questa pagina." : null);
                 if (versions.Items.Count > 0) versionPicker.SelectedIndex = 0;
-                versionInfo.Text = versions.TotalCount > versions.Items.Count
-                    ? "Mostrate le 50 versioni più recenti; elenco completo in una milestone successiva."
-                    : "Versioni trovate: " + versions.TotalCount;
+                long totalPages = Math.Max(1L,
+                    (versions.TotalCount + VersionPageSize - 1L) / VersionPageSize);
+                versionsPageInfo.Text = "Pagina " + page + " / " + totalPages;
+                previousVersionsButton.IsEnabled = page > 1;
+                nextVersionsButton.IsEnabled = versions.HasNextPage;
+                long first = versions.Items.Count == 0 ? 0 :
+                    (long)(page - 1) * VersionPageSize + 1;
+                long last = versions.Items.Count == 0 ? 0 :
+                    first + versions.Items.Count - 1;
+                versionInfo.Text = "Versioni " + first + "–" + last +
+                    " di " + versions.TotalCount + " · " + VersionPageSize + " per pagina";
             }
-            catch (OperationCanceledException) { }
-            catch (JavaMavenCentralSearchException ex)
+            catch (OperationCanceledException)
             {
                 if (generation == versionsGeneration)
                 {
-                    ShowVersionPlaceholder("Versioni non disponibili. Riprova selezionando il pacchetto.");
+                    ShowVersionPlaceholder("Caricamento annullato.");
+                    versionInfo.Text = "";
+                    versionsPageInfo.Text = "";
+                }
+            }
+            catch (Exception ex) when (ex is JavaMavenCentralSearchException ||
+                ex is ArgumentException || ex is ArgumentOutOfRangeException)
+            {
+                if (generation == versionsGeneration)
+                {
+                    ShowVersionPlaceholder("Versioni temporaneamente non disponibili.");
                     versionInfo.Text = ex.Message;
+                    versionsPageInfo.Text = "Pagina " + page + " · errore";
+                    retryVersionsButton.Visibility = Visibility.Visible;
                 }
             }
         }

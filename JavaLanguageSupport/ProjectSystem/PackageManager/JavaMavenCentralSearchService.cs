@@ -4,6 +4,8 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Xml;
+using System.Xml.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -26,7 +28,6 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private const string Endpoint = "https://search.maven.org/solrsearch/select";
         private const int MaxResponseBytes = 2 * 1024 * 1024;
         private const int MaximumPageSize = 50;
-        private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
         private static readonly Regex Coordinates = new Regex(
             @"\A(?<g>[A-Za-z0-9_][A-Za-z0-9_.-]*):(?<a>[A-Za-z0-9_][A-Za-z0-9_.-]*)\z",
             RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -36,19 +37,24 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private readonly HttpClient client;
         private readonly bool ownsClient;
+
+        private readonly object cacheSync = new object();
+        private readonly Dictionary<string, CachedResponse> cachedResponses =
+            new Dictionary<string, CachedResponse>(StringComparer.Ordinal);
+        private const int MaxCacheEntries = 128;
         private bool disposed;
+
+        private sealed class CachedResponse
+        {
+            internal object Page;
+            internal DateTime ExpiresUtc;
+        }
 
         internal JavaMavenCentralSearchService()
             : this(new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }), true)
         {
         }
 
-        // Inject a controlled HttpClient in offline tests and in future UI tests.
-        // The caller remains responsible for disposing an injected HttpClient.
-        internal JavaMavenCentralSearchService(HttpClient client)
-            : this(client, false)
-        {
-        }
 
         private JavaMavenCentralSearchService(HttpClient client, bool ownsClient)
         {
@@ -87,13 +93,179 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             return QueryAsync(q, null, page, pageSize, ParseArtifact, cancellationToken);
         }
 
-        /// <summary>All versions of one exact coordinate, newest publication first.</summary>
-        internal Task<JavaCentralPage<JavaCentralVersion>> GetVersionsAsync(
+        // F4F27-REPOSITORY-METADATA: the Solr gav index is for discovery, not
+        // the authoritative complete version catalog. Read Maven's repository
+        // metadata once, then paginate locally; retain Solr only as a fallback.
+        internal async Task<JavaCentralPage<JavaCentralVersion>> GetVersionsAsync(
             string groupId, string artifactId, int page = 1, int pageSize = 30,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            string q = ExactQuery(groupId, artifactId);
-            return QueryAsync(q, "gav", page, pageSize, ParseVersion, cancellationToken);
+            string exactQuery = ExactQuery(groupId, artifactId); // validate input before HTTP
+            ThrowIfDisposed();
+            if (pageSize < 1 || pageSize > MaximumPageSize)
+                throw new ArgumentOutOfRangeException(nameof(pageSize), "Da 1 a 50 elementi per pagina.");
+            if (page < 1 || (long)(page - 1) * pageSize > int.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(page), "Pagina non valida.");
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string key = groupId + ":" + artifactId;
+            IReadOnlyList<string> allVersions;
+            if (!TryGetVersionCatalog(key, out allVersions))
+            {
+                try
+                {
+                    allVersions = await DownloadVersionCatalogAsync(groupId, artifactId,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (JavaMavenCentralSearchException ex) when (
+                    ex.StatusCode != 429 && ex.StatusCode != 403)
+                {
+                    System.Diagnostics.Trace.WriteLine("[F4.F.2.7] Metadata " + key +
+                        " non disponibile: " + ex.Message);
+                    allVersions = null; // old Solr path is a best-effort fallback
+                }
+                catch (Exception ex) when (ex is XmlException ||
+                    ex is InvalidDataException || ex is HttpRequestException ||
+                    ex is IOException || ex is DecoderFallbackException)
+                {
+                    System.Diagnostics.Trace.WriteLine("[F4.F.2.7] Metadata " + key +
+                        " non leggibile: " + ex.Message);
+                    allVersions = null; // metadata malformed or unreachable
+                }
+                if (allVersions == null || allVersions.Count == 0)
+                {
+                    System.Diagnostics.Trace.WriteLine("[F4.F.2.7] " + key +
+                        ": uso fallback Solr gav.");
+                    return await QueryAsync(exactQuery, "gav", page, pageSize,
+                        ParseVersion, cancellationToken).ConfigureAwait(false);
+                }
+                StoreVersionCatalog(key, allVersions);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            int offset = checked((page - 1) * pageSize);
+            var items = allVersions.Skip(offset).Take(pageSize)
+                .Select(version => new JavaCentralVersion(groupId, artifactId,
+                    version, string.Empty, null, new string[0])).ToList();
+            return new JavaCentralPage<JavaCentralVersion>(items,
+                allVersions.Count, page, pageSize);
+        }
+
+        // Repository coordinates are path segments, not Solr expressions.
+        private const string VersionMetadataRoot = "https://repo.maven.apache.org/maven2/";
+        private readonly Dictionary<string, VersionCatalogEntry> versionCatalogs =
+            new Dictionary<string, VersionCatalogEntry>(StringComparer.Ordinal);
+        private sealed class VersionCatalogEntry
+        {
+            internal IReadOnlyList<string> Versions;
+            internal DateTime ExpiresUtc;
+        }
+
+        private bool TryGetVersionCatalog(string key, out IReadOnlyList<string> versions)
+        {
+            lock (cacheSync)
+            {
+                VersionCatalogEntry value;
+                if (versionCatalogs.TryGetValue(key, out value))
+                {
+                    if (value.ExpiresUtc > DateTime.UtcNow)
+                    {
+                        versions = value.Versions;
+                        return true;
+                    }
+                    versionCatalogs.Remove(key);
+                }
+            }
+            versions = null;
+            return false;
+        }
+
+        private void StoreVersionCatalog(string key, IReadOnlyList<string> versions)
+        {
+            lock (cacheSync)
+            {
+                if (disposed) return;
+                if (versionCatalogs.Count >= 64 && !versionCatalogs.ContainsKey(key))
+                {
+                    string oldest = versionCatalogs.OrderBy(x => x.Value.ExpiresUtc)
+                        .Select(x => x.Key).FirstOrDefault();
+                    if (oldest != null) versionCatalogs.Remove(oldest);
+                }
+                versionCatalogs[key] = new VersionCatalogEntry
+                {
+                    Versions = versions,
+                    ExpiresUtc = DateTime.UtcNow.AddMinutes(30)
+                };
+            }
+        }
+
+        private async Task<IReadOnlyList<string>> DownloadVersionCatalogAsync(
+            string groupId, string artifactId, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            string url = VersionMetadataRoot + groupId.Replace('.', '/') + "/" +
+                artifactId + "/maven-metadata.xml";
+            // No additional CancelAfter: preserve the user's HTTP timeout policy.
+            // The caller can still cancel on selection change or close.
+            using (var request = new HttpRequestMessage(HttpMethod.Get, url))
+            {
+                request.Headers.Accept.Add(
+                    new MediaTypeWithQualityHeaderValue("application/xml"));
+                request.Headers.UserAgent.ParseAdd("JavaLanguageSupportVS/1.0");
+                using (HttpResponseMessage response = await client.SendAsync(request,
+                    HttpCompletionOption.ResponseHeadersRead, token)
+                    .ConfigureAwait(false))
+                {
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        if ((int)response.StatusCode == 404) return null;
+                        throw new JavaMavenCentralSearchException(
+                            "Repository Maven Central: HTTP " + (int)response.StatusCode + ".",
+                            (int)response.StatusCode);
+                    }
+                    string xml = await ReadBoundedAsync(response.Content, token)
+                        .ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    var settings = new XmlReaderSettings
+                    {
+                        DtdProcessing = DtdProcessing.Prohibit,
+                        XmlResolver = null
+                    };
+                    using (var reader = XmlReader.Create(new StringReader(xml), settings))
+                    {
+                        var document = XDocument.Load(reader);
+                        XElement metadata = document.Root;
+                        if (metadata == null || metadata.Name.LocalName != "metadata")
+                            throw new InvalidDataException("maven-metadata.xml non valido.");
+                        string declaredGroup = ChildValue(metadata, "groupId");
+                        string declaredArtifact = ChildValue(metadata, "artifactId");
+                        if ((!string.IsNullOrEmpty(declaredGroup) && declaredGroup != groupId) ||
+                            (!string.IsNullOrEmpty(declaredArtifact) && declaredArtifact != artifactId))
+                            throw new InvalidDataException("Coordinate metadata non corrispondenti.");
+                        var versioning = metadata.Elements()
+                            .FirstOrDefault(e => e.Name.LocalName == "versioning");
+                        var list = versioning == null ? null : versioning.Elements()
+                            .FirstOrDefault(e => e.Name.LocalName == "versions");
+                        if (list == null) return null;
+                        // Metadata lists versions in repository order; show its
+                        // newest entries first, without inventing semver ordering.
+                        var versions = list.Elements()
+                            .Where(e => e.Name.LocalName == "version")
+                            .Select(e => e.Value.Trim())
+                            .Where(v => v.Length > 0 && v.Length <= 512 &&
+                                !v.Any(char.IsControl))
+                            .Distinct(StringComparer.Ordinal)
+                            .Reverse().ToList();
+                        return versions;
+                    }
+                }
+            }
+        }
+
+        private static string ChildValue(XElement parent, string localName)
+        {
+            var child = parent.Elements()
+                .FirstOrDefault(e => e.Name.LocalName == localName);
+            return child == null ? null : child.Value.Trim();
         }
 
         /// <summary>Returns null if an exact coordinate does not exist.</summary>
@@ -109,6 +281,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 string.Equals(x.ArtifactId, artifactId, StringComparison.Ordinal));
         }
 
+        // F4F25-RESILIENT-REQUEST: cache successful pages, then retry at most once
+        // for a timeout network failure or HTTP 408/502/503/504. Never
+        // retry HTTP 429 or 403: Maven Central asks clients to reduce traffic.
         private async Task<JavaCentralPage<T>> QueryAsync<T>(
             string q, string core, int page, int pageSize,
             Func<JObject, T> mapper, CancellationToken cancellationToken)
@@ -125,10 +300,88 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 "&rows=" + pageSize.ToString(CultureInfo.InvariantCulture) +
                 "&start=" + start.ToString(CultureInfo.InvariantCulture) +
                 "&wt=json" + (core == null ? "" : "&core=" + core);
+            JavaCentralPage<T> cached;
+            if (TryGetCached(query, out cached)) return cached;
+
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var result = await QueryOnceAsync(query, page, pageSize,
+                        mapper, cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    StoreCached(query, result,
+                        core == "gav" ? TimeSpan.FromMinutes(30) : TimeSpan.FromMinutes(10));
+                    return result;
+                }
+                catch (JavaMavenCentralSearchException ex) when (
+                    attempt == 0 && IsRetryable(ex) && !cancellationToken.IsCancellationRequested)
+                {
+                    // A short bounded delay, not a retry storm.
+                    await Task.Delay(650, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            throw new InvalidOperationException("Ricerca Maven Central: tentativi esauriti.");
+        }
+
+        private static bool IsRetryable(JavaMavenCentralSearchException ex)
+        {
+            if (ex.StatusCode == 408 || ex.StatusCode == 502 ||
+                ex.StatusCode == 503 || ex.StatusCode == 504) return true;
+            return ex.StatusCode == 0 &&
+                (ex.Message.StartsWith("Timeout durante", StringComparison.Ordinal) ||
+                 ex.Message.StartsWith("Connessione a Maven Central", StringComparison.Ordinal));
+        }
+
+        private bool TryGetCached<T>(string key, out JavaCentralPage<T> page) where T : class
+        {
+            lock (cacheSync)
+            {
+                CachedResponse entry;
+                if (cachedResponses.TryGetValue(key, out entry))
+                {
+                    if (entry.ExpiresUtc > DateTime.UtcNow && entry.Page is JavaCentralPage<T>)
+                    {
+                        page = (JavaCentralPage<T>)entry.Page;
+                        return true;
+                    }
+                    cachedResponses.Remove(key);
+                }
+            }
+            page = null;
+            return false;
+        }
+
+        private void StoreCached<T>(string key, JavaCentralPage<T> result, TimeSpan ttl)
+            where T : class
+        {
+            lock (cacheSync)
+            {
+                if (disposed) return;
+                if (cachedResponses.Count >= MaxCacheEntries &&
+                    !cachedResponses.ContainsKey(key))
+                {
+                    // Bounded per-window cache: remove the oldest expiry first.
+                    string oldest = cachedResponses.OrderBy(p => p.Value.ExpiresUtc)
+                        .Select(p => p.Key).FirstOrDefault();
+                    if (oldest != null) cachedResponses.Remove(oldest);
+                }
+                cachedResponses[key] = new CachedResponse
+                {
+                    Page = result, ExpiresUtc = DateTime.UtcNow.Add(ttl)
+                };
+            }
+        }
+
+        private async Task<JavaCentralPage<T>> QueryOnceAsync<T>(
+            string query, int page, int pageSize,
+            Func<JObject, T> mapper, CancellationToken cancellationToken)
+            where T : class
+        {
             // JDT LS/Visual Studio are never blocked on this HTTP request.
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
-                linked.CancelAfter(RequestTimeout);
                 try
                 {
                     using (var request = new HttpRequestMessage(HttpMethod.Get, query))
@@ -315,6 +568,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         {
             if (disposed) return;
             disposed = true;
+            lock (cacheSync) { cachedResponses.Clear(); versionCatalogs.Clear(); }
             if (ownsClient) client.Dispose();
         }
     }

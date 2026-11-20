@@ -126,7 +126,96 @@ internal static class Program
                 throw new Exception("unbounded page size accepted"); }
             catch (ArgumentOutOfRangeException) { /* Expected. */ }
         }
-        Console.WriteLine("Offline: ricerca, coordinate, versioni, pagine, annullamento, HTTP 429, JSON, limiti OK.");
+        // F4F25-CACHE-RETRY-OFFLINE: one bounded retry for transient 503,
+        // successful response cached; no retries after a 429.
+        int transientCalls = 0;
+        using (var http = new HttpClient(new FakeHandler(request =>
+        {
+            transientCalls++;
+            return transientCalls == 1
+                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                : ArtifactResponse(request);
+        })))
+        using (var service = new JavaMavenCentralSearchService(http))
+        {
+            var result = await service.SearchAsync("gson", 1, 2);
+            Assert(result.Items.Count == 2 && transientCalls == 2, "bounded retry on 503");
+            result = await service.SearchAsync("gson", 1, 2);
+            Assert(result.Items.Count == 2 && transientCalls == 2, "cache prevents repeat HTTP");
+        }
+        int rateLimitCalls = 0;
+        using (var http = new HttpClient(new FakeHandler(request =>
+        {
+            rateLimitCalls++;
+            return new HttpResponseMessage((HttpStatusCode)429);
+        })))
+        using (var service = new JavaMavenCentralSearchService(http))
+        {
+            try { await service.SearchAsync("gson"); throw new Exception("429 not detected"); }
+            catch (JavaMavenCentralSearchException ex) { Assert(ex.StatusCode == 429, "429 status"); }
+            Assert(rateLimitCalls == 1, "no retry on 429");
+        }
+        using (var slow = new SlowFirstHandler())
+        using (var http = new HttpClient(slow))
+        using (var service = new JavaMavenCentralSearchService(
+            http, TimeSpan.FromMilliseconds(100)))
+        {
+            var recovered = await service.SearchAsync("gson", 1, 2);
+            Assert(recovered.Items.Count == 2 && slow.Calls == 2,
+                "timeout then successful bounded retry");
+        }
+        // F4F27-METADATA-ACCEPTANCE: a single repository metadata response
+        // supplies every page; the search index is not queried for versions.
+        int metadataRequests = 0;
+        int solrVersionRequests = 0;
+        string metadataXml = "<metadata><groupId>com.google.code.gson</groupId>" +
+            "<artifactId>gson</artifactId><versioning><versions>" +
+            string.Join("", Enumerable.Range(1, 67)
+                .Select(i => "<version>1." + i + "</version>")) +
+            "</versions></versioning></metadata>";
+        using (var http = new HttpClient(new FakeHandler(request =>
+        {
+            if (request.RequestUri.Host == "repo.maven.apache.org")
+            {
+                metadataRequests++;
+                Assert(request.RequestUri.AbsolutePath ==
+                    "/maven2/com/google/code/gson/gson/maven-metadata.xml", "metadata path");
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                { Content = new StringContent(metadataXml, Encoding.UTF8, "application/xml") };
+            }
+            solrVersionRequests++;
+            return Ok(VersionsJson);
+        })))
+        using (var service = new JavaMavenCentralSearchService(http))
+        {
+            var one = await service.GetVersionsAsync("com.google.code.gson", "gson", 1, 30);
+            var two = await service.GetVersionsAsync("com.google.code.gson", "gson", 2, 30);
+            var three = await service.GetVersionsAsync("com.google.code.gson", "gson", 3, 30);
+            Assert(one.TotalCount == 67 && one.Items.Count == 30 && one.HasNextPage,
+                "metadata first page");
+            Assert(two.Items.Count == 30 && three.Items.Count == 7 &&
+                !three.HasNextPage, "metadata last page");
+            Assert(one.Items[0].Version == "1.67" && three.Items[6].Version == "1.1",
+                "metadata version order");
+            Assert(metadataRequests == 1 && solrVersionRequests == 0,
+                "single download, local paging, cached catalog");
+        }
+        int fallbackRequests = 0;
+        using (var http = new HttpClient(new FakeHandler(request =>
+        {
+            fallbackRequests++;
+            return request.RequestUri.Host == "repo.maven.apache.org"
+                ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                : Ok(VersionsJson);
+        })))
+        using (var service = new JavaMavenCentralSearchService(http))
+        {
+            var page = await service.GetVersionsAsync("com.google.code.gson", "gson", 1, 2);
+            Assert(page.TotalCount == 3 && page.Items.Count == 2 &&
+                fallbackRequests == 2, "Solr fallback only when metadata missing");
+        }
+        Console.WriteLine("Offline F4.F.2.7: metadata 67 versioni, paginazione locale, cache, fallback OK.");
+        Console.WriteLine("Offline: ricerca, coordinate, versioni, pagine, annullamento, HTTP 429, JSON, cache, retry, timeout OK.");
     }
 
     // The fake must obey Solr rows/start and exact-coordinate filtering.
@@ -187,6 +276,19 @@ internal static class Program
             foreach (var item in versions.Items.Take(3))
                 Console.WriteLine("  " + item.Coordinate);
             Assert(versions.TotalCount > 0 && versions.Items.Count > 0, "live versions");
+        }
+    }
+
+    private sealed class SlowFirstHandler : HttpMessageHandler
+    {
+        internal int Calls;
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            if (Calls == 1)
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+            return ArtifactResponse(request);
         }
     }
 
