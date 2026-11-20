@@ -8,6 +8,7 @@ using JavaLanguageSupport.Build;
 using JavaLanguageSupport.Editor.Refactoring;
 using JavaLanguageSupport.Editor.Navigation;
 using JavaLanguageSupport.ProjectSystem.Packages;
+using JavaLanguageSupport.ProjectSystem.PackageManager;
 using JavaLanguageSupport.LanguageServer;
 using JavaLanguageSupport.ProjectSystem.Registration;
 using JavaLanguageSupport.ProjectSystem.Dependencies;
@@ -31,6 +32,7 @@ namespace JavaLanguageSupport.Commands
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // F2E3-TEMPLATE-WIZARD-BINDING
     [ProvideBindingPath]
+    [ProvideToolWindow(typeof(JavaPackageManagerToolWindow), Style = VsDockStyle.Tabbed, Window = "3ae79031-e1bc-11d0-8f78-00a0c9110057")]
     [Guid(PackageGuid)]
     public sealed class JavaCommandsPackage : AsyncPackage
     {
@@ -41,6 +43,7 @@ namespace JavaLanguageSupport.Commands
         private const int RunId = 0x0101;
         private const int TestId = 0x0102;
         private const int StatusId = 0x0103;
+        private const int ManagePackagesId = 0x0129;
         private const int RefreshDependenciesId = 0x0128;
 
         private const int OrganizeImportsId = 0x0112;
@@ -118,6 +121,23 @@ namespace JavaLanguageSupport.Commands
                 renamePackage.Enabled = available;
             };
             service.AddCommand(renamePackage);
+            // F4F2-UI-REGISTER: visible only on the selected .javaproj root node.
+            var managePackages = new OleMenuCommand(
+                (s, e) => JoinableTaskFactory.RunAsync(async delegate
+                {
+                    await ShowJavaPackageManagerAsync();
+                }).FileAndForget("JavaLanguageSupport/PackageManager"),
+                new CommandID(CommandSet, ManagePackagesId));
+            managePackages.BeforeQueryStatus += (s, e) =>
+            {
+                string selectedFile;
+                bool valid = JavaPackageManagerProjectCommand.TryGetSelectedProject(
+                    this, out selectedFile);
+                managePackages.Visible = valid;
+                managePackages.Enabled = valid;
+            };
+            service.AddCommand(managePackages);
+
 
             try
             {
@@ -160,6 +180,22 @@ namespace JavaLanguageSupport.Commands
         // Solo nell'editor Java e soltanto quando il click destro è su un simbolo.
         // Visible whenever a Java editor is active. Do not depend on a recent
         // mouse click: command status is often queried before PreviewMouseRightButtonDown.
+
+        private async Task ShowJavaPackageManagerAsync()
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            string projectFile;
+            if (!JavaPackageManagerProjectCommand.TryGetSelectedProject(this,
+                out projectFile)) return;
+            var window = await ShowToolWindowAsync(
+                typeof(JavaPackageManagerToolWindow), 0, true, CancellationToken.None)
+                as JavaPackageManagerToolWindow;
+            if (window == null)
+                throw new InvalidOperationException(
+                    "Impossibile aprire Gestisci pacchetti Java.");
+            window.SelectProject(projectFile);
+        }
+
         private bool IsActiveJavaEditor()
         {
             ThreadHelper.ThrowIfNotOnUIThread();

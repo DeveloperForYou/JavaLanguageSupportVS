@@ -335,7 +335,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         internal bool HasNextPage { get { return (long)Page * PageSize < TotalCount; } }
     }
 
-    internal sealed class JavaCentralArtifact
+    public sealed class JavaCentralArtifact
     {
         internal JavaCentralArtifact(string group, string artifact, string latest,
             string packaging, int versionCount, DateTimeOffset? published,
@@ -345,17 +345,17 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             Packaging = packaging; VersionCount = versionCount;
             PublishedUtc = published; Extensions = extensions;
         }
-        internal string GroupId { get; private set; }
-        internal string ArtifactId { get; private set; }
-        internal string LatestVersion { get; private set; }
-        internal string Packaging { get; private set; }
-        internal int VersionCount { get; private set; }
-        internal DateTimeOffset? PublishedUtc { get; private set; }
-        internal IReadOnlyList<string> Extensions { get; private set; }
-        internal string Coordinate { get { return GroupId + ":" + ArtifactId; } }
+        public string GroupId { get; private set; }
+        public string ArtifactId { get; private set; }
+        public string LatestVersion { get; private set; }
+        public string Packaging { get; private set; }
+        public int VersionCount { get; private set; }
+        public DateTimeOffset? PublishedUtc { get; private set; }
+        public IReadOnlyList<string> Extensions { get; private set; }
+        public string Coordinate { get { return GroupId + ":" + ArtifactId; } }
     }
 
-    internal sealed class JavaCentralVersion
+    public sealed class JavaCentralVersion
     {
         internal JavaCentralVersion(string group, string artifact, string version,
             string packaging, DateTimeOffset? published, IReadOnlyList<string> extensions)
@@ -363,13 +363,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             GroupId = group; ArtifactId = artifact; Version = version;
             Packaging = packaging; PublishedUtc = published; Extensions = extensions;
         }
-        internal string GroupId { get; private set; }
-        internal string ArtifactId { get; private set; }
-        internal string Version { get; private set; }
-        internal string Packaging { get; private set; }
-        internal DateTimeOffset? PublishedUtc { get; private set; }
-        internal IReadOnlyList<string> Extensions { get; private set; }
-        internal string Coordinate { get { return GroupId + ":" + ArtifactId + ":" + Version; } }
+        public string GroupId { get; private set; }
+        public string ArtifactId { get; private set; }
+        public string Version { get; private set; }
+        public string Packaging { get; private set; }
+        public DateTimeOffset? PublishedUtc { get; private set; }
+        public IReadOnlyList<string> Extensions { get; private set; }
+        public string Coordinate { get { return GroupId + ":" + ArtifactId + ":" + Version; } }
     }
 
     internal sealed class JavaMavenCentralSearchException : Exception
