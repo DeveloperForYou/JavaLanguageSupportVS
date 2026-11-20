@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Link the real VSIX engine: these tests DO NOT implement another search client. -->
+    <Compile Include="..\..\JavaLanguageSupport\ProjectSystem\PackageManager\JavaMavenCentralSearchService.cs" Link="JavaMavenCentralSearchService.cs" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+</Project>
