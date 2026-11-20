@@ -20,6 +20,7 @@
       <!-- F4D2-PLAIN-CLASSPATH -->
       <JavaCompilerSourceList>$(MSBuildProjectDirectory)\.java-vs\build\javac-sources.txt</JavaCompilerSourceList>
       <JavaCompilerJarList>$(MSBuildProjectDirectory)\.java-vs\build\javac-jars.txt</JavaCompilerJarList>
+      <JavaPlainJdkEnvironment Condition="'$(JavaJdkHome)' != ''">JAVA_HOME=$(JavaJdkHome)</JavaPlainJdkEnvironment>
       <JavaPlainBuildScript>$(MSBuildThisFileDirectory)JavaProject.PlainBuild.ps1</JavaPlainBuildScript>
       <JavaBuildToolRunner>$(MSBuildThisFileDirectory)JavaProject.ToolRunner.ps1</JavaBuildToolRunner>
     </PropertyGroup>
@@ -56,6 +57,7 @@
                       Lines="@(JavaJarReference->'%(FullPath)')"
                       Overwrite="true" Encoding="UTF-8" />
     <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
+          EnvironmentVariables="$(JavaPlainJdkEnvironment)"
           Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Build -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot; -ClasspathFile &quot;$(JavaCompilerJarList)&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
   
@@ -105,6 +107,7 @@
                       Lines="@(JavaJarReference->'%(FullPath)')"
                       Overwrite="true" Encoding="UTF-8" />
     <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
+          EnvironmentVariables="$(JavaPlainJdkEnvironment)"
           Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(JavaPlainBuildScript)&quot; -Action Rebuild -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -SourcesFile &quot;$(JavaCompilerSourceList)&quot; -ClasspathFile &quot;$(JavaCompilerJarList)&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
   

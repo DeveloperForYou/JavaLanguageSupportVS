@@ -197,6 +197,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 gradleConfigurations = new List<JavaGradleDependencyConfiguration>();
             }
 
+            dependencyLanguageSync.Signal(projectFile);
             PublishGradleTree();
             _ = Task.Run(() =>
             {

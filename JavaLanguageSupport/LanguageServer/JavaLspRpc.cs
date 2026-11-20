@@ -154,6 +154,24 @@ namespace JavaLanguageSupport.LanguageServer
             return true;
         }
 
+        // F4.E: bind dependency updates to the exact RPC identity, not a replacement session.
+        internal static async Task<bool> NotifyForConnectionAsync(object identity, string method, object parameters)
+        {
+            var current = Volatile.Read(ref rpc);
+            if (current == null || !ReferenceEquals(current, identity)) return false;
+            await current.NotifyWithParameterObjectAsync(method, parameters).ConfigureAwait(false);
+            return ReferenceEquals(current, Volatile.Read(ref rpc));
+        }
+
+        internal static async Task<JToken> CommandForConnectionAsync(object identity, string command,
+            object[] arguments, CancellationToken token)
+        {
+            var current = Volatile.Read(ref rpc);
+            if (current == null || !ReferenceEquals(current, identity)) throw new OperationCanceledException();
+            return await current.InvokeWithParameterObjectAsync<JToken>("workspace/executeCommand",
+                new { command, arguments }, token).ConfigureAwait(false);
+        }
+
         internal static string FileUri(ITextDocument document)
         {
             if (document == null || string.IsNullOrWhiteSpace(document.FilePath)) return null;

@@ -149,6 +149,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 mavenNodes = new List<JavaMavenDependencyNode>();
             }
 
+            dependencyLanguageSync.Signal(projectFile);
             PublishMavenTree();
             _ = Task.Run(() =>
             {

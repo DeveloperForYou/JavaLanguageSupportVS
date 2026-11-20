@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json.Linq;
+using JavaLanguageSupport.ProjectSystem.Dependencies;
 
 namespace JavaLanguageSupport.LanguageServer
 {
@@ -27,28 +28,39 @@ namespace JavaLanguageSupport.LanguageServer
                     if (TryProjectFile(candidate, out full)) Projects.Add(full);
                 }
             }
+            JavaDependencyLanguageSync.ScopeChanged();
+        }
+
+        internal static string[] LoadedProjects()
+        {
+            lock (Sync) return Projects.ToArray();
         }
 
         internal static void AddProject(string projectFile)
         {
             string full;
             if (!TryProjectFile(projectFile, out full)) return;
-            lock (Sync) Projects.Add(full);
+            bool added;
+            lock (Sync) added = Projects.Add(full);
+            if (added) JavaDependencyLanguageSync.ScopeChanged();
         }
 
         internal static void RemoveProject(string projectFile)
         {
             if (string.IsNullOrWhiteSpace(projectFile)) return;
+            bool removed = false;
             lock (Sync)
             {
-                try { Projects.Remove(Path.GetFullPath(projectFile)); }
+                try { removed = Projects.Remove(Path.GetFullPath(projectFile)); }
                 catch (ArgumentException) { }
             }
+            if (removed) JavaDependencyLanguageSync.ScopeChanged();
         }
 
         internal static void Clear()
         {
             lock (Sync) Projects.Clear();
+            JavaDependencyLanguageSync.ScopeChanged();
         }
 
         internal static bool ContainsProject(string projectFile)

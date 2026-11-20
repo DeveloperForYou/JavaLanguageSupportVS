@@ -32,6 +32,12 @@
         <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
         <Strings><ButtonText>Java: Stato IntelliSense</ButtonText></Strings>
       </Button>
+      <Button guid="guidJavaToolsCmdSet" id="cmdRefreshDependencies" priority="0x0450" type="Button">
+        <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings><ButtonText>Java: Ricarica dipendenze</ButtonText></Strings>
+      </Button>
       <Button guid="guidJavaToolsCmdSet" id="cmdOrganizeImports" priority="0x0700" type="Button">
         <Parent guid="guidJavaToolsCmdSet" id="JavaToolsGroup" />
         <Strings><ButtonText>Java: Organizza import</ButtonText></Strings>
@@ -115,6 +121,7 @@
       <IDSymbol name="cmdRun" value="0x0101" />
       <IDSymbol name="cmdTest" value="0x0102" />
       <IDSymbol name="cmdStatus" value="0x0103" />
+      <IDSymbol name="cmdRefreshDependencies" value="0x0128" />
       <IDSymbol name="cmdOrganizeImports" value="0x0112" />
       <IDSymbol name="cmdRename" value="0x0113" />
       <IDSymbol name="cmdRenameJavaPackage" value="0x0127" />

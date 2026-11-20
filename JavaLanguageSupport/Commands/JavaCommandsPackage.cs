@@ -10,6 +10,7 @@ using JavaLanguageSupport.Editor.Navigation;
 using JavaLanguageSupport.ProjectSystem.Packages;
 using JavaLanguageSupport.LanguageServer;
 using JavaLanguageSupport.ProjectSystem.Registration;
+using JavaLanguageSupport.ProjectSystem.Dependencies;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.TextManager.Interop;
@@ -40,6 +41,7 @@ namespace JavaLanguageSupport.Commands
         private const int RunId = 0x0101;
         private const int TestId = 0x0102;
         private const int StatusId = 0x0103;
+        private const int RefreshDependenciesId = 0x0128;
 
         private const int OrganizeImportsId = 0x0112;
         private const int RenameId = 0x0113;
@@ -76,6 +78,15 @@ namespace JavaLanguageSupport.Commands
                 new CommandID(CommandSet, TestId)));
             service.AddCommand(new MenuCommand((s, e) => ShowIntelliSenseStatus(),
                 new CommandID(CommandSet, StatusId)));
+            var refreshDependencies = new OleMenuCommand((s, e) => JavaDependencyLanguageSync.RefreshAll(),
+                new CommandID(CommandSet, RefreshDependenciesId));
+            refreshDependencies.BeforeQueryStatus += (s, e) =>
+            {
+                bool available = JavaDependencyLanguageSync.HasLoadedProjects;
+                refreshDependencies.Visible = available;
+                refreshDependencies.Enabled = available;
+            };
+            service.AddCommand(refreshDependencies);
 
             service.AddCommand(new MenuCommand((s, e) => StartEditor(JavaEditorOperation.OrganizeImports),
                 new CommandID(CommandSet, OrganizeImportsId)));

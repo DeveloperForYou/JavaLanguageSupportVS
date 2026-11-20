@@ -207,12 +207,14 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
         private void RequestPlainJarSnapshot()
         {
             IList<string> paths;
+            string syncProjectFile;
             string signature;
             CancellationToken token;
             int generation;
             lock (plainJarSync)
             {
                 if (plainJarDisposed || string.IsNullOrEmpty(plainJarProjectFile)) return;
+                syncProjectFile = plainJarProjectFile;
                 paths = plainJarPaths.ToList();
                 try { signature = GetPlainJarFingerprint(plainJarProjectFile, paths); }
                 catch (IOException) { return; }
@@ -231,6 +233,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 plainJarStatus = paths.Count == 0 ? "Nessun JAR configurato" :
                     "Indicizzazione JAR esterni in corso...";
             }
+            dependencyLanguageSync.Signal(syncProjectFile);
             PublishPlainJarTree();
             if (paths.Count == 0) return;
 

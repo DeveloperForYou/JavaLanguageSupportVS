@@ -30,6 +30,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             : base(threadingService, unconfiguredProject)
         {
             this.subscriptionService = subscriptionService;
+            dependencyLanguageSync = new JavaDependencyLanguageSync(ForceDependencyTreeRefresh);
         }
 
         protected override void Initialize()
@@ -69,6 +70,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             // Evaluate only the authoritative .javaproj property. Never run Maven,
             // Gradle, javac, or JDT LS while generating the tree.
             // F4B1-MAVEN-SCHEDULE
+            ScheduleDependencyLanguageSync(backend, change);
             ScheduleMavenRefresh(backend, change);
             // F4C1-GRADLE-SCHEDULE
             ScheduleGradleRefresh(backend, change);
@@ -140,6 +142,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             if (disposing)
             {
                 // F4B1-MAVEN-DISPOSE
+                dependencyLanguageSync.Dispose();
+                dependencyCatalog = null;
                 DisposeMavenResolution();
                 // F4C1-GRADLE-DISPOSE
                 DisposeGradleResolution();

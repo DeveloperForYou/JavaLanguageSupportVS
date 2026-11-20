@@ -51,13 +51,15 @@ namespace JavaLanguageSupport.LanguageServer
         public IEnumerable<string> ConfigurationSections => new[] { "java" };
         public IEnumerable<string> FilesToWatch => new[]
         {
-            "**/*.java", "**/pom.xml", "**/build.gradle", "**/build.gradle.kts",
-            "**/settings.gradle", "**/settings.gradle.kts", "**/.classpath", "**/.project"
+            "**/*.java", "**/pom.xml", "**/*.gradle", "**/*.gradle.kts",
+            "**/gradle.properties", "**/gradle/libs.versions.toml", "**/.classpath", "**/.project"
         };
 
         // JDT LS legge settings.java nell'initialize. Il formato e' annidato,
         // distinto dai nomi con punti usati in VSWorkspaceSettings.json.
-        public object InitializationOptions => new
+        public object InitializationOptions => DefaultInitializationOptions;
+
+        internal static object DefaultInitializationOptions => new
         {
             // JDT LS esclude le librerie JDK e i JAR da workspace/symbol
             // quando il client non annuncia classFileContentsSupport.
@@ -430,6 +432,7 @@ namespace JavaLanguageSupport.LanguageServer
         {
             JavaLanguageStatus.Initialized();
             JavaWorkspaceActivity.Initialized();
+            JavaLanguageSupport.ProjectSystem.Dependencies.JavaDependencyLanguageSync.ServerInitialized();
             return Task.CompletedTask;
         }
 

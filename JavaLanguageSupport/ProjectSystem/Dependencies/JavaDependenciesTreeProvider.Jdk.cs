@@ -35,7 +35,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             {
                 var instance = change.Value.Project.ProjectInstance;
                 projectFile = Path.GetFullPath(instance.FullPath);
-                // UI-only override: do NOT use this value to modify compiler/toolchains.
+                // Used by Plain build and JDT LS; Maven/Gradle retain their own toolchains.
                 requestedHome = instance.GetPropertyValue("JavaJdkHome");
             }
             catch (Exception)
@@ -118,6 +118,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                     RememberJdkSourceRegistration(projectFile,
                         result == null ? null : result.Home);
                 }
+                dependencyLanguageSync.JdkResolved(projectFile, requestedHome, result == null ? null : result.Home);
                 PublishJdkTree();
             });
         }
@@ -231,7 +232,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             // JDK 8 predates JPMS. Do not treat absence of --list-modules as an error.
             if (version.StartsWith("1.8", StringComparison.Ordinal))
                 return new JavaJdkSnapshot {
-                    Version = version, MajorVersion = "8", Modules = new List<string>()
+                    Home = home, Version = version, MajorVersion = "8", Modules = new List<string>()
                 };
 
             var output = new List<string>();

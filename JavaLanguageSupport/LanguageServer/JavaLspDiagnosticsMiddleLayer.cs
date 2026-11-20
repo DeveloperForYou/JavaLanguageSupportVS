@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.LanguageServer.Client;
 using Newtonsoft.Json.Linq;
+using JavaLanguageSupport.ProjectSystem.Dependencies;
 
 namespace JavaLanguageSupport.LanguageServer
 {
@@ -28,6 +29,7 @@ namespace JavaLanguageSupport.LanguageServer
                 || methodName == "$/progress"
                 || methodName == "language/status"
                 || methodName == "initialize"
+                || methodName == "workspace/didChangeConfiguration"
                 || methodName == "workspace/executeCommand"
                 || methodName == "textDocument/hover"
                 || methodName == "textDocument/completion"
@@ -143,7 +145,13 @@ namespace JavaLanguageSupport.LanguageServer
             }
             // F2J.3: forwarding duration is NOT the time to render squiggles.
             long forwardingStarted = Stopwatch.GetTimestamp();
-            await sendNotification(methodParam);
+            JToken outgoing = methodParam;
+            if (methodName == "workspace/didChangeConfiguration")
+            {
+                try { outgoing = JavaDependencyLanguageSync.PrepareNativeConfiguration(methodParam); }
+                catch (Exception ex) { JavaLanguageStatus.LogLifecycle("[F4.E dependencies] Configurazione: " + ex.GetType().Name); }
+            }
+            await sendNotification(outgoing);
             if (methodName == "textDocument/didOpen" ||
                 methodName == "textDocument/didChange" ||
                 methodName == "textDocument/didClose")
@@ -182,7 +190,11 @@ namespace JavaLanguageSupport.LanguageServer
                 {
                     // The project system is not the Open Folder workspace.
                     // Give JDT LS the real .javaproj root before initialization.
-                    try { request = JavaCpsWorkspaceContext.PrepareInitialize(methodParam); }
+                    try
+                    {
+                        request = JavaCpsWorkspaceContext.PrepareInitialize(methodParam);
+                        request = JavaDependencyLanguageSync.PrepareInitialization(request);
+                    }
                     catch (Exception ex)
                     {
                         JavaLanguageStatus.CpsProjectState(
