@@ -73,10 +73,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly Button refreshProjectsButton = ActionButton("Aggiorna");
         private bool suppressProjectSelection;
         // F4F28-PACKAGE-SOURCES: native configuration, read-only discovery.
+        // F4F2102-ALIGNED-PICKERS: only the selector is visible; discovery
+        // diagnostics remain accessible by hovering over its refresh button.
         private readonly Button discoverSourcesButton = ActionButton("Rileva origini");
-        private readonly TextBlock sourcesSummary = CaptionText("Origini: non rilevate");
-        private readonly TextBlock sourcesDetails = CaptionText("");
-        private readonly Expander sourcesExpander = new Expander { Header = "Origini dei pacchetti" };
         private CancellationTokenSource sourcesCts;
         private int sourcesGeneration;
         private JavaPackageSourceSnapshot packageSources;
@@ -141,12 +140,17 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
             // F4F293-DETAILS-ON-DEMAND: do not repeat the project name above its selector.
             var header = new StackPanel { Margin = new Thickness(0, 0, 0, 7) };
+            // Share both label and button column widths across these two rows.
+            Grid.SetIsSharedSizeScope(header, true);
             projectHeader.Visibility = Visibility.Collapsed;
             header.Children.Add(projectHeader);
-            var projectRow = new Grid { Margin = new Thickness(0, 5, 0, 7) };
-            projectRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            projectRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            projectRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var projectRow = new Grid { Margin = new Thickness(0, 5, 0, 3) };
+            projectRow.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = GridLength.Auto, SharedSizeGroup = "JavaPickerLabels" });
+            projectRow.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = new GridLength(1, GridUnitType.Star) });
+            projectRow.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = GridLength.Auto, SharedSizeGroup = "JavaPickerButtons" });
             var projectLabel = CaptionText("Progetto:");
             projectLabel.VerticalAlignment = VerticalAlignment.Center;
             projectLabel.Margin = new Thickness(0, 0, 8, 0);
@@ -160,24 +164,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             Grid.SetColumn(refreshProjectsButton, 2);
             projectRow.Children.Add(refreshProjectsButton);
             header.Children.Add(projectRow);
-            header.Children.Add(projectInfo);
-            var sourcesRow = new Grid { Margin = new Thickness(0, 4, 0, 0) };
-            sourcesRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            sourcesRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            discoverSourcesButton.IsEnabled = false;
-            sourcesRow.Children.Add(discoverSourcesButton);
-            sourcesSummary.Margin = new Thickness(8, 0, 0, 0);
-            sourcesSummary.VerticalAlignment = VerticalAlignment.Center;
-            sourcesSummary.TextTrimming = TextTrimming.CharacterEllipsis;
-            sourcesSummary.ToolTip = "Espandi Origini dei pacchetti per leggere i dettagli";
-            Grid.SetColumn(sourcesSummary, 1);
-            sourcesRow.Children.Add(sourcesSummary);
-            header.Children.Add(sourcesRow);
             // Use the already proven dark/light ComboBox template of the project picker.
-            var sourceRow = new Grid { Margin = new Thickness(0, 4, 0, 3) };
-            sourceRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var sourceRow = new Grid { Margin = new Thickness(0, 1, 0, 3) };
+            sourceRow.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = GridLength.Auto, SharedSizeGroup = "JavaPickerLabels" });
             sourceRow.ColumnDefinitions.Add(new ColumnDefinition {
                 Width = new GridLength(1, GridUnitType.Star) });
+            sourceRow.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = GridLength.Auto, SharedSizeGroup = "JavaPickerButtons" });
             var sourceLabel = CaptionText("Origine:");
             sourceLabel.VerticalAlignment = VerticalAlignment.Center;
             sourceLabel.Margin = new Thickness(0, 0, 8, 0);
@@ -186,16 +180,17 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             sourceSelector.IsEnabled = false;
             sourceSelector.ToolTip = "Scegli l'origine per ricerca, versioni e aggiornamenti. " +
                 "I repository Gradle inattivi o HTTP non sono selezionabili.";
+            sourceSelector.Margin = new Thickness(0, 0, 8, 0);
             Grid.SetColumn(sourceSelector, 1);
             sourceRow.Children.Add(sourceSelector);
+            discoverSourcesButton.IsEnabled = false;
+            discoverSourcesButton.ToolTip = "Rileva i repository configurati per il progetto.";
+            ToolTipService.SetShowDuration(discoverSourcesButton, 30000);
+            Grid.SetColumn(discoverSourcesButton, 2);
+            sourceRow.Children.Add(discoverSourcesButton);
             header.Children.Add(sourceRow);
-            ThemeControl(sourcesExpander);
-            sourcesExpander.ToolTip = "Visualizza i repository rilevati (senza occupare spazio quando è chiuso)";
-            sourcesDetails.TextWrapping = TextWrapping.Wrap;
-            sourcesExpander.Content = new ScrollViewer { Content = sourcesDetails, MaxHeight = 135,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            sourcesExpander.Visibility = Visibility.Collapsed;
-            header.Children.Add(sourcesExpander);
+            projectInfo.Margin = new Thickness(0, 3, 0, 0);
+            header.Children.Add(projectInfo);
             discoverSourcesButton.Click += (s, e) =>
             {
                 if (sourcesCts != null) StopSourceDiscovery();
@@ -601,10 +596,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             ResetSourceSelector();
             lastCatalog = null;
             versionOriginInfo.Text = "";
-            sourcesSummary.Text = "Origini: non rilevate";
-            sourcesDetails.Text = "";
-            sourcesExpander.IsExpanded = false;
-            sourcesExpander.Visibility = Visibility.Collapsed;
+            discoverSourcesButton.ToolTip = "Rileva i repository configurati per il progetto.";
             discoverSourcesButton.IsEnabled = true;
             query = null;
             currentPage = 1;
@@ -680,10 +672,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             versionInfo.Text = "";
             projectHeader.Text = "Seleziona un progetto Java";
             projectInfo.Text = "Nessun progetto selezionato";
-            sourcesSummary.Text = "Origini: non rilevate";
-            sourcesDetails.Text = "";
-            sourcesExpander.IsExpanded = false;
-            sourcesExpander.Visibility = Visibility.Collapsed;
+            discoverSourcesButton.ToolTip = "Seleziona un progetto per rilevarne i repository.";
             discoverSourcesButton.IsEnabled = false;
             updateButton.IsEnabled = false;
             SetSearchBusy(false);
@@ -760,7 +749,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 sourceSelector.SelectedItem = chosen;
                 sourceSelector.IsEnabled = candidates.Count > 0;
                 sourceSelector.ToolTip = "Origine per ricerca, versioni e aggiornamenti. " +
-                    "I repository non attivi e non HTTPS sono esclusi; consultarli in Rileva origini.";
+                    "I repository non attivi e non HTTPS sono esclusi. Dettagli nel tooltip di Rileva origini.";
                 selectedSourceUrl = chosen.Source == null ? null :
                     chosen.Source.Url.AbsoluteUri.TrimEnd('/');
             }
@@ -1037,6 +1026,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var token = sourcesCts.Token;
             packageSources = null;
             sourceSelector.IsEnabled = false;
+            discoverSourcesButton.ToolTip = "Rilevamento in corso...";
             // Source refresh invalidates results based on old origins.
             ++searchGeneration; ++versionsGeneration; ++updatesGeneration;
             Cancel(ref searchCts); Cancel(ref versionsCts); Cancel(ref updatesCts);
@@ -1048,33 +1038,28 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             updatesResults.ItemsSource = null;
             SetSearchBusy(false);
             discoverSourcesButton.Content = "Annulla rilevamento";
-            sourcesSummary.Text = "Rilevamento origini in corso...";
-            sourcesDetails.Text = "";
-            sourcesExpander.Visibility = Visibility.Collapsed;
             try
             {
                 var snapshot = await Task.Run(() => JavaPackageSourceDiscovery.Discover(path, backend, token), token);
                 if (generation != sourcesGeneration || token.IsCancellationRequested) return;
                 packageSources = snapshot;
                 RefreshSourceSelector();
-                sourcesSummary.Text = "Origini: " + snapshot.Sources.Count +
-                    (snapshot.Warnings.Count > 0 ? " (vedi note)" : "");
-                sourcesDetails.Text = snapshot.Describe();
-                sourcesExpander.Visibility = Visibility.Visible;
-                // Keep the source list available on demand: otherwise the expanded
-                // header consumes most of a short docked window.
-                sourcesExpander.IsExpanded = false;
-                status.Text = "Origini rilevate. Ricerca testuale: Maven Central; coordinate: tutte le origini attive.";
+                // No duplicate origin list in the header. Retain diagnostics,
+                // including excluded/inactive repositories, via the button tooltip.
+                discoverSourcesButton.ToolTip = snapshot.Describe();
+                status.Text = "Origini rilevate: " + snapshot.Sources.Count +
+                    (snapshot.Warnings.Count > 0 ?
+                        " (" + snapshot.Warnings.Count + " avvisi: passa sul pulsante Rileva origini)." : ".") +
+                    " Ricerca per coordinate sui repository selezionati.";
             }
             catch (OperationCanceledException) { }
             catch (Exception)
             {
                 if (generation != sourcesGeneration) return;
                 ResetSourceSelector();
-                sourcesSummary.Text = "Origini non rilevate";
-                sourcesDetails.Text = "Configurazione non disponibile. Verificare i file nativi del progetto.";
-                sourcesExpander.Visibility = Visibility.Visible;
-                sourcesExpander.IsExpanded = true;
+                discoverSourcesButton.ToolTip =
+                    "Configurazione non disponibile. Verificare settings.gradle, build.gradle, pom.xml o settings.xml.";
+                status.Text = "Origini non rilevate. Posiziona il mouse su Rileva origini per i dettagli.";
             }
             finally
             {
@@ -1092,7 +1077,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             if (sourcesCts != null)
             {
                 Cancel(ref sourcesCts);
-                sourcesSummary.Text = "Rilevamento annullato";
+                discoverSourcesButton.ToolTip = "Rilevamento annullato: premi Rileva origini per riprovare.";
             }
             discoverSourcesButton.Content = "Rileva origini";
         }
