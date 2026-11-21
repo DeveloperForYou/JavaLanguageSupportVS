@@ -39,6 +39,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly TextBlock projectHeader = Heading("Seleziona un progetto Java", 17);
         private readonly TextBlock projectInfo = CaptionText("Ricerca su Maven Central · sola lettura");
         private readonly TextBlock status = CaptionText("Pronto.");
+        // F4F28-PACKAGE-SOURCES: native configuration, read-only discovery.
+        private readonly Button discoverSourcesButton = ActionButton("Rileva origini");
+        private readonly TextBlock sourcesSummary = CaptionText("Origini: non rilevate");
+        private readonly TextBlock sourcesDetails = CaptionText("");
+        private readonly Expander sourcesExpander = new Expander { Header = "Origini dei pacchetti" };
+        private CancellationTokenSource sourcesCts;
+        private int sourcesGeneration;
+        private JavaPackageSourceSnapshot packageSources;
         private readonly TextBox searchBox = new TextBox();
         private readonly Button searchButton = ActionButton("Cerca");
         private readonly Button cancelButton = ActionButton("Annulla");
@@ -96,6 +104,24 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             projectHeader.Margin = new Thickness(0, 0, 0, 3);
             header.Children.Add(projectHeader);
             header.Children.Add(projectInfo);
+            var sourcesRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+            discoverSourcesButton.IsEnabled = false;
+            sourcesRow.Children.Add(discoverSourcesButton);
+            sourcesSummary.Margin = new Thickness(8, 0, 0, 0);
+            sourcesSummary.VerticalAlignment = VerticalAlignment.Center;
+            sourcesRow.Children.Add(sourcesSummary);
+            header.Children.Add(sourcesRow);
+            ThemeControl(sourcesExpander);
+            sourcesDetails.TextWrapping = TextWrapping.Wrap;
+            sourcesExpander.Content = new ScrollViewer { Content = sourcesDetails, MaxHeight = 135,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            sourcesExpander.Visibility = Visibility.Collapsed;
+            header.Children.Add(sourcesExpander);
+            discoverSourcesButton.Click += (s, e) =>
+            {
+                if (sourcesCts != null) StopSourceDiscovery();
+                else _ = DiscoverSourcesAsync();
+            };
             root.Children.Add(header);
 
             ThemeControl(tabs);
@@ -324,6 +350,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             }
             CancelAll();
             projectFile = newProjectFile;
+            packageSources = null;
+            sourcesSummary.Text = "Origini: non rilevate";
+            sourcesDetails.Text = "";
+            sourcesExpander.IsExpanded = false;
+            sourcesExpander.Visibility = Visibility.Collapsed;
+            discoverSourcesButton.IsEnabled = true;
             query = null;
             currentPage = 1;
             lastPage = null;
@@ -518,28 +550,89 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 foreach (var dep in items)
                 {
                     token.ThrowIfCancellationRequested();
-                    JavaCentralArtifact artifact;
-                    try { artifact = await service.GetArtifactAsync(dep.GroupId, dep.ArtifactId, token); }
+                    // F4F281-UPDATES-METADATA: Solr latestVersion may lag behind
+                    // the Maven repository. Use the same metadata catalog as
+                    // Versioni disponibili, preserving the installed JRE/Android flavor.
+                    JavaCentralPage<JavaCentralVersion> versions;
+                    try { versions = await service.GetVersionsAsync(dep.GroupId, dep.ArtifactId,
+                        1, 50, token); }
                     catch (Exception ex) when (ex is JavaMavenCentralSearchException ||
-                        ex is ArgumentException) { failures++; continue; }
-                    if (artifact != null && !string.IsNullOrWhiteSpace(artifact.LatestVersion) &&
-                        !string.Equals(dep.Version, artifact.LatestVersion, StringComparison.Ordinal))
-                        candidates.Add(new JavaPackageUpdateCandidate(dep, artifact.LatestVersion));
+                        ex is ArgumentException || ex is System.IO.IOException)
+                    { failures++; continue; }
+                    string latest = JavaPackageUpdateSelector.NewestCompatible(dep.Version,
+                        versions.Items.Select(v => v.Version));
+                    if (!string.IsNullOrWhiteSpace(latest))
+                        candidates.Add(new JavaPackageUpdateCandidate(dep, latest));
                 }
                 if (generation != updatesGeneration || token.IsCancellationRequested) return;
                 updatesResults.ItemsSource = candidates;
-                updatesNote.Text = candidates.Count + " versioni differenti trovate. " +
+                updatesNote.Text = candidates.Count + " aggiornamenti stabili individuati. " +
                     (failures > 0 ? failures + " verifiche non riuscite. " : "") +
-                    "Non e' un confronto semantico: Maven Central puo' restituire " +
-                    "versioni pre-release o inferiori. Nessuna modifica al progetto.";
+                    "Confronto indicativo delle prime 50 versioni in catalogo; " +
+                    "versioni dinamiche e vincoli Gradle non valutati. Nessuna modifica al progetto.";
             }
             catch (OperationCanceledException)
             { if (generation == updatesGeneration) updatesNote.Text = "Verifica annullata."; }
             finally { if (generation == updatesGeneration) updateButton.IsEnabled = true; }
         }
 
+        private async Task DiscoverSourcesAsync()
+        {
+            if (string.IsNullOrWhiteSpace(projectFile) || installed == null) return;
+            var path = projectFile;
+            var backend = Convert.ToString(installed.Backend);
+            int generation = ++sourcesGeneration;
+            ReplaceToken(ref sourcesCts);
+            var token = sourcesCts.Token;
+            packageSources = null;
+            discoverSourcesButton.Content = "Annulla rilevamento";
+            sourcesSummary.Text = "Rilevamento origini in corso...";
+            sourcesDetails.Text = "";
+            sourcesExpander.Visibility = Visibility.Collapsed;
+            try
+            {
+                var snapshot = await Task.Run(() => JavaPackageSourceDiscovery.Discover(path, backend, token), token);
+                if (generation != sourcesGeneration || token.IsCancellationRequested) return;
+                packageSources = snapshot;
+                sourcesSummary.Text = "Origini: " + snapshot.Sources.Count +
+                    (snapshot.Warnings.Count > 0 ? " (vedi note)" : "");
+                sourcesDetails.Text = snapshot.Describe();
+                sourcesExpander.Visibility = Visibility.Visible;
+                sourcesExpander.IsExpanded = true;
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception)
+            {
+                if (generation != sourcesGeneration) return;
+                sourcesSummary.Text = "Origini non rilevate";
+                sourcesDetails.Text = "Configurazione non disponibile. Verificare i file nativi del progetto.";
+                sourcesExpander.Visibility = Visibility.Visible;
+                sourcesExpander.IsExpanded = true;
+            }
+            finally
+            {
+                if (generation == sourcesGeneration)
+                {
+                    Cancel(ref sourcesCts);
+                    discoverSourcesButton.Content = "Rileva origini";
+                }
+            }
+        }
+
+        private void StopSourceDiscovery()
+        {
+            ++sourcesGeneration;
+            if (sourcesCts != null)
+            {
+                Cancel(ref sourcesCts);
+                sourcesSummary.Text = "Rilevamento annullato";
+            }
+            discoverSourcesButton.Content = "Rileva origini";
+        }
+
         private void CancelAll()
         {
+            StopSourceDiscovery();
             ++searchGeneration; ++versionsGeneration; ++updatesGeneration;
             Cancel(ref searchCts); Cancel(ref versionsCts); Cancel(ref updatesCts);
             SetSearchBusy(false);

@@ -1,1 +1,13 @@
 rootProject.name = 'java-cps-gradle-dependencies'
+dependencyResolutionManagement {
+    repositoriesMode = RepositoriesMode.PREFER_SETTINGS
+
+    repositories {
+        mavenCentral()
+
+        maven {
+            name = "Spring Milestones"
+            url = uri("https://repo.spring.io/milestone/")
+        }
+    }
+}
