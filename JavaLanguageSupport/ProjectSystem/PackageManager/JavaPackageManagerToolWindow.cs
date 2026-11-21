@@ -33,6 +33,21 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         }
     }
 
+    // F4F291-RESPONSIVE-VERSION-ORIGINS: immutable UI projection.
+    // Keep JavaCentralVersion and the repository catalog unmodified.
+    internal sealed class JavaPackageVersionDisplay
+    {
+        internal JavaPackageVersionDisplay(JavaCentralVersion version, string origins)
+        {
+            Version = version.Version;
+            Origins = string.IsNullOrWhiteSpace(origins) ? "Origine non indicata" : origins;
+        }
+        public string Version { get; private set; }
+        public string Origins { get; private set; }
+        public string OriginSummary { get { return "Disponibile su: " + Origins; } }
+        public string FullDescription { get { return Version + "\n" + OriginSummary; } }
+    }
+
     internal sealed class JavaPackageManagerControl : UserControl
     {
         private readonly JavaMavenCentralSearchService service = new JavaMavenCentralSearchService();
@@ -44,9 +59,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly TextBlock projectInfo = CaptionText("Ricerca su Maven Central · sola lettura");
         private readonly TextBlock status = CaptionText("Pronto.");
         // F4F284-PROJECT-TARGET: explicit per-solution selection, never follow editor focus.
-        private readonly ComboBox projectSelector = new ComboBox { MinWidth = 220, MaxWidth = 680,
+        private readonly ComboBox projectSelector = new ComboBox { MinWidth = 125, MaxWidth = 680,
             VerticalContentAlignment = VerticalAlignment.Center };
-        private readonly Button refreshProjectsButton = ActionButton("Aggiorna progetti");
+        private readonly Button refreshProjectsButton = ActionButton("Aggiorna");
         private bool suppressProjectSelection;
         // F4F28-PACKAGE-SOURCES: native configuration, read-only discovery.
         private readonly Button discoverSourcesButton = ActionButton("Rileva origini");
@@ -110,8 +125,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            var header = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
-            projectHeader.Margin = new Thickness(0, 0, 0, 3);
+            // F4F293-DETAILS-ON-DEMAND: do not repeat the project name above its selector.
+            var header = new StackPanel { Margin = new Thickness(0, 0, 0, 7) };
+            projectHeader.Visibility = Visibility.Collapsed;
             header.Children.Add(projectHeader);
             var projectRow = new Grid { Margin = new Thickness(0, 5, 0, 7) };
             projectRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -131,14 +147,20 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             projectRow.Children.Add(refreshProjectsButton);
             header.Children.Add(projectRow);
             header.Children.Add(projectInfo);
-            var sourcesRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+            var sourcesRow = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+            sourcesRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            sourcesRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             discoverSourcesButton.IsEnabled = false;
             sourcesRow.Children.Add(discoverSourcesButton);
             sourcesSummary.Margin = new Thickness(8, 0, 0, 0);
             sourcesSummary.VerticalAlignment = VerticalAlignment.Center;
+            sourcesSummary.TextTrimming = TextTrimming.CharacterEllipsis;
+            sourcesSummary.ToolTip = "Espandi Origini dei pacchetti per leggere i dettagli";
+            Grid.SetColumn(sourcesSummary, 1);
             sourcesRow.Children.Add(sourcesSummary);
             header.Children.Add(sourcesRow);
             ThemeControl(sourcesExpander);
+            sourcesExpander.ToolTip = "Visualizza i repository rilevati (senza occupare spazio quando è chiuso)";
             sourcesDetails.TextWrapping = TextWrapping.Wrap;
             sourcesExpander.Content = new ScrollViewer { Content = sourcesDetails, MaxHeight = 135,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -163,7 +185,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             Grid.SetRow(statusPanel, 2);
             root.Children.Add(statusPanel);
             Content = root;
-            MinWidth = 470;
+            MinWidth = 320;
             MinHeight = 310;
 
             projectSelector.SelectionChanged += (s, e) =>
@@ -186,11 +208,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             browseResults.SelectionChanged += (s, e) => { _ = LoadVersionsAsync(1, true); };
             versionPicker.SelectionChanged += (s, e) =>
             {
-                var picked = versionPicker.SelectedItem as JavaCentralVersion;
-                string sources;
-                versionOriginInfo.Text = picked != null && lastCatalog != null &&
-                    lastCatalog.VersionOrigins.TryGetValue(picked.Version, out sources)
-                        ? "Disponibile su: " + sources : "";
+                var picked = versionPicker.SelectedItem as JavaPackageVersionDisplay;
+                versionOriginInfo.Text = picked == null ? "" : picked.OriginSummary;
             };
             previousVersionsButton.Click += (s, e) =>
             {
@@ -224,13 +243,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private FrameworkElement MakeBrowse()
         {
-            var grid = new Grid { Margin = new Thickness(8, 12, 8, 8) };
+            var grid = new Grid { Margin = new Thickness(8, 6, 8, 6) };
             ThemeBackground(grid);
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            var toolbar = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+            var toolbar = new Grid { Margin = new Thickness(0, 0, 0, 6) };
             toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -251,32 +270,89 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             grid.Children.Add(toolbar);
 
             var content = new Grid();
-            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star), MinWidth = 165 });
+            // Responsive split: two columns when wide, vertically stacked on narrow docks.
+            // Do not impose column MinWidth values that exceed the docked toolwindow width.
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.8, GridUnitType.Star) });
             content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(7) });
-            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star), MinWidth = 190 });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3.2, GridUnitType.Star) });
+            content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0) });
+            content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0) });
             DecorateList(browseResults, "Coordinate");
             content.Children.Add(browseResults);
+            // F4F292-ADAPTIVE-DETAILS-LAYOUT: a visible, draggable divider.
             var splitter = new GridSplitter
             {
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
-                Width = 5, Background = Brushes.Transparent
+                Width = 6,
+                ResizeDirection = GridResizeDirection.Columns,
+                ResizeBehavior = GridResizeBehavior.PreviousAndNext
             };
+            splitter.SetResourceReference(Control.BackgroundProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
             Grid.SetColumn(splitter, 1);
             content.Children.Add(splitter);
-            var right = new StackPanel { Margin = new Thickness(12, 0, 0, 0) };
-            right.Children.Add(Heading("Dettagli pacchetto", 15));
+
+            // F4F293-DETAILS-ON-DEMAND: prioritize the version list. Metadata
+            // is available on demand rather than clipped into a 38-DIP strip.
+            var right = new Grid { Margin = new Thickness(12, 0, 0, 0) };
+            right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            right.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var versionHeader = new Grid { Margin = new Thickness(0, 0, 0, 5) };
+            versionHeader.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = new GridLength(1, GridUnitType.Star) });
+            versionHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var versionsHeading = Heading("Versioni disponibili e origini", 13);
+            versionsHeading.VerticalAlignment = VerticalAlignment.Center;
+            versionsHeading.TextTrimming = TextTrimming.CharacterEllipsis;
+            versionHeader.Children.Add(versionsHeading);
+            var detailsToggle = ActionButton("Dettagli ▾");
+            detailsToggle.ToolTip = "Mostra o nasconde i metadati completi del pacchetto";
+            detailsToggle.Margin = new Thickness(9, 0, 0, 0);
+            detailsToggle.Padding = new Thickness(8, 3, 8, 3);
+            Grid.SetColumn(detailsToggle, 1);
+            versionHeader.Children.Add(detailsToggle);
+            Grid.SetRow(versionHeader, 0);
+            right.Children.Add(versionHeader);
+
             details.TextWrapping = TextWrapping.Wrap;
-            details.Margin = new Thickness(0, 10, 0, 13);
-            right.Children.Add(details);
-            right.Children.Add(Heading("Versioni disponibili", 13));
-            // F4.F.2.4: a disabled WPF ListBox can paint a white rectangle
-            // under VS Dark. Keep it enabled and overlay a themed empty state.
-            var versionHost = new Grid { Margin = new Thickness(0, 6, 0, 8),
-                Height = 158, MinHeight = 84 };
+            details.Margin = new Thickness(0);
+            details.SetBinding(FrameworkElement.ToolTipProperty,
+                new System.Windows.Data.Binding("Text") { Source = details });
+            var detailsScroll = new ScrollViewer
+            {
+                Content = details,
+                MaxHeight = 112,
+                Margin = new Thickness(0, 0, 0, 8),
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Visibility = Visibility.Collapsed
+            };
+            Grid.SetRow(detailsScroll, 1);
+            right.Children.Add(detailsScroll);
+            detailsToggle.Click += (sender, args) =>
+            {
+                bool show = detailsScroll.Visibility != Visibility.Visible;
+                detailsScroll.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+                detailsToggle.Content = show ? "Dettagli ▴" : "Dettagli ▾";
+            };
+            // Manual toggle: details remain accessible even in a short dock.
+            // The list automatically gets back its space when details are closed.
+
+            var versionHost = new Grid { MinHeight = 0, Margin = new Thickness(0, 0, 0, 3) };
             versionPicker.Margin = new Thickness(0);
             versionPicker.IsEnabled = true;
-            DecorateList(versionPicker, "Version");
+            DecorateList(versionPicker, null);
+            versionPicker.ItemTemplate = VersionRowTemplate();
+            versionPicker.ToolTip = "Ogni versione indica le origini che la contengono";
+            ScrollViewer.SetVerticalScrollBarVisibility(versionPicker, ScrollBarVisibility.Auto);
+            ScrollViewer.SetHorizontalScrollBarVisibility(versionPicker, ScrollBarVisibility.Disabled);
+            VirtualizingPanel.SetIsVirtualizing(versionPicker, true);
+            VirtualizingPanel.SetVirtualizationMode(versionPicker, VirtualizationMode.Recycling);
             versionHost.Children.Add(versionPicker);
             versionEmptyState.Margin = new Thickness(15, 12, 15, 12);
             versionEmptyState.VerticalAlignment = VerticalAlignment.Center;
@@ -284,13 +360,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             versionEmptyState.TextAlignment = TextAlignment.Center;
             versionEmptyState.IsHitTestVisible = false;
             versionHost.Children.Add(versionEmptyState);
+            Grid.SetRow(versionHost, 2);
             right.Children.Add(versionHost);
-            // Separate pager: package search pagination is independent of version pagination.
+
             var versionsPager = new WrapPanel
             {
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Left,
-                Margin = new Thickness(0, 2, 0, 8)
+                Margin = new Thickness(0, 3, 0, 2)
             };
             previousVersionsButton.Margin = new Thickness(0, 0, 8, 0);
             versionsPageInfo.Margin = new Thickness(0, 0, 8, 0);
@@ -300,35 +377,41 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             versionsPager.Children.Add(previousVersionsButton);
             versionsPager.Children.Add(versionsPageInfo);
             versionsPager.Children.Add(nextVersionsButton);
-            right.Children.Add(versionsPager);
-            versionInfo.TextWrapping = TextWrapping.Wrap;
-            right.Children.Add(versionInfo);
-            versionOriginInfo.TextWrapping = TextWrapping.Wrap;
-            versionOriginInfo.Margin = new Thickness(0, 5, 0, 0);
-            right.Children.Add(versionOriginInfo);
-            retryVersionsButton.Margin = new Thickness(0, 6, 0, 0);
+            // Pager moved to the common bottom bar; versions keep all available height.
+
+            // Status stays to one line: detailed warnings remain available in
+            // a tooltip, while all remaining space belongs to version rows.
+            versionInfo.TextWrapping = TextWrapping.NoWrap;
+            versionInfo.TextTrimming = TextTrimming.CharacterEllipsis;
+            versionInfo.VerticalAlignment = VerticalAlignment.Center;
+            versionInfo.Margin = new Thickness(12, 0, 0, 0);
+            versionInfo.SetBinding(FrameworkElement.ToolTipProperty,
+                new System.Windows.Data.Binding("Text") { Source = versionInfo });
+            // The version status joins its pager in the common bottom bar.
+            retryVersionsButton.Margin = new Thickness(0, 3, 0, 0);
             retryVersionsButton.HorizontalAlignment = HorizontalAlignment.Left;
             retryVersionsButton.Visibility = Visibility.Collapsed;
+            Grid.SetRow(retryVersionsButton, 3);
             right.Children.Add(retryVersionsButton);
-            var readOnly = CaptionText("Installazione, aggiornamento e rimozione arriveranno in F4.F.3–F4.F.5.");
-            readOnly.Margin = new Thickness(0, 18, 0, 0);
-            readOnly.TextWrapping = TextWrapping.Wrap;
-            right.Children.Add(readOnly);
-            var rightScroll = new ScrollViewer
-            {
-                Content = right,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-            };
-            Grid.SetColumn(rightScroll, 2);
-            content.Children.Add(rightScroll);
+            Grid.SetColumn(right, 2);
+            content.Children.Add(right);
             Grid.SetRow(content, 1);
             grid.Children.Add(content);
+            bool stacked = false;
+            content.SizeChanged += (sender, args) =>
+            {
+                // Stacking two panes in a *short* dock produces two unusably
+                // small lists. Stack only when there is enough vertical room.
+                bool wantStacked = args.NewSize.Width < 700 && args.NewSize.Height >= 385;
+                if (wantStacked == stacked) return;
+                stacked = wantStacked;
+                ApplyResponsiveBrowseLayout(content, browseResults, right, splitter, stacked);
+            };
 
             var pager = new StackPanel
             {
                 Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left,
-                Margin = new Thickness(0, 10, 0, 0)
+                Margin = new Thickness(0, 6, 0, 0)
             };
             previousButton.Margin = new Thickness(0, 0, 10, 0);
             pageInfo.VerticalAlignment = VerticalAlignment.Center;
@@ -336,8 +419,73 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             pager.Children.Add(previousButton);
             pager.Children.Add(pageInfo);
             pager.Children.Add(nextButton);
-            Grid.SetRow(pager, 2);
-            grid.Children.Add(pager);
+
+            // F4F294-SHARED-PAGERS: both page controls share one bottom row,
+            // independent of the height of version metadata and versionInfo.
+            var pagerBar = new Grid();
+            pagerBar.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = new GridLength(1.8, GridUnitType.Star) });
+            pagerBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+            pagerBar.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = new GridLength(3.2, GridUnitType.Star) });
+            pagerBar.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            pagerBar.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0) });
+            Grid.SetColumn(pager, 0);
+            Grid.SetRow(pager, 0);
+            pagerBar.Children.Add(pager);
+            // F4F295-VERSION-STATUS-IN-PAGER: version range is on the SAME
+            // row as the version navigation. The second column consumes only
+            // remaining space and trims text (full content remains a tooltip).
+            var versionPagerFooter = new Grid { Margin = new Thickness(12, 6, 0, 0) };
+            versionPagerFooter.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = GridLength.Auto });
+            versionPagerFooter.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = new GridLength(1, GridUnitType.Star) });
+            versionsPager.Margin = new Thickness(0);
+            versionsPager.VerticalAlignment = VerticalAlignment.Center;
+            versionPagerFooter.Children.Add(versionsPager);
+            Grid.SetColumn(versionInfo, 1);
+            versionPagerFooter.Children.Add(versionInfo);
+            Grid.SetColumn(versionPagerFooter, 2);
+            Grid.SetRow(versionPagerFooter, 0);
+            pagerBar.Children.Add(versionPagerFooter);
+            Grid.SetRow(pagerBar, 2);
+            grid.Children.Add(pagerBar);
+
+            // Follow the actual left-column width, including splitter drags.
+            // Narrow docks or a narrow left splitter pane use two pager rows.
+            Action syncPagerLayout = () =>
+            {
+                bool narrow = grid.ActualWidth < 860 ||
+                    (browseResults.ActualWidth > 0 && browseResults.ActualWidth < 285);
+                pagerBar.RowDefinitions[1].Height = narrow ? GridLength.Auto : new GridLength(0);
+                Grid.SetColumn(pager, 0);
+                Grid.SetColumnSpan(pager, narrow ? 3 : 1);
+                Grid.SetRow(pager, 0);
+                Grid.SetColumn(versionPagerFooter, narrow ? 0 : 2);
+                Grid.SetColumnSpan(versionPagerFooter, narrow ? 3 : 1);
+                Grid.SetRow(versionPagerFooter, narrow ? 1 : 0);
+                versionPagerFooter.Margin = narrow
+                    ? new Thickness(0, 4, 0, 0)
+                    : new Thickness(12, 6, 0, 0);
+                if (narrow)
+                {
+                    pagerBar.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+                    pagerBar.ColumnDefinitions[1].Width = new GridLength(0);
+                    pagerBar.ColumnDefinitions[2].Width = new GridLength(0);
+                }
+                else
+                {
+                    double actualLeft = browseResults.ActualWidth;
+                    pagerBar.ColumnDefinitions[0].Width = actualLeft > 0
+                        ? new GridLength(actualLeft, GridUnitType.Pixel)
+                        : new GridLength(1.8, GridUnitType.Star);
+                    pagerBar.ColumnDefinitions[1].Width = new GridLength(6);
+                    pagerBar.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
+                }
+            };
+            browseResults.SizeChanged += (sender, args) => syncPagerLayout();
+            grid.SizeChanged += (sender, args) => syncPagerLayout();
             return grid;
         }
 
@@ -648,8 +796,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 var versions = new JavaCentralPage<JavaCentralVersion>(items, catalog.Versions.Count,
                     page, VersionPageSize);
                 lastVersionsPage = versions;
-                versionPicker.ItemsSource = versions.Items.ToList();
-                versionPicker.IsHitTestVisible = versions.Items.Count > 0;
+                var rows = versions.Items.Select(v =>
+                {
+                    string originNames;
+                    catalog.VersionOrigins.TryGetValue(v.Version, out originNames);
+                    return new JavaPackageVersionDisplay(v, originNames);
+                }).ToList();
+                versionPicker.ItemsSource = rows;
+                versionPicker.IsHitTestVisible = rows.Count > 0;
                 ShowVersionPlaceholder(versions.Items.Count == 0
                     ? "Nessuna versione disponibile in questa pagina." : null);
                 if (versions.Items.Count > 0) versionPicker.SelectedIndex = 0;
@@ -763,7 +917,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     (snapshot.Warnings.Count > 0 ? " (vedi note)" : "");
                 sourcesDetails.Text = snapshot.Describe();
                 sourcesExpander.Visibility = Visibility.Visible;
-                sourcesExpander.IsExpanded = true;
+                // Keep the source list available on demand: otherwise the expanded
+                // header consumes most of a short docked window.
+                sourcesExpander.IsExpanded = false;
                 status.Text = "Origini rilevate. Ricerca testuale: Maven Central; coordinate: tutte le origini attive.";
             }
             catch (OperationCanceledException) { }
@@ -858,6 +1014,77 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty,
                 HorizontalAlignment.Stretch));
             list.ItemContainerStyle = style;
+        }
+
+        private static void ApplyResponsiveBrowseLayout(Grid host, ListBox results,
+            FrameworkElement detailsPanel, GridSplitter splitter, bool stacked)
+        {
+            if (stacked)
+            {
+                host.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+                host.ColumnDefinitions[1].Width = new GridLength(0);
+                host.ColumnDefinitions[2].Width = new GridLength(0);
+                host.ColumnDefinitions[0].MinWidth = 0;
+                host.ColumnDefinitions[2].MinWidth = 0;
+                host.RowDefinitions[0].Height = new GridLength(2, GridUnitType.Star);
+                host.RowDefinitions[0].MinHeight = 65;
+                host.RowDefinitions[1].Height = new GridLength(6);
+                host.RowDefinitions[2].Height = new GridLength(3, GridUnitType.Star);
+                host.RowDefinitions[2].MinHeight = 135;
+                Grid.SetColumn(results, 0); Grid.SetRow(results, 0);
+                Grid.SetColumn(detailsPanel, 0); Grid.SetRow(detailsPanel, 2);
+                detailsPanel.Margin = new Thickness(0, 8, 0, 0);
+                Grid.SetColumn(splitter, 0); Grid.SetRow(splitter, 1);
+                splitter.ResizeDirection = GridResizeDirection.Rows;
+                splitter.ResizeBehavior = GridResizeBehavior.PreviousAndNext;
+                splitter.Width = double.NaN; splitter.Height = 6;
+            }
+            else
+            {
+                host.RowDefinitions[0].MinHeight = 0;
+                host.RowDefinitions[2].MinHeight = 0;
+                host.ColumnDefinitions[0].Width = new GridLength(1.8, GridUnitType.Star);
+                host.ColumnDefinitions[0].MinWidth = 90;
+                host.ColumnDefinitions[1].Width = new GridLength(6);
+                host.ColumnDefinitions[2].Width = new GridLength(3.2, GridUnitType.Star);
+                host.ColumnDefinitions[2].MinWidth = 175;
+                host.RowDefinitions[0].Height = new GridLength(1, GridUnitType.Star);
+                host.RowDefinitions[1].Height = new GridLength(0);
+                host.RowDefinitions[2].Height = new GridLength(0);
+                Grid.SetColumn(results, 0); Grid.SetRow(results, 0);
+                Grid.SetColumn(detailsPanel, 2); Grid.SetRow(detailsPanel, 0);
+                detailsPanel.Margin = new Thickness(12, 0, 0, 0);
+                Grid.SetColumn(splitter, 1); Grid.SetRow(splitter, 0);
+                splitter.ResizeDirection = GridResizeDirection.Columns;
+                splitter.ResizeBehavior = GridResizeBehavior.PreviousAndNext;
+                splitter.Width = 6; splitter.Height = double.NaN;
+            }
+        }
+
+        private static DataTemplate VersionRowTemplate()
+        {
+            var row = new FrameworkElementFactory(typeof(StackPanel));
+            row.SetValue(StackPanel.OrientationProperty, Orientation.Vertical);
+            row.SetBinding(FrameworkElement.ToolTipProperty,
+                new System.Windows.Data.Binding("FullDescription"));
+            var version = new FrameworkElementFactory(typeof(TextBlock));
+            version.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Version"));
+            version.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            version.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
+            version.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            row.AppendChild(version);
+            var origins = new FrameworkElementFactory(typeof(TextBlock));
+            origins.SetBinding(TextBlock.TextProperty,
+                new System.Windows.Data.Binding("OriginSummary"));
+            origins.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            origins.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            origins.SetValue(TextBlock.FontSizeProperty, 11.0);
+            origins.SetValue(TextBlock.OpacityProperty, 0.80);
+            origins.SetValue(TextBlock.MarginProperty, new Thickness(0, 2, 0, 0));
+            row.AppendChild(origins);
+            return new DataTemplate { VisualTree = row };
         }
 
         private static DataTemplate ListItemTemplate(string property)
