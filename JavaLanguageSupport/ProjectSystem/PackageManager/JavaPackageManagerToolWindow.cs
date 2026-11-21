@@ -36,6 +36,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
     internal sealed class JavaPackageManagerControl : UserControl
     {
         private readonly JavaMavenCentralSearchService service = new JavaMavenCentralSearchService();
+        // F4F29-MULTI-REPOSITORY: active origins, metadata lookup, deduplication.
+        private readonly JavaPackageMultiRepositorySearchService repositoryService =
+            new JavaPackageMultiRepositorySearchService();
+        private JavaRepositoryCatalogResult lastCatalog;
         private readonly TextBlock projectHeader = Heading("Seleziona un progetto Java", 17);
         private readonly TextBlock projectInfo = CaptionText("Ricerca su Maven Central · sola lettura");
         private readonly TextBlock status = CaptionText("Pronto.");
@@ -62,6 +66,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly TextBlock details = CaptionText("Seleziona una libreria per vedere i dettagli.");
         private readonly ListBox versionPicker = new ListBox(); // F4F21-THEMED-VERSIONS
         private readonly TextBlock versionInfo = CaptionText("");
+        private readonly TextBlock versionOriginInfo = CaptionText("");
         // F4F26-ALL-VERSIONS-PAGINATION: 30 results per request, never cap the list at page 1.
         private const int VersionPageSize = 30;
         private readonly Button previousVersionsButton = ActionButton("◀");
@@ -179,6 +184,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             previousButton.Click += (s, e) => { if (currentPage > 1) _ = StartSearchAsync(currentPage - 1); };
             nextButton.Click += (s, e) => { if (lastPage != null && lastPage.HasNextPage) _ = StartSearchAsync(currentPage + 1); };
             browseResults.SelectionChanged += (s, e) => { _ = LoadVersionsAsync(1, true); };
+            versionPicker.SelectionChanged += (s, e) =>
+            {
+                var picked = versionPicker.SelectedItem as JavaCentralVersion;
+                string sources;
+                versionOriginInfo.Text = picked != null && lastCatalog != null &&
+                    lastCatalog.VersionOrigins.TryGetValue(picked.Version, out sources)
+                        ? "Disponibile su: " + sources : "";
+            };
             previousVersionsButton.Click += (s, e) =>
             {
                 if (lastVersionsPage != null && lastVersionsPage.Page > 1)
@@ -290,6 +303,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             right.Children.Add(versionsPager);
             versionInfo.TextWrapping = TextWrapping.Wrap;
             right.Children.Add(versionInfo);
+            versionOriginInfo.TextWrapping = TextWrapping.Wrap;
+            versionOriginInfo.Margin = new Thickness(0, 5, 0, 0);
+            right.Children.Add(versionOriginInfo);
             retryVersionsButton.Margin = new Thickness(0, 6, 0, 0);
             retryVersionsButton.HorizontalAlignment = HorizontalAlignment.Left;
             retryVersionsButton.Visibility = Visibility.Collapsed;
@@ -389,6 +405,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             CancelAll();
             projectFile = newProjectFile;
             packageSources = null;
+            lastCatalog = null;
+            versionOriginInfo.Text = "";
             sourcesSummary.Text = "Origini: non rilevate";
             sourcesDetails.Text = "";
             sourcesExpander.IsExpanded = false;
@@ -409,7 +427,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             projectHeader.Text = System.IO.Path.GetFileNameWithoutExtension(projectFile);
             RefreshInstalled();
             tabs.SelectedIndex = 0;
-            status.Text = "Pronto. Inserisci una ricerca su Maven Central.";
+            status.Text = "Rilevamento delle origini del progetto...";
+            if (installed != null) _ = DiscoverSourcesAsync();
         }
 
         private void RefreshProjectChoices(string requested, bool fromProjectContext)
@@ -446,6 +465,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             projectFile = null;
             installed = null;
             packageSources = null;
+            lastCatalog = null;
+            versionOriginInfo.Text = "";
             query = null;
             currentPage = 1;
             lastPage = null;
@@ -483,7 +504,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 installedResults.ItemsSource = installed.Items.ToList();
                 installedNote.Text = installed.Note;
                 projectInfo.Text = installed.Backend + " · " + installed.Items.Count +
-                    " dipendenze dirette · Maven Central (sola lettura)";
+                    " dipendenze dirette · repository del progetto (sola lettura)";
                 updatesNote.Text = "Il confronto indica versioni diverse, non garantisce un " +
                     "aggiornamento semantico. Non vengono modificati file di progetto.";
             }
@@ -500,6 +521,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private async Task StartSearchAsync(int page)
         {
             if (string.IsNullOrWhiteSpace(projectFile)) return;
+            if (packageSources == null)
+            { status.Text = "Attendere il rilevamento delle origini (oppure premere Rileva origini)."; return; }
             string search = searchBox.Text.Trim();
             if (search.Length == 0) { status.Text = "Inserire un termine di ricerca."; return; }
             if (!string.Equals(query, search, StringComparison.Ordinal)) page = 1;
@@ -508,6 +531,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             ReplaceToken(ref searchCts);
             ReplaceToken(ref versionsCts);
             ++versionsGeneration;
+            lastCatalog = null;
+            versionOriginInfo.Text = "";
             ResetVersionsPaging();
             versionPicker.ItemsSource = null;
             versionPicker.IsHitTestVisible = false;
@@ -517,25 +542,55 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             versionInfo.Text = "";
             var token = searchCts.Token;
             SetSearchBusy(true);
-            status.Text = "Ricerca in corso su Maven Central...";
+            status.Text = "Ricerca nelle origini attive...";
             try
             {
-                var found = await service.SearchAsync(search, page, 20, token);
+                JavaCentralPage<JavaCentralArtifact> found;
+                string g, a;
+                string note;
+                if (JavaPackageMultiRepositorySearchService.TryCoordinate(search, out g, out a))
+                {
+                    var catalog = await repositoryService.GetCatalogAsync(g, a,
+                        packageSources.Sources, token);
+                    if (generation != searchGeneration || token.IsCancellationRequested) return;
+                    var artifacts = new List<JavaCentralArtifact>();
+                    if (catalog.Versions.Count != 0)
+                        artifacts.Add(new JavaCentralArtifact(g, a, catalog.Versions[0], "jar",
+                            catalog.Versions.Count, null, new string[0]));
+                    found = new JavaCentralPage<JavaCentralArtifact>(artifacts, artifacts.Count, 1, 20);
+                    note = "Coordinate cercate in " + catalog.RepositoriesQueried + " origini. " +
+                        catalog.WarningText;
+                }
+                else
+                {
+                    // Ordinary Maven repositories have no portable full-text search API.
+                    if (!packageSources.Sources.Any(IsCentralRepository))
+                    {
+                        status.Text = "Ricerca testuale non disponibile: Maven Central non è un'origine attiva. " +
+                            "Usare groupId:artifactId per i repository personalizzati.";
+                        browseResults.ItemsSource = null;
+                        pageInfo.Text = "";
+                        return;
+                    }
+                    found = await service.SearchAsync(search, page, 20, token);
+                    note = "Ricerca testuale su Maven Central. Per le altre origini usare groupId:artifactId.";
+                }
                 if (generation != searchGeneration || token.IsCancellationRequested) return;
                 lastPage = found;
                 currentPage = page;
                 browseResults.ItemsSource = found.Items.ToList();
-                // First result becomes visible and details/versions load immediately.
                 if (found.Items.Count > 0) browseResults.SelectedIndex = 0;
                 pageInfo.Text = "Pagina " + page + " · " + found.TotalCount + " risultati";
                 previousButton.IsEnabled = currentPage > 1;
                 nextButton.IsEnabled = found.HasNextPage;
-                status.Text = found.Items.Count == 0 ? "Nessuna libreria trovata." :
-                    "Ricerca completata: " + found.TotalCount + " risultati.";
+                status.Text = (found.Items.Count == 0 ? "Nessuna libreria trovata. " :
+                    "Ricerca completata. ") + note;
             }
-            catch (OperationCanceledException) { if (generation == searchGeneration) status.Text = "Ricerca annullata."; }
+            catch (OperationCanceledException)
+            { if (generation == searchGeneration) status.Text = "Ricerca annullata."; }
             catch (Exception ex) when (ex is JavaMavenCentralSearchException ||
-                ex is ArgumentException || ex is ArgumentOutOfRangeException)
+                ex is ArgumentException || ex is ArgumentOutOfRangeException ||
+                ex is System.IO.IOException)
             { if (generation == searchGeneration) status.Text = "Ricerca: " + ex.Message; }
             finally { if (generation == searchGeneration) SetSearchBusy(false); }
         }
@@ -554,9 +609,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var artifact = browseResults.SelectedItem as JavaCentralArtifact;
             int generation = ++versionsGeneration;
             ReplaceToken(ref versionsCts);
-            // Keep the requested page on failures, so Retry does not silently jump to page 1.
             requestedVersionsPage = page;
             lastVersionsPage = null;
+            lastCatalog = null;
+            versionOriginInfo.Text = "";
             previousVersionsButton.IsEnabled = false;
             nextVersionsButton.IsEnabled = false;
             versionsPageInfo.Text = artifact == null ? "" : "Pagina " + page + " · caricamento...";
@@ -570,21 +626,27 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 versionInfo.Text = "";
                 return;
             }
-            ShowVersionPlaceholder("Caricamento versioni...");
-            details.Text = artifact.Coordinate + "\nUltima versione: " + artifact.LatestVersion +
-                "\nTipo: " + artifact.Packaging + "\nVersioni pubblicate: " + artifact.VersionCount +
-                "\nPubblicazione: " + (artifact.PublishedUtc.HasValue
-                    ? artifact.PublishedUtc.Value.ToString("yyyy-MM-dd") : "n/d");
+            if (packageSources == null)
+            { ShowVersionPlaceholder("Attendere il rilevamento delle origini."); return; }
+            ShowVersionPlaceholder("Caricamento versioni dai repository attivi...");
+            details.Text = artifact.Coordinate + "\nUltima versione catalogata: " + artifact.LatestVersion +
+                "\nVersioni disponibili: " + artifact.VersionCount +
+                "\nOrigini: " + packageSources.Sources.Count + " configurate";
             versionInfo.Text = "Caricamento pagina " + page + "...";
             var token = versionsCts.Token;
             try
             {
-                // Only a newly selected artifact is debounced; page buttons should respond immediately.
-                if (debounceSelection)
-                    await Task.Delay(300, token);
-                var versions = await service.GetVersionsAsync(artifact.GroupId,
-                    artifact.ArtifactId, page, VersionPageSize, token);
+                if (debounceSelection) await Task.Delay(300, token);
+                var catalog = await repositoryService.GetCatalogAsync(artifact.GroupId,
+                    artifact.ArtifactId, packageSources.Sources, token);
                 if (generation != versionsGeneration || token.IsCancellationRequested) return;
+                lastCatalog = catalog;
+                int offset = checked((page - 1) * VersionPageSize);
+                var items = catalog.Versions.Skip(offset).Take(VersionPageSize)
+                    .Select(v => new JavaCentralVersion(artifact.GroupId, artifact.ArtifactId,
+                        v, "jar", null, new string[0])).ToList();
+                var versions = new JavaCentralPage<JavaCentralVersion>(items, catalog.Versions.Count,
+                    page, VersionPageSize);
                 lastVersionsPage = versions;
                 versionPicker.ItemsSource = versions.Items.ToList();
                 versionPicker.IsHitTestVisible = versions.Items.Count > 0;
@@ -596,24 +658,19 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 versionsPageInfo.Text = "Pagina " + page + " / " + totalPages;
                 previousVersionsButton.IsEnabled = page > 1;
                 nextVersionsButton.IsEnabled = versions.HasNextPage;
-                long first = versions.Items.Count == 0 ? 0 :
-                    (long)(page - 1) * VersionPageSize + 1;
-                long last = versions.Items.Count == 0 ? 0 :
-                    first + versions.Items.Count - 1;
-                versionInfo.Text = "Versioni " + first + "–" + last +
-                    " di " + versions.TotalCount + " · " + VersionPageSize + " per pagina";
+                long first = versions.Items.Count == 0 ? 0 : (long)(page - 1) * VersionPageSize + 1;
+                long last = versions.Items.Count == 0 ? 0 : first + versions.Items.Count - 1;
+                versionInfo.Text = "Versioni " + first + "–" + last + " di " + versions.TotalCount +
+                    " · Origini consultate: " + catalog.RepositoriesQueried +
+                    (catalog.Warnings.Count > 0 ? "\n" + catalog.WarningText : "");
             }
             catch (OperationCanceledException)
             {
                 if (generation == versionsGeneration)
-                {
-                    ShowVersionPlaceholder("Caricamento annullato.");
-                    versionInfo.Text = "";
-                    versionsPageInfo.Text = "";
-                }
+                { ShowVersionPlaceholder("Caricamento annullato."); versionInfo.Text = ""; versionsPageInfo.Text = ""; }
             }
-            catch (Exception ex) when (ex is JavaMavenCentralSearchException ||
-                ex is ArgumentException || ex is ArgumentOutOfRangeException)
+            catch (Exception ex) when (ex is ArgumentException || ex is ArgumentOutOfRangeException ||
+                ex is System.IO.IOException)
             {
                 if (generation == versionsGeneration)
                 {
@@ -629,12 +686,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         {
             RefreshInstalled();
             if (installed == null) return;
+            if (packageSources == null)
+            { updatesNote.Text = "Attendere il rilevamento delle origini del progetto."; return; }
             var items = installed.Items.Where(x => x.MavenCoordinate &&
-                !x.Version.StartsWith("(", StringComparison.Ordinal))
-                .Take(25).ToList();
+                !x.Version.StartsWith("(", StringComparison.Ordinal)).Take(25).ToList();
             if (items.Count == 0)
             {
-                updatesNote.Text = "Nessuna dipendenza Maven Central con coordinate dirette.";
+                updatesNote.Text = "Nessuna dipendenza con coordinate letterali da verificare.";
                 updatesResults.ItemsSource = null;
                 return;
             }
@@ -642,35 +700,31 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             ReplaceToken(ref updatesCts);
             var token = updatesCts.Token;
             updateButton.IsEnabled = false;
-            updatesNote.Text = "Controllo in corso (max 25 dipendenze dirette)...";
+            updatesNote.Text = "Controllo nei repository attivi (max 25 dipendenze dirette)...";
             try
             {
                 var candidates = new List<JavaPackageUpdateCandidate>();
                 var failures = 0;
-                // Sequential requests avoid rate-limit spikes and respect cancellation.
                 foreach (var dep in items)
                 {
                     token.ThrowIfCancellationRequested();
-                    // F4F281-UPDATES-METADATA: Solr latestVersion may lag behind
-                    // the Maven repository. Use the same metadata catalog as
-                    // Versioni disponibili, preserving the installed JRE/Android flavor.
-                    JavaCentralPage<JavaCentralVersion> versions;
-                    try { versions = await service.GetVersionsAsync(dep.GroupId, dep.ArtifactId,
-                        1, 50, token); }
-                    catch (Exception ex) when (ex is JavaMavenCentralSearchException ||
-                        ex is ArgumentException || ex is System.IO.IOException)
+                    JavaRepositoryCatalogResult catalog;
+                    try { catalog = await repositoryService.GetCatalogAsync(dep.GroupId,
+                        dep.ArtifactId, packageSources.Sources, token); }
+                    catch (Exception ex) when (ex is ArgumentException || ex is System.IO.IOException)
                     { failures++; continue; }
+                    if (catalog.Warnings.Count > 0) failures++;
                     string latest = JavaPackageUpdateSelector.NewestCompatible(dep.Version,
-                        versions.Items.Select(v => v.Version));
+                        catalog.Versions);
                     if (!string.IsNullOrWhiteSpace(latest))
                         candidates.Add(new JavaPackageUpdateCandidate(dep, latest));
                 }
                 if (generation != updatesGeneration || token.IsCancellationRequested) return;
                 updatesResults.ItemsSource = candidates;
                 updatesNote.Text = candidates.Count + " aggiornamenti stabili individuati. " +
-                    (failures > 0 ? failures + " verifiche non riuscite. " : "") +
-                    "Confronto indicativo delle prime 50 versioni in catalogo; " +
-                    "versioni dinamiche e vincoli Gradle non valutati. Nessuna modifica al progetto.";
+                    (failures > 0 ? failures + " verifiche con avvisi/errori. " : "") +
+                    "Catalogo aggregato dai repository attivi; confronto indicativo, " +
+                    "nessuna modifica al progetto. Vincoli Gradle/Maven non valutati.";
             }
             catch (OperationCanceledException)
             { if (generation == updatesGeneration) updatesNote.Text = "Verifica annullata."; }
@@ -686,6 +740,16 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             ReplaceToken(ref sourcesCts);
             var token = sourcesCts.Token;
             packageSources = null;
+            // Source refresh invalidates results based on old origins.
+            ++searchGeneration; ++versionsGeneration; ++updatesGeneration;
+            Cancel(ref searchCts); Cancel(ref versionsCts); Cancel(ref updatesCts);
+            lastCatalog = null;
+            lastPage = null;
+            browseResults.ItemsSource = null;
+            versionPicker.ItemsSource = null;
+            versionOriginInfo.Text = "";
+            updatesResults.ItemsSource = null;
+            SetSearchBusy(false);
             discoverSourcesButton.Content = "Annulla rilevamento";
             sourcesSummary.Text = "Rilevamento origini in corso...";
             sourcesDetails.Text = "";
@@ -700,6 +764,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 sourcesDetails.Text = snapshot.Describe();
                 sourcesExpander.Visibility = Visibility.Visible;
                 sourcesExpander.IsExpanded = true;
+                status.Text = "Origini rilevate. Ricerca testuale: Maven Central; coordinate: tutte le origini attive.";
             }
             catch (OperationCanceledException) { }
             catch (Exception)
@@ -748,6 +813,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         }
         private static void ReplaceToken(ref CancellationTokenSource source)
         { Cancel(ref source); source = new CancellationTokenSource(); }
+        private static bool IsCentralRepository(JavaPackageSource source)
+        {
+            if (!JavaPackageMultiRepositorySearchService.IsEligible(source)) return false;
+            return (source.Url.Host.Equals("repo.maven.apache.org", StringComparison.OrdinalIgnoreCase) ||
+                source.Url.Host.Equals("repo1.maven.org", StringComparison.OrdinalIgnoreCase)) &&
+                source.Url.AbsolutePath.TrimEnd('/').Equals("/maven2", StringComparison.OrdinalIgnoreCase);
+        }
+
         private void SetSearchBusy(bool busy)
         {
             searchButton.IsEnabled = !busy && !string.IsNullOrWhiteSpace(projectFile);

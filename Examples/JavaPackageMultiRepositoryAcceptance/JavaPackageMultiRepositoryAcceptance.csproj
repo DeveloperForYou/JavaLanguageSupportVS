@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <Compile Include="Program.cs" />
+    <Compile Include="../../JavaLanguageSupport/ProjectSystem/PackageManager/JavaPackageMultiRepositorySearchService.cs" Link="JavaPackageMultiRepositorySearchService.cs" />
+    <Compile Include="../../JavaLanguageSupport/ProjectSystem/PackageManager/JavaPackageSources.cs" Link="JavaPackageSources.cs" />
+    <Compile Include="../../JavaLanguageSupport/ProjectSystem/PackageManager/JavaPackageUpdateSelector.cs" Link="JavaPackageUpdateSelector.cs" />
+  </ItemGroup>
+</Project>

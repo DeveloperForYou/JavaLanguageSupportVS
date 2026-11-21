@@ -23,6 +23,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         internal bool Releases { get; set; } = true;
         internal bool Snapshots { get; set; }
         internal bool Blocked { get; set; }
+        // F4F29-MULTI-REPOSITORY: Gradle settings can be declared but inactive.
+        internal bool Effective { get; set; } = true;
         internal string Layout { get; set; } = "default";
         internal string Display()
         {
@@ -281,7 +283,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     bool effective = (bool?)repo["effective"] ?? true;
                     string origin = "Gradle: " + scope + (effective ? " (attivo)" : " (non attivo per le dipendenze)");
                     result.Sources.Add(new JavaPackageSource { Id = id, Name = id, Url = url,
-                        Origin = origin, Blocked = url.Scheme != "https", Releases = true, Snapshots = true });
+                        Origin = origin, Effective = effective, Blocked = url.Scheme != "https", Releases = true, Snapshots = true });
                 }
                 if ((bool?)json["otherRepositories"] == true) result.Warnings.Add("Repository non Maven o con URL non supportato esclusi dal catalogo.");
                 if (repos.OfType<JObject>().Any(r => (string)r["scope"] == "settings" && (bool?)r["effective"] == false))
