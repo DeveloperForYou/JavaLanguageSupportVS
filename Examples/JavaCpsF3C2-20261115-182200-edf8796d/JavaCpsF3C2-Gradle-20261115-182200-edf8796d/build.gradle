@@ -5,6 +5,20 @@ plugins {
 group = 'demo'
 version = '1.0.0-SNAPSHOT'
 
+repositories {
+    mavenCentral()
+
+    maven {
+        name = "Spring Milestones"
+        url = uri("https://repo.spring.io/milestone/")
+    }
+}
+
+dependencies {
+    implementation 'com.google.guava:guava:33.4.8-jre'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.12.2'
+}
+
 // Il progetto Maven di riferimento usa <maven.compiler.release>21</...>.
 // Per evitare una richiesta implicita di download della toolchain, Gradle
 // usa il JDK con cui viene eseguito e richiede che supporti --release 21.

@@ -39,6 +39,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly TextBlock projectHeader = Heading("Seleziona un progetto Java", 17);
         private readonly TextBlock projectInfo = CaptionText("Ricerca su Maven Central · sola lettura");
         private readonly TextBlock status = CaptionText("Pronto.");
+        // F4F284-PROJECT-TARGET: explicit per-solution selection, never follow editor focus.
+        private readonly ComboBox projectSelector = new ComboBox { MinWidth = 220, MaxWidth = 680,
+            VerticalContentAlignment = VerticalAlignment.Center };
+        private readonly Button refreshProjectsButton = ActionButton("Aggiorna progetti");
+        private bool suppressProjectSelection;
         // F4F28-PACKAGE-SOURCES: native configuration, read-only discovery.
         private readonly Button discoverSourcesButton = ActionButton("Rileva origini");
         private readonly TextBlock sourcesSummary = CaptionText("Origini: non rilevate");
@@ -103,6 +108,23 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var header = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
             projectHeader.Margin = new Thickness(0, 0, 0, 3);
             header.Children.Add(projectHeader);
+            var projectRow = new Grid { Margin = new Thickness(0, 5, 0, 7) };
+            projectRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            projectRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            projectRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var projectLabel = CaptionText("Progetto:");
+            projectLabel.VerticalAlignment = VerticalAlignment.Center;
+            projectLabel.Margin = new Thickness(0, 0, 8, 0);
+            projectRow.Children.Add(projectLabel);
+            ThemeProjectSelector(projectSelector);
+            projectSelector.ToolTip = "Progetto Java destinatario delle operazioni del Package Manager";
+            projectSelector.Margin = new Thickness(0, 0, 8, 0);
+            Grid.SetColumn(projectSelector, 1);
+            projectRow.Children.Add(projectSelector);
+            refreshProjectsButton.ToolTip = "Rileggi i progetti Java caricati nella soluzione";
+            Grid.SetColumn(refreshProjectsButton, 2);
+            projectRow.Children.Add(refreshProjectsButton);
+            header.Children.Add(projectRow);
             header.Children.Add(projectInfo);
             var sourcesRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
             discoverSourcesButton.IsEnabled = false;
@@ -139,6 +161,15 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             MinWidth = 470;
             MinHeight = 310;
 
+            projectSelector.SelectionChanged += (s, e) =>
+            {
+                if (suppressProjectSelection) return;
+                var choice = projectSelector.SelectedItem as JavaPackageProjectEntry;
+                if (choice != null) ChangeTargetProject(choice.ProjectFile);
+            };
+            projectSelector.DropDownOpened += (s, e) => RefreshProjectChoices(null, false);
+            refreshProjectsButton.Click += (s, e) => RefreshProjectChoices(null, false);
+            Loaded += (s, e) => { if (projectFile == null) RefreshProjectChoices(null, false); };
             searchBox.KeyDown += (s, e) =>
             {
                 if (e.Key == Key.Enter) { e.Handled = true; _ = StartSearchAsync(1); }
@@ -343,6 +374,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         internal void SelectProject(string newProjectFile)
         {
             if (string.IsNullOrWhiteSpace(newProjectFile)) return;
+            RefreshProjectChoices(newProjectFile, true);
+            ChangeTargetProject(newProjectFile);
+        }
+
+        private void ChangeTargetProject(string newProjectFile)
+        {
+            if (string.IsNullOrWhiteSpace(newProjectFile)) return;
             if (string.Equals(projectFile, newProjectFile, StringComparison.OrdinalIgnoreCase))
             {
                 RefreshInstalled();
@@ -367,10 +405,73 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             ShowVersionPlaceholder("Seleziona una libreria per visualizzare le versioni.");
             pageInfo.Text = "";
             updatesResults.ItemsSource = null;
+            installedDetails.Text = "Seleziona una dipendenza.";
             projectHeader.Text = System.IO.Path.GetFileNameWithoutExtension(projectFile);
             RefreshInstalled();
             tabs.SelectedIndex = 0;
             status.Text = "Pronto. Inserisci una ricerca su Maven Central.";
+        }
+
+        private void RefreshProjectChoices(string requested, bool fromProjectContext)
+        {
+            // Always enumerate the actual loaded solution projects, not folders on disk.
+            var choices = JavaPackageManagerSolutionProjects.GetLoadedProjects(ServiceProvider.GlobalProvider)
+                .ToList();
+            string wanted = requested ?? projectFile;
+            // The context-menu command is already validated by CPS. Keep it visible
+            // even when the hierarchy is in the middle of loading into the solution.
+            if (fromProjectContext && JavaPackageManagerSolutionProjects.Normalize(wanted) != null &&
+                !choices.Any(p => string.Equals(p.ProjectFile, wanted, StringComparison.OrdinalIgnoreCase)))
+                choices.Add(new JavaPackageProjectEntry(System.IO.Path.GetFullPath(wanted),
+                    System.IO.Path.GetFileNameWithoutExtension(wanted)));
+            var selected = choices.FirstOrDefault(p => string.Equals(
+                p.ProjectFile, wanted, StringComparison.OrdinalIgnoreCase));
+            suppressProjectSelection = true;
+            try
+            {
+                projectSelector.ItemsSource = choices;
+                projectSelector.SelectedItem = selected;
+                projectSelector.IsEnabled = choices.Count != 0;
+            }
+            finally { suppressProjectSelection = false; }
+            if (selected == null && !string.IsNullOrWhiteSpace(projectFile))
+                ClearProjectTarget();
+            if (choices.Count == 0 && string.IsNullOrWhiteSpace(projectFile))
+                status.Text = "Nessun progetto .javaproj caricato. Apri un progetto Java nella soluzione.";
+        }
+
+        private void ClearProjectTarget()
+        {
+            CancelAll();
+            projectFile = null;
+            installed = null;
+            packageSources = null;
+            query = null;
+            currentPage = 1;
+            lastPage = null;
+            installedResults.ItemsSource = null;
+            installedDetails.Text = "Seleziona una dipendenza.";
+            installedNote.Text = "";
+            updatesResults.ItemsSource = null;
+            updatesNote.Text = "Seleziona un progetto Java.";
+            browseResults.ItemsSource = null;
+            details.Text = "Seleziona una libreria per vedere i dettagli.";
+            versionPicker.ItemsSource = null;
+            versionPicker.IsHitTestVisible = false;
+            ResetVersionsPaging();
+            ShowVersionPlaceholder("Seleziona un progetto Java.");
+            pageInfo.Text = "";
+            versionInfo.Text = "";
+            projectHeader.Text = "Seleziona un progetto Java";
+            projectInfo.Text = "Nessun progetto selezionato";
+            sourcesSummary.Text = "Origini: non rilevate";
+            sourcesDetails.Text = "";
+            sourcesExpander.IsExpanded = false;
+            sourcesExpander.Visibility = Visibility.Collapsed;
+            discoverSourcesButton.IsEnabled = false;
+            updateButton.IsEnabled = false;
+            SetSearchBusy(false);
+            status.Text = "Seleziona un progetto dall'elenco.";
         }
 
         private void RefreshInstalled()
@@ -649,7 +750,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         { Cancel(ref source); source = new CancellationTokenSource(); }
         private void SetSearchBusy(bool busy)
         {
-            searchButton.IsEnabled = !busy;
+            searchButton.IsEnabled = !busy && !string.IsNullOrWhiteSpace(projectFile);
             cancelButton.IsEnabled = busy;
             previousButton.IsEnabled = !busy && lastPage != null && currentPage > 1;
             nextButton.IsEnabled = !busy && lastPage != null && lastPage.HasNextPage;
@@ -795,6 +896,144 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         {
             panel.SetResourceReference(Panel.BackgroundProperty,
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
+        }
+
+        // F4F2841-PROJECT-SELECTOR-THEME: self-contained dark/light VS ComboBox.
+        // Stock WPF ComboBox uses OS colors for its selection area and popup;
+        // explicit VS resources keep both the selected value and entries readable.
+        private static void ThemeProjectSelector(ComboBox selector)
+        {
+            ThemeControl(selector);
+            // DisplayMemberPath and ItemTemplate cannot be set together.
+            selector.ClearValue(ItemsControl.DisplayMemberPathProperty);
+            selector.ItemTemplate = ListItemTemplate("DisplayName");
+            selector.MinHeight = 29;
+            selector.MaxDropDownHeight = 350;
+            selector.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            // Clicking the non-focusable toggle still leaves the ComboBox ready
+            // for keyboard navigation once the list is opened.
+            selector.DropDownOpened += (sender, args) =>
+            {
+                if (!selector.IsKeyboardFocusWithin) selector.Focus();
+            };
+
+            var itemRoot = new FrameworkElementFactory(typeof(Border));
+            itemRoot.Name = "JavaProjectOptionChrome";
+            itemRoot.SetResourceReference(Border.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            itemRoot.SetValue(Border.PaddingProperty, new Thickness(9, 6, 9, 6));
+            var itemContent = new FrameworkElementFactory(typeof(ContentPresenter));
+            itemContent.SetValue(ContentPresenter.ContentSourceProperty, "Content");
+            itemRoot.AppendChild(itemContent);
+            var optionTemplate = new ControlTemplate(typeof(ComboBoxItem)) { VisualTree = itemRoot };
+            var optionHover = new Trigger { Property = ComboBoxItem.IsMouseOverProperty, Value = true };
+            optionHover.Setters.Add(new Setter(Border.BackgroundProperty,
+                new SolidColorBrush(Color.FromArgb(42, 0, 122, 204)), "JavaProjectOptionChrome"));
+            optionTemplate.Triggers.Add(optionHover);
+            var optionSelected = new Trigger { Property = ComboBoxItem.IsSelectedProperty, Value = true };
+            optionSelected.Setters.Add(new Setter(Border.BackgroundProperty,
+                new SolidColorBrush(Color.FromArgb(54, 0, 122, 204)), "JavaProjectOptionChrome"));
+            optionSelected.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
+            optionTemplate.Triggers.Add(optionSelected);
+            var optionStyle = new Style(typeof(ComboBoxItem));
+            optionStyle.Setters.Add(new Setter(Control.TemplateProperty, optionTemplate));
+            optionStyle.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty,
+                HorizontalAlignment.Stretch));
+            selector.ItemContainerStyle = optionStyle;
+
+            // An explicit template prevents the native OS ComboBox popup from
+            // becoming light while Visual Studio uses the dark theme.
+            var shell = new FrameworkElementFactory(typeof(Grid));
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "JavaProjectSelectorChrome";
+            chrome.SetResourceReference(Border.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            chrome.SetResourceReference(Border.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            chrome.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
+            chrome.SetValue(FrameworkElement.MinHeightProperty, 27.0);
+            var face = new FrameworkElementFactory(typeof(Grid));
+
+            var selectedText = new FrameworkElementFactory(typeof(ContentPresenter));
+            selectedText.SetBinding(ContentPresenter.ContentProperty,
+                new System.Windows.Data.Binding("SelectionBoxItem")
+                { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            selectedText.SetBinding(ContentPresenter.ContentTemplateProperty,
+                new System.Windows.Data.Binding("SelectionBoxItemTemplate")
+                { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            selectedText.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 3, 28, 3));
+            selectedText.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            selectedText.SetValue(UIElement.IsHitTestVisibleProperty, false);
+            face.AppendChild(selectedText);
+
+            var arrow = new FrameworkElementFactory(typeof(System.Windows.Shapes.Path));
+            arrow.SetValue(System.Windows.Shapes.Path.DataProperty,
+                Geometry.Parse("M 0 0 L 4 4 L 8 0 Z"));
+            arrow.SetResourceReference(System.Windows.Shapes.Path.FillProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            arrow.SetValue(FrameworkElement.WidthProperty, 9.0);
+            arrow.SetValue(FrameworkElement.HeightProperty, 5.0);
+            arrow.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+                HorizontalAlignment.Right);
+            arrow.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            arrow.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 10, 0));
+            arrow.SetValue(UIElement.IsHitTestVisibleProperty, false);
+            face.AppendChild(arrow);
+
+            var hitTarget = new FrameworkElementFactory(typeof(ToggleButton));
+            hitTarget.SetValue(Control.FocusableProperty, false);
+            hitTarget.SetBinding(ToggleButton.IsCheckedProperty,
+                new System.Windows.Data.Binding("IsDropDownOpen") {
+                    Mode = System.Windows.Data.BindingMode.TwoWay,
+                    RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            var hitFace = new FrameworkElementFactory(typeof(Border));
+            hitFace.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            hitTarget.SetValue(Control.TemplateProperty,
+                new ControlTemplate(typeof(ToggleButton)) { VisualTree = hitFace });
+            face.AppendChild(hitTarget);
+            chrome.AppendChild(face);
+            shell.AppendChild(chrome);
+
+            var popup = new FrameworkElementFactory(typeof(Popup));
+            popup.Name = "PART_Popup";
+            popup.SetValue(Popup.PlacementProperty, PlacementMode.Bottom);
+            popup.SetValue(Popup.AllowsTransparencyProperty, true);
+            popup.SetValue(Popup.StaysOpenProperty, false);
+            popup.SetBinding(Popup.IsOpenProperty,
+                new System.Windows.Data.Binding("IsDropDownOpen") {
+                    Mode = System.Windows.Data.BindingMode.TwoWay,
+                    RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            popup.SetBinding(FrameworkElement.WidthProperty,
+                new System.Windows.Data.Binding("ActualWidth")
+                { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            var popupChrome = new FrameworkElementFactory(typeof(Border));
+            popupChrome.SetResourceReference(Border.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            popupChrome.SetResourceReference(Border.BorderBrushProperty,
+                EnvironmentColors.ToolWindowBorderBrushKey);
+            popupChrome.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            var scroll = new FrameworkElementFactory(typeof(ScrollViewer));
+            scroll.SetValue(ScrollViewer.CanContentScrollProperty, true);
+            scroll.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty,
+                ScrollBarVisibility.Auto);
+            scroll.SetValue(FrameworkElement.MaxHeightProperty, 350.0);
+            scroll.AppendChild(new FrameworkElementFactory(typeof(ItemsPresenter)));
+            popupChrome.AppendChild(scroll);
+            popup.AppendChild(popupChrome);
+            shell.AppendChild(popup);
+
+            var projectTemplate = new ControlTemplate(typeof(ComboBox)) { VisualTree = shell };
+            var focused = new Trigger { Property = ComboBox.IsKeyboardFocusWithinProperty, Value = true };
+            focused.Setters.Add(new Setter(Border.BorderBrushProperty,
+                new SolidColorBrush(Color.FromRgb(0, 122, 204)), "JavaProjectSelectorChrome"));
+            projectTemplate.Triggers.Add(focused);
+            var disabled = new Trigger { Property = ComboBox.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.65));
+            projectTemplate.Triggers.Add(disabled);
+            selector.Template = projectTemplate;
         }
 
         private static void ThemeControl(Control control)
