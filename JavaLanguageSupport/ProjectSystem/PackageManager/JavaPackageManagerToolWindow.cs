@@ -48,6 +48,15 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         public string FullDescription { get { return Version + "\n" + OriginSummary; } }
     }
 
+    // F4F210-SOURCE-PICKER: presentation-only choice, never persists secrets or settings.
+    internal sealed class JavaPackageSourceChoice
+    {
+        internal JavaPackageSourceChoice(JavaPackageSource source, string label)
+        { Source = source; DisplayName = label; }
+        internal JavaPackageSource Source { get; private set; }
+        public string DisplayName { get; private set; }
+    }
+
     internal sealed class JavaPackageManagerControl : UserControl
     {
         private readonly JavaMavenCentralSearchService service = new JavaMavenCentralSearchService();
@@ -71,6 +80,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private CancellationTokenSource sourcesCts;
         private int sourcesGeneration;
         private JavaPackageSourceSnapshot packageSources;
+        private readonly ComboBox sourceSelector = new ComboBox { MinWidth = 120,
+            MaxWidth = 680, VerticalContentAlignment = VerticalAlignment.Center };
+        private bool suppressSourceSelection;
+        // null means all effective HTTPS origins; otherwise an exact endpoint URL.
+        private string selectedSourceUrl;
         private readonly TextBox searchBox = new TextBox();
         private readonly Button searchButton = ActionButton("Cerca");
         private readonly Button cancelButton = ActionButton("Annulla");
@@ -159,6 +173,22 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             Grid.SetColumn(sourcesSummary, 1);
             sourcesRow.Children.Add(sourcesSummary);
             header.Children.Add(sourcesRow);
+            // Use the already proven dark/light ComboBox template of the project picker.
+            var sourceRow = new Grid { Margin = new Thickness(0, 4, 0, 3) };
+            sourceRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            sourceRow.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = new GridLength(1, GridUnitType.Star) });
+            var sourceLabel = CaptionText("Origine:");
+            sourceLabel.VerticalAlignment = VerticalAlignment.Center;
+            sourceLabel.Margin = new Thickness(0, 0, 8, 0);
+            sourceRow.Children.Add(sourceLabel);
+            ThemeProjectSelector(sourceSelector);
+            sourceSelector.IsEnabled = false;
+            sourceSelector.ToolTip = "Scegli l'origine per ricerca, versioni e aggiornamenti. " +
+                "I repository Gradle inattivi o HTTP non sono selezionabili.";
+            Grid.SetColumn(sourceSelector, 1);
+            sourceRow.Children.Add(sourceSelector);
+            header.Children.Add(sourceRow);
             ThemeControl(sourcesExpander);
             sourcesExpander.ToolTip = "Visualizza i repository rilevati (senza occupare spazio quando è chiuso)";
             sourcesDetails.TextWrapping = TextWrapping.Wrap;
@@ -197,6 +227,21 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             projectSelector.DropDownOpened += (s, e) => RefreshProjectChoices(null, false);
             refreshProjectsButton.Click += (s, e) => RefreshProjectChoices(null, false);
             Loaded += (s, e) => { if (projectFile == null) RefreshProjectChoices(null, false); };
+            sourceSelector.SelectionChanged += (s, e) =>
+            {
+                if (suppressSourceSelection || packageSources == null) return;
+                var choice = sourceSelector.SelectedItem as JavaPackageSourceChoice;
+                string url = choice == null || choice.Source == null
+                    ? null : choice.Source.Url.AbsoluteUri.TrimEnd('/');
+                if (string.Equals(selectedSourceUrl, url, StringComparison.OrdinalIgnoreCase)) return;
+                selectedSourceUrl = url;
+                bool hadSearch = !string.IsNullOrWhiteSpace(query);
+                ResetSourceBoundResults();
+                status.Text = "Origine selezionata: " + (choice == null ? "Tutte le origini attive" : choice.DisplayName);
+                // Only repeat a search that the user previously executed.
+                if (hadSearch && !string.IsNullOrWhiteSpace(searchBox.Text))
+                    _ = StartSearchAsync(1);
+            };
             searchBox.KeyDown += (s, e) =>
             {
                 if (e.Key == Key.Enter) { e.Handled = true; _ = StartSearchAsync(1); }
@@ -553,6 +598,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             CancelAll();
             projectFile = newProjectFile;
             packageSources = null;
+            ResetSourceSelector();
             lastCatalog = null;
             versionOriginInfo.Text = "";
             sourcesSummary.Text = "Origini: non rilevate";
@@ -613,6 +659,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             projectFile = null;
             installed = null;
             packageSources = null;
+            ResetSourceSelector();
             lastCatalog = null;
             versionOriginInfo.Text = "";
             query = null;
@@ -666,6 +713,98 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             }
         }
 
+        private void ResetSourceSelector()
+        {
+            suppressSourceSelection = true;
+            try
+            {
+                selectedSourceUrl = null;
+                sourceSelector.ItemsSource = null;
+                sourceSelector.IsEnabled = false;
+                sourceSelector.ToolTip = "Rilevare prima le origini del progetto.";
+            }
+            finally { suppressSourceSelection = false; }
+        }
+
+        private void RefreshSourceSelector()
+        {
+            // The list contains usable endpoints only; Gradle PREFER_PROJECT and
+            // non-HTTPS entries remain readable in the discovery details.
+            var candidates = packageSources == null
+                ? new List<JavaPackageSource>()
+                : packageSources.Sources
+                    .Where(JavaPackageMultiRepositorySearchService.IsEligible)
+                    .GroupBy(x => x.Url.AbsoluteUri.TrimEnd('/'),
+                        StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.OrderByDescending(x => x.HasServerConfiguration).First())
+                    .OrderBy(x => x.Name ?? x.Id ?? "", StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.Url.AbsoluteUri, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            var choices = new List<JavaPackageSourceChoice>
+            {
+                new JavaPackageSourceChoice(null,
+                    "Tutte le origini attive (" + candidates.Count + ")")
+            };
+            choices.AddRange(candidates.Select(x => new JavaPackageSourceChoice(x,
+                (IsCentralRepository(x) ? "Maven Central" :
+                    (x.Name ?? x.Id ?? "Repository")) + " · " +
+                    x.Url.Authority + x.Url.AbsolutePath.TrimEnd('/'))));
+            var previouslySelected = selectedSourceUrl;
+            var chosen = choices.FirstOrDefault(x => x.Source != null &&
+                string.Equals(x.Source.Url.AbsoluteUri.TrimEnd('/'), previouslySelected,
+                    StringComparison.OrdinalIgnoreCase)) ?? choices[0];
+            suppressSourceSelection = true;
+            try
+            {
+                sourceSelector.ItemsSource = choices;
+                sourceSelector.SelectedItem = chosen;
+                sourceSelector.IsEnabled = candidates.Count > 0;
+                sourceSelector.ToolTip = "Origine per ricerca, versioni e aggiornamenti. " +
+                    "I repository non attivi e non HTTPS sono esclusi; consultarli in Rileva origini.";
+                selectedSourceUrl = chosen.Source == null ? null :
+                    chosen.Source.Url.AbsoluteUri.TrimEnd('/');
+            }
+            finally { suppressSourceSelection = false; }
+        }
+
+        private IList<JavaPackageSource> SelectedSources()
+        {
+            if (packageSources == null) return new List<JavaPackageSource>();
+            if (string.IsNullOrWhiteSpace(selectedSourceUrl)) return packageSources.Sources;
+            // Selecting one URL must not accidentally include another repository.
+            return packageSources.Sources
+                .Where(x => JavaPackageMultiRepositorySearchService.IsEligible(x) &&
+                    string.Equals(x.Url.AbsoluteUri.TrimEnd('/'), selectedSourceUrl,
+                        StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(x => x.HasServerConfiguration)
+                .Take(1).ToList();
+        }
+
+        private void ResetSourceBoundResults()
+        {
+            ++searchGeneration; ++versionsGeneration; ++updatesGeneration;
+            Cancel(ref searchCts); Cancel(ref versionsCts); Cancel(ref updatesCts);
+            lastPage = null;
+            lastCatalog = null;
+            currentPage = 1;
+            browseResults.ItemsSource = null;
+            pageInfo.Text = "";
+            previousButton.IsEnabled = false;
+            nextButton.IsEnabled = false;
+            ResetVersionsPaging();
+            versionPicker.ItemsSource = null;
+            versionPicker.IsHitTestVisible = false;
+            versionInfo.Text = "";
+            versionOriginInfo.Text = "";
+            details.Text = "Seleziona una libreria per vedere i dettagli.";
+            retryVersionsButton.Visibility = Visibility.Collapsed;
+            ShowVersionPlaceholder("Seleziona una libreria per visualizzare le versioni.");
+            updatesResults.ItemsSource = null;
+            updatesNote.Text = "Premi Controlla versioni per verificare l'origine selezionata.";
+            updateButton.IsEnabled = installed != null;
+            SetSearchBusy(false);
+        }
+
         private async Task StartSearchAsync(int page)
         {
             if (string.IsNullOrWhiteSpace(projectFile)) return;
@@ -689,6 +828,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             details.Text = "Seleziona una libreria per vedere i dettagli.";
             versionInfo.Text = "";
             var token = searchCts.Token;
+            var selectedSources = SelectedSources();
             SetSearchBusy(true);
             status.Text = "Ricerca nelle origini attive...";
             try
@@ -699,7 +839,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 if (JavaPackageMultiRepositorySearchService.TryCoordinate(search, out g, out a))
                 {
                     var catalog = await repositoryService.GetCatalogAsync(g, a,
-                        packageSources.Sources, token);
+                        selectedSources, token);
                     if (generation != searchGeneration || token.IsCancellationRequested) return;
                     var artifacts = new List<JavaCentralArtifact>();
                     if (catalog.Versions.Count != 0)
@@ -712,7 +852,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 else
                 {
                     // Ordinary Maven repositories have no portable full-text search API.
-                    if (!packageSources.Sources.Any(IsCentralRepository))
+                    if (!selectedSources.Any(IsCentralRepository))
                     {
                         status.Text = "Ricerca testuale non disponibile: Maven Central non è un'origine attiva. " +
                             "Usare groupId:artifactId per i repository personalizzati.";
@@ -779,14 +919,15 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             ShowVersionPlaceholder("Caricamento versioni dai repository attivi...");
             details.Text = artifact.Coordinate + "\nUltima versione catalogata: " + artifact.LatestVersion +
                 "\nVersioni disponibili: " + artifact.VersionCount +
-                "\nOrigini: " + packageSources.Sources.Count + " configurate";
+                "\nOrigini: " + SelectedSources().Count(JavaPackageMultiRepositorySearchService.IsEligible) + " attive";
             versionInfo.Text = "Caricamento pagina " + page + "...";
             var token = versionsCts.Token;
+            var selectedSources = SelectedSources();
             try
             {
                 if (debounceSelection) await Task.Delay(300, token);
                 var catalog = await repositoryService.GetCatalogAsync(artifact.GroupId,
-                    artifact.ArtifactId, packageSources.Sources, token);
+                    artifact.ArtifactId, selectedSources, token);
                 if (generation != versionsGeneration || token.IsCancellationRequested) return;
                 lastCatalog = catalog;
                 int offset = checked((page - 1) * VersionPageSize);
@@ -853,6 +994,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             int generation = ++updatesGeneration;
             ReplaceToken(ref updatesCts);
             var token = updatesCts.Token;
+            var selectedSources = SelectedSources();
             updateButton.IsEnabled = false;
             updatesNote.Text = "Controllo nei repository attivi (max 25 dipendenze dirette)...";
             try
@@ -864,7 +1006,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     token.ThrowIfCancellationRequested();
                     JavaRepositoryCatalogResult catalog;
                     try { catalog = await repositoryService.GetCatalogAsync(dep.GroupId,
-                        dep.ArtifactId, packageSources.Sources, token); }
+                        dep.ArtifactId, selectedSources, token); }
                     catch (Exception ex) when (ex is ArgumentException || ex is System.IO.IOException)
                     { failures++; continue; }
                     if (catalog.Warnings.Count > 0) failures++;
@@ -894,6 +1036,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             ReplaceToken(ref sourcesCts);
             var token = sourcesCts.Token;
             packageSources = null;
+            sourceSelector.IsEnabled = false;
             // Source refresh invalidates results based on old origins.
             ++searchGeneration; ++versionsGeneration; ++updatesGeneration;
             Cancel(ref searchCts); Cancel(ref versionsCts); Cancel(ref updatesCts);
@@ -913,6 +1056,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 var snapshot = await Task.Run(() => JavaPackageSourceDiscovery.Discover(path, backend, token), token);
                 if (generation != sourcesGeneration || token.IsCancellationRequested) return;
                 packageSources = snapshot;
+                RefreshSourceSelector();
                 sourcesSummary.Text = "Origini: " + snapshot.Sources.Count +
                     (snapshot.Warnings.Count > 0 ? " (vedi note)" : "");
                 sourcesDetails.Text = snapshot.Describe();
@@ -926,6 +1070,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             catch (Exception)
             {
                 if (generation != sourcesGeneration) return;
+                ResetSourceSelector();
                 sourcesSummary.Text = "Origini non rilevate";
                 sourcesDetails.Text = "Configurazione non disponibile. Verificare i file nativi del progetto.";
                 sourcesExpander.Visibility = Visibility.Visible;
