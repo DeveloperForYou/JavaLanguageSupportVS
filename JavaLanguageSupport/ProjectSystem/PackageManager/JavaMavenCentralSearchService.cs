@@ -93,6 +93,40 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             return QueryAsync(q, null, page, pageSize, ParseArtifact, cancellationToken);
         }
 
+        // F4F21034-SUGGESTION-CANDIDATES: retrieve up to 50 for local quality ranking.
+        // F4F2103-COORDINATE-DISCOVERY: use the search index for suggestions only.
+        // The existing metadata catalog remains authoritative for availability/versions.
+        internal Task<JavaCentralPage<JavaCentralArtifact>> SuggestAsync(
+            string search, CancellationToken cancellationToken)
+        {
+            string term = (search ?? "").Trim();
+            if (term.Length < 3 || term.Length > 160 || term.Any(char.IsControl))
+                throw new ArgumentException("Inserire 3-160 caratteri di ricerca.", nameof(search));
+            int colon = term.IndexOf(':');
+            if (colon >= 0)
+            {
+                string group = term.Substring(0, colon);
+                string artifact = term.Substring(colon + 1);
+                if (group.Length < 3 || !MavenIdentifier.IsMatch(group) ||
+                    (artifact.Length != 0 && !MavenIdentifier.IsMatch(artifact)))
+                    throw new ArgumentException("Prefisso Maven non valido.", nameof(search));
+                // Wildcards are generated here, never accepted from the user.
+                string q = "g:" + EscapeSolrTerm(group) + "*";
+                if (artifact.Length != 0)
+                    q += " AND a:" + EscapeSolrTerm(artifact) + "*";
+                return QueryAsync(q, null, 1, 50, ParseArtifact, cancellationToken);
+            }
+            if (MavenIdentifier.IsMatch(term))
+            {
+                string escaped = EscapeSolrTerm(term);
+                string q = "(a:" + escaped + "* OR g:" + escaped + "* OR \"" + escaped + "\")";
+                return QueryAsync(q, null, 1, 50, ParseArtifact, cancellationToken);
+            }
+            // The existing escaped full-text path handles multiple words.
+            return SearchAsync(term, 1, 50, cancellationToken);
+        }
+
+
         // F4F27-REPOSITORY-METADATA: the Solr gav index is for discovery, not
         // the authoritative complete version catalog. Read Maven's repository
         // metadata once, then paginate locally; retain Solr only as a fallback.

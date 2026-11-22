@@ -57,6 +57,24 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         public string DisplayName { get; private set; }
     }
 
+    // Simple public binding properties; the popup never changes packages.
+    internal sealed class JavaCoordinateSuggestion
+    {
+        internal JavaCoordinateSuggestion(string coordinate, string origin)
+        { Coordinate = coordinate; Origin = origin; }
+        public string Coordinate { get; private set; }
+        public string Origin { get; private set; }
+        public string Display { get { return Coordinate + "  ·  " + Origin; } }
+        public string ArtifactName
+        {
+            get
+            {
+                int separator = Coordinate.IndexOf(':');
+                return separator < 0 ? Coordinate : Coordinate.Substring(separator + 1);
+            }
+        }
+    }
+
     internal sealed class JavaPackageManagerControl : UserControl
     {
         private readonly JavaMavenCentralSearchService service = new JavaMavenCentralSearchService();
@@ -85,6 +103,15 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         // null means all effective HTTPS origins; otherwise an exact endpoint URL.
         private string selectedSourceUrl;
         private readonly TextBox searchBox = new TextBox();
+        private readonly Popup suggestionPopup = new Popup();
+        private readonly ListBox suggestionList = new ListBox();
+        private readonly TextBlock suggestionHint = CaptionText("");
+        private readonly CheckBox publicSuggestions = new CheckBox();
+        private readonly List<string> recentCoordinates = new List<string>();
+        private CancellationTokenSource suggestionCts;
+        private int suggestionGeneration;
+        private bool acceptingSuggestion;
+        private bool resettingSuggestions;
         private readonly Button searchButton = ActionButton("Cerca");
         private readonly Button cancelButton = ActionButton("Annulla");
         private readonly Button previousButton = ActionButton("◀ Precedente");
@@ -273,6 +300,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             tabs.SelectionChanged += (s, e) =>
             {
                 if (e.Source == tabs && tabs.SelectedIndex == 1) RefreshInstalled();
+                if (e.Source == tabs && tabs.SelectedIndex != 0) StopSuggestions();
             };
             Unloaded += (s, e) => CancelAll();
             SetSearchBusy(false);
@@ -295,18 +323,21 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             searchBox.Margin = new Thickness(0, 0, 8, 0);
             searchBox.Padding = new Thickness(8, 4, 8, 4);
-            searchBox.ToolTip = "Cerca nome libreria o coordinate groupId:artifactId";
+            searchBox.ToolTip = "Cerca nome libreria, groupId, artifactId o coordinate. " +
+                "Da 3 caratteri: suggerimenti; ↑ ↓ scorrono, Invio cerca, Tab completa, Esc chiude.";
             searchBox.Text = "";
             searchBox.SetResourceReference(Control.BackgroundProperty,
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
             searchBox.SetResourceReference(Control.ForegroundProperty,
                 EnvironmentColors.ToolWindowTextBrushKey);
             toolbar.Children.Add(searchBox);
+            System.Windows.Automation.AutomationProperties.SetName(searchBox, "Ricerca pacchetti Java");
             Grid.SetColumn(searchButton, 1);
             searchButton.Margin = new Thickness(0, 0, 8, 0);
             toolbar.Children.Add(searchButton);
             Grid.SetColumn(cancelButton, 2);
             toolbar.Children.Add(cancelButton);
+            ConfigureSuggestions(toolbar);
             grid.Children.Add(toolbar);
 
             var content = new Grid();
@@ -592,6 +623,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             }
             CancelAll();
             projectFile = newProjectFile;
+            recentCoordinates.Clear();
+            searchBox.Clear();
             packageSources = null;
             ResetSourceSelector();
             lastCatalog = null;
@@ -649,6 +682,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         {
             CancelAll();
             projectFile = null;
+            recentCoordinates.Clear();
+            searchBox.Clear();
             installed = null;
             packageSources = null;
             ResetSourceSelector();
@@ -704,6 +739,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private void ResetSourceSelector()
         {
+            ResetSuggestionPolicy();
             suppressSourceSelection = true;
             try
             {
@@ -754,6 +790,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     chosen.Source.Url.AbsoluteUri.TrimEnd('/');
             }
             finally { suppressSourceSelection = false; }
+            ResetSuggestionPolicy();
         }
 
         private IList<JavaPackageSource> SelectedSources()
@@ -771,6 +808,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private void ResetSourceBoundResults()
         {
+            ResetSuggestionPolicy();
             ++searchGeneration; ++versionsGeneration; ++updatesGeneration;
             Cancel(ref searchCts); Cancel(ref versionsCts); Cancel(ref updatesCts);
             lastPage = null;
@@ -794,8 +832,329 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             SetSearchBusy(false);
         }
 
+        // F4F2103-COORDINATE-DISCOVERY: this popup does not consume docked layout space.
+        private void ConfigureSuggestions(Grid toolbar)
+        {
+            DecorateList(suggestionList, "Display");
+            var row = new FrameworkElementFactory(typeof(StackPanel));
+            row.SetBinding(FrameworkElement.ToolTipProperty, new System.Windows.Data.Binding("Display"));
+            var name = new FrameworkElementFactory(typeof(TextBlock));
+            name.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("ArtifactName"));
+            name.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
+            name.SetValue(TextBlock.FontSizeProperty, 13.0);
+            name.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            name.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            row.AppendChild(name);
+            var coordinate = new FrameworkElementFactory(typeof(TextBlock));
+            coordinate.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Coordinate"));
+            coordinate.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            coordinate.SetValue(TextBlock.OpacityProperty, 0.90);
+            coordinate.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            row.AppendChild(coordinate);
+            var origin = new FrameworkElementFactory(typeof(TextBlock));
+            origin.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Origin"));
+            origin.SetValue(TextBlock.FontSizeProperty, 11.0);
+            origin.SetValue(TextBlock.OpacityProperty, 0.74);
+            origin.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            row.AppendChild(origin);
+            suggestionList.ItemTemplate = new DataTemplate { VisualTree = row };
+            suggestionList.Padding = new Thickness(0);
+            suggestionList.Focusable = false;
+            suggestionList.MaxHeight = 325;
+            ScrollViewer.SetHorizontalScrollBarVisibility(suggestionList, ScrollBarVisibility.Disabled);
+            suggestionList.ItemContainerStyle.Setters.Add(new Setter(Control.FocusableProperty, false));
+            suggestionHint.Margin = new Thickness(7, 5, 7, 4);
+            var panel = new DockPanel();
+            ThemeBackground(panel);
+            DockPanel.SetDock(suggestionHint, Dock.Top);
+            panel.Children.Add(suggestionHint);
+            panel.Children.Add(suggestionList);
+            var border = new Border { BorderThickness = new Thickness(1), Child = panel };
+            border.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
+            border.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.ToolWindowBorderBrushKey);
+            border.SetBinding(FrameworkElement.WidthProperty, new System.Windows.Data.Binding("ActualWidth")
+                { Source = toolbar });
+            suggestionPopup.PlacementTarget = toolbar;
+            suggestionPopup.Placement = PlacementMode.Bottom;
+            suggestionPopup.StaysOpen = true;
+            suggestionPopup.Child = border;
+            toolbar.Children.Add(suggestionPopup);
+            var watermark = CaptionText("Cerca per nome o coordinate");
+            watermark.IsHitTestVisible = false;
+            watermark.Opacity = 0.65;
+            watermark.Margin = new Thickness(9, 0, 15, 0);
+            watermark.VerticalAlignment = VerticalAlignment.Center;
+            watermark.TextWrapping = TextWrapping.NoWrap;
+            watermark.TextTrimming = TextTrimming.CharacterEllipsis;
+            watermark.Visibility = searchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            toolbar.Children.Add(watermark);
+
+            // Explicit consent is necessary for custom/mixed origins. No credentials,
+            // project paths or installed dependency data are sent to the public index.
+            ThemeControl(publicSuggestions);
+            ThemePublicSuggestionsCheckbox(publicSuggestions);
+            publicSuggestions.Content = "Attiva suggerimenti da Maven Central";
+            publicSuggestions.ToolTip = "Invia il testo digitato all'indice pubblico di Maven Central. " +
+                "La ricerca finale verifica solo le origini selezionate; i suggerimenti non garantiscono disponibilità.";
+            publicSuggestions.Visibility = Visibility.Collapsed;
+            publicSuggestions.Margin = new Thickness(0, 3, 0, 0);
+            toolbar.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            toolbar.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(publicSuggestions, 1);
+            Grid.SetColumnSpan(publicSuggestions, 3);
+            toolbar.Children.Add(publicSuggestions);
+            publicSuggestions.Checked += (s, e) =>
+            {
+                publicSuggestions.Content = "Disattiva suggerimenti da Maven Central";
+                if (resettingSuggestions) return;
+                searchBox.Focus();
+                _ = LoadSuggestionsAsync();
+            };
+            publicSuggestions.Unchecked += (s, e) =>
+            {
+                publicSuggestions.Content = "Attiva suggerimenti da Maven Central";
+                StopSuggestions();
+            };
+            searchBox.TextChanged += (s, e) =>
+            {
+                watermark.Visibility = searchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+                if (!acceptingSuggestion && searchBox.IsKeyboardFocused) _ = LoadSuggestionsAsync();
+                else StopSuggestions();
+            };
+            searchBox.PreviewKeyDown += SuggestionKeyDown;
+            searchBox.LostKeyboardFocus += (s, e) => StopSuggestions();
+            searchBox.SizeChanged += (s, e) =>
+            {
+                if (suggestionPopup.IsOpen) StopSuggestions();
+            };
+            suggestionList.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                var element = e.OriginalSource as DependencyObject;
+                var item = element == null ? null :
+                    ItemsControl.ContainerFromElement(suggestionList, element) as ListBoxItem;
+                var choice = item == null ? null : item.Content as JavaCoordinateSuggestion;
+                if (choice == null) return;
+                e.Handled = true;
+                AcceptSuggestion(choice, true);
+            };
+        }
+
+        private bool CentralOnlySuggestions()
+        {
+            var sources = SelectedSources().Where(JavaPackageMultiRepositorySearchService.IsEligible).ToList();
+            return sources.Count > 0 && sources.All(IsCentralRepository);
+        }
+
+        private bool CanUsePublicSuggestions()
+        {
+            return CentralOnlySuggestions() || (publicSuggestions.Visibility == Visibility.Visible &&
+                publicSuggestions.IsChecked == true);
+        }
+
+        private void ResetSuggestionPolicy()
+        {
+            StopSuggestions();
+            resettingSuggestions = true;
+            try
+            {
+                publicSuggestions.IsChecked = false;
+                publicSuggestions.Visibility = packageSources != null &&
+                    SelectedSources().Any(JavaPackageMultiRepositorySearchService.IsEligible) &&
+                    !CentralOnlySuggestions() ? Visibility.Visible : Visibility.Collapsed;
+            }
+            finally { resettingSuggestions = false; }
+        }
+
+        private void StopSuggestions()
+        {
+            ++suggestionGeneration;
+            Cancel(ref suggestionCts);
+            suggestionPopup.IsOpen = false;
+            suggestionList.ItemsSource = null;
+        }
+
+        // F4F21034-RELEVANCE-RANKING: match user intent before index order.
+        // Never infer that a result is official/secure from its coordinates.
+        private static int SuggestionScore(string coordinate, string term)
+        {
+            if (string.IsNullOrWhiteSpace(coordinate) || string.IsNullOrWhiteSpace(term))
+                return -1;
+            int sep = coordinate.IndexOf(':');
+            if (sep < 1 || sep == coordinate.Length - 1) return -1;
+            string group = coordinate.Substring(0, sep).ToLowerInvariant();
+            string artifact = coordinate.Substring(sep + 1).ToLowerInvariant();
+            string query = term.Trim().ToLowerInvariant();
+            int querySep = query.IndexOf(':');
+            if (querySep >= 0)
+            {
+                if (querySep == 0 || query.IndexOf(':', querySep + 1) >= 0) return -1;
+                string qGroup = query.Substring(0, querySep);
+                string qArtifact = query.Substring(querySep + 1);
+                if (!group.StartsWith(qGroup, StringComparison.Ordinal) ||
+                    !artifact.StartsWith(qArtifact, StringComparison.Ordinal)) return -1;
+                return 50000 + (group == qGroup ? 5000 : 0) +
+                    (artifact == qArtifact ? 5000 : 0);
+            }
+            string normalized = query.Replace(' ', '-').Replace('_', '-');
+            if (artifact == normalized) return 45000;
+            if (artifact.StartsWith(normalized, StringComparison.Ordinal)) return 40000;
+            if (artifact.Contains(normalized)) return 35000;
+            if (group == query) return 33000;
+            if (group.StartsWith(query, StringComparison.Ordinal)) return 30000;
+            // Words may be in different order: "data jpa" matches "spring-data-jpa".
+            string[] words = System.Text.RegularExpressions.Regex.Split(query,
+                @"[^\p{L}\p{Nd}]+")
+                .Where(x => x.Length > 0).ToArray();
+            if (words.Length == 0) return -1;
+            bool allInArtifact = words.All(w => artifact.Contains(w));
+            if (allInArtifact) return 27000 + words.Count(w => artifact.StartsWith(w,
+                StringComparison.Ordinal)) * 400;
+            if (words.All(w => artifact.Contains(w) || group.Contains(w)))
+                return 19000 + words.Count(w => artifact.Contains(w)) * 600;
+            if (group.Contains(query)) return 12000;
+            return -1; // Description-only matches are not actionable as coordinates.
+        }
+
+        private static int SuggestionOriginBoost(JavaCoordinateSuggestion item)
+        {
+            if (item.Origin.StartsWith("Nel progetto", StringComparison.Ordinal)) return 900;
+            if (item.Origin.StartsWith("Ricerca recente", StringComparison.Ordinal)) return 450;
+            return 0;
+        }
+
+        private static List<JavaCoordinateSuggestion> RankSuggestions(
+            IEnumerable<JavaCoordinateSuggestion> candidates, string term)
+        {
+            return candidates.Where(x => x != null && SuggestionScore(x.Coordinate, term) >= 0)
+                .GroupBy(x => x.Coordinate, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderByDescending(SuggestionOriginBoost).First())
+                .OrderByDescending(x => SuggestionScore(x.Coordinate, term) + SuggestionOriginBoost(x))
+                .ThenBy(x => x.ArtifactName.Length)
+                .ThenBy(x => x.Coordinate, StringComparer.OrdinalIgnoreCase)
+                .Take(12).ToList();
+        }
+
+        private List<JavaCoordinateSuggestion> LocalSuggestions(string term)
+        {
+            var rows = new List<JavaCoordinateSuggestion>();
+            if (installed != null)
+                foreach (var dep in installed.Items.Where(x => x.MavenCoordinate))
+                    rows.Add(new JavaCoordinateSuggestion(dep.GroupId + ":" + dep.ArtifactId,
+                        "Nel progetto (non verifica l'origine)"));
+            rows.AddRange(recentCoordinates.Select(x => new JavaCoordinateSuggestion(x, "Ricerca recente")));
+            return RankSuggestions(rows, term);
+        }
+
+        private bool CurrentSuggestions(int generation, CancellationToken token, string term)
+        {
+            return generation == suggestionGeneration && !token.IsCancellationRequested &&
+                IsLoaded && tabs.SelectedIndex == 0 && searchBox.IsKeyboardFocused &&
+                string.Equals(searchBox.Text.Trim(), term, StringComparison.Ordinal);
+        }
+
+        private void ShowSuggestions(List<JavaCoordinateSuggestion> rows, string hint)
+        {
+            var previous = suggestionList.SelectedItem as JavaCoordinateSuggestion;
+            suggestionHint.Text = hint;
+            suggestionList.ItemsSource = rows;
+            suggestionList.SelectedItem = previous == null ? null :
+                rows.FirstOrDefault(x => x.Coordinate == previous.Coordinate);
+            suggestionPopup.IsOpen = true;
+        }
+
+        private async Task LoadSuggestionsAsync()
+        {
+            StopSuggestions();
+            string term = searchBox.Text.Trim();
+            if (!IsLoaded || tabs.SelectedIndex != 0 || !searchBox.IsKeyboardFocused ||
+                string.IsNullOrWhiteSpace(projectFile) || term.Length < 3 || term.Length > 160 ||
+                term.Any(char.IsControl)) return;
+            int generation = suggestionGeneration;
+            var local = LocalSuggestions(term);
+            if (local.Count > 0)
+                ShowSuggestions(local, "Suggerimenti locali · ↑ ↓ Invio / Tab");
+            if (!CanUsePublicSuggestions())
+            {
+                if (local.Count == 0 && publicSuggestions.Visibility == Visibility.Visible)
+                    ShowSuggestions(local, "Nessun suggerimento locale. Per cercare nomi pubblici, attiva Suggerimenti da Maven Central.");
+                return;
+            }
+            ReplaceToken(ref suggestionCts);
+            var token = suggestionCts.Token;
+            try
+            {
+                // No network per keystroke: cancel old requests and wait for typing to stop.
+                await Task.Delay(450, token);
+                if (!CurrentSuggestions(generation, token, term) || !CanUsePublicSuggestions()) return;
+                var result = await service.SuggestAsync(term, token);
+                if (!CurrentSuggestions(generation, token, term) || !CanUsePublicSuggestions()) return;
+                var coordinates = RankSuggestions(local.Concat(result.Items.Select(x =>
+                    new JavaCoordinateSuggestion(x.Coordinate, "Maven Central · disponibilità da verificare"))), term);
+                ShowSuggestions(coordinates, coordinates.Count == 0 ? "Nessun suggerimento trovato." :
+                    "Coordinate · ↑ ↓ Invio per cercare, Tab per completare");
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) when (ex is JavaMavenCentralSearchException ||
+                ex is ArgumentException || ex is System.IO.IOException)
+            {
+                if (CurrentSuggestions(generation, token, term))
+                    ShowSuggestions(local, "Suggerimenti pubblici non disponibili. Puoi usare Cerca.");
+            }
+            finally
+            {
+                if (generation == suggestionGeneration) Cancel(ref suggestionCts);
+            }
+        }
+
+        private void SuggestionKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape)
+            {
+                if (suggestionPopup.IsOpen || suggestionCts != null)
+                { StopSuggestions(); e.Handled = true; }
+                return;
+            }
+            if (!suggestionPopup.IsOpen || suggestionList.Items.Count == 0) return;
+            if (e.Key == Key.Down || e.Key == Key.Up)
+            {
+                int index = suggestionList.SelectedIndex;
+                if (index < 0) index = e.Key == Key.Down ? 0 : suggestionList.Items.Count - 1;
+                else index = Math.Max(0, Math.Min(suggestionList.Items.Count - 1,
+                    index + (e.Key == Key.Down ? 1 : -1)));
+                suggestionList.SelectedIndex = index;
+                suggestionList.ScrollIntoView(suggestionList.SelectedItem);
+                e.Handled = true;
+            }
+            else if ((e.Key == Key.Enter || e.Key == Key.Tab) &&
+                suggestionList.SelectedItem is JavaCoordinateSuggestion)
+            {
+                var row = (JavaCoordinateSuggestion)suggestionList.SelectedItem;
+                e.Handled = true;
+                AcceptSuggestion(row, e.Key == Key.Enter);
+            }
+        }
+
+        private void AcceptSuggestion(JavaCoordinateSuggestion row, bool searchNow)
+        {
+            StopSuggestions();
+            acceptingSuggestion = true;
+            try
+            {
+                searchBox.Text = row.Coordinate;
+                searchBox.CaretIndex = searchBox.Text.Length;
+                recentCoordinates.Remove(row.Coordinate);
+                recentCoordinates.Insert(0, row.Coordinate);
+                if (recentCoordinates.Count > 30) recentCoordinates.RemoveAt(30);
+                searchBox.Focus();
+            }
+            finally { acceptingSuggestion = false; }
+            if (searchNow) _ = StartSearchAsync(1);
+        }
+
+
         private async Task StartSearchAsync(int page)
         {
+            StopSuggestions();
             if (string.IsNullOrWhiteSpace(projectFile)) return;
             if (packageSources == null)
             { status.Text = "Attendere il rilevamento delle origini (oppure premere Rileva origini)."; return; }
@@ -844,7 +1203,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     if (!selectedSources.Any(IsCentralRepository))
                     {
                         status.Text = "Ricerca testuale non disponibile: Maven Central non è un'origine attiva. " +
-                            "Usare groupId:artifactId per i repository personalizzati.";
+                            "Usare groupId:artifactId o attivare Suggerimenti da Maven Central per trovare le coordinate.";
                         browseResults.ItemsSource = null;
                         pageInfo.Text = "";
                         return;
@@ -1025,6 +1384,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             ReplaceToken(ref sourcesCts);
             var token = sourcesCts.Token;
             packageSources = null;
+            ResetSuggestionPolicy();
             sourceSelector.IsEnabled = false;
             discoverSourcesButton.ToolTip = "Rilevamento in corso...";
             // Source refresh invalidates results based on old origins.
@@ -1084,6 +1444,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private void CancelAll()
         {
+            StopSuggestions();
             StopSourceDiscovery();
             ++searchGeneration; ++versionsGeneration; ++updatesGeneration;
             Cancel(ref searchCts); Cancel(ref versionsCts); Cancel(ref updatesCts);
@@ -1464,6 +1825,46 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.65));
             projectTemplate.Triggers.Add(disabled);
             selector.Template = projectTemplate;
+        }
+
+        // F4F21033-COMPACT-CONSENT-ACTION: a quiet, theme-aware text action.
+        // Keep native CheckBox semantics (IsChecked, Checked/Unchecked, Space and
+        // screen readers), without a custom glyph or box drawn into the toolbar.
+        private static void ThemePublicSuggestionsCheckbox(CheckBox checkbox)
+        {
+            var label = new FrameworkElementFactory(typeof(TextBlock));
+            label.Name = "JavaSuggestionsConsentText";
+            label.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Content")
+            {
+                RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent
+            });
+            label.SetValue(FrameworkElement.MarginProperty, new Thickness(2, 2, 2, 2));
+            label.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            label.SetValue(TextBlock.TextWrappingProperty, TextWrapping.NoWrap);
+            label.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            label.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+
+            var template = new ControlTemplate(typeof(CheckBox)) { VisualTree = label };
+            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(TextBlock.TextDecorationsProperty,
+                TextDecorations.Underline, "JavaSuggestionsConsentText"));
+            template.Triggers.Add(hover);
+            var focus = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
+            focus.Setters.Add(new Setter(TextBlock.TextDecorationsProperty,
+                TextDecorations.Underline, "JavaSuggestionsConsentText"));
+            template.Triggers.Add(focus);
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.55));
+            template.Triggers.Add(disabled);
+
+            checkbox.Template = template;
+            checkbox.IsThreeState = false;
+            checkbox.Cursor = Cursors.Hand;
+            checkbox.HorizontalAlignment = HorizontalAlignment.Left;
+            checkbox.MinHeight = 20;
+            System.Windows.Automation.AutomationProperties.SetName(checkbox,
+                "Consenti suggerimenti pubblici da Maven Central");
         }
 
         private static void ThemeControl(Control control)
