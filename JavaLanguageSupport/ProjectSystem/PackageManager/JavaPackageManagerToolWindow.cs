@@ -135,6 +135,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly ListBox updatesResults = new ListBox();
         private readonly TextBlock updatesNote = CaptionText("Confronto con le versioni pubblicate su Maven Central.");
         private readonly Button updateButton = ActionButton("Controlla versioni su Maven Central");
+        // F4F2111-DIRECT-DEPENDENCIES: Maven/Gradle direct declarations only.
+        private readonly Button installDependencyButton = ActionButton("Installa...");
+        private readonly Button removeDependencyButton = ActionButton("Rimuovi...");
+        private readonly Button applyUpdateButton = ActionButton("Aggiorna selezionato...");
         private readonly TabControl tabs = new TabControl();
         private CancellationTokenSource searchCts;
         private CancellationTokenSource versionsCts;
@@ -272,11 +276,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             cancelButton.Click += (s, e) => { CancelAll(); status.Text = "Richiesta annullata."; };
             previousButton.Click += (s, e) => { if (currentPage > 1) _ = StartSearchAsync(currentPage - 1); };
             nextButton.Click += (s, e) => { if (lastPage != null && lastPage.HasNextPage) _ = StartSearchAsync(currentPage + 1); };
-            browseResults.SelectionChanged += (s, e) => { _ = LoadVersionsAsync(1, true); };
+            browseResults.SelectionChanged += (s, e) => { RefreshDependencyActions(); _ = LoadVersionsAsync(1, true); };
             versionPicker.SelectionChanged += (s, e) =>
             {
                 var picked = versionPicker.SelectedItem as JavaPackageVersionDisplay;
                 versionOriginInfo.Text = picked == null ? "" : picked.OriginSummary;
+                RefreshDependencyActions();
             };
             previousVersionsButton.Click += (s, e) =>
             {
@@ -294,8 +299,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 installedDetails.Text = dep == null ? "Seleziona una dipendenza." :
                     dep.Coordinate + "\nVersione dichiarata: " + dep.Version +
                     "\nOrigine: " + (installed == null ? "-" : installed.Backend);
+                RefreshDependencyActions();
             };
             updateButton.Click += (s, e) => { _ = LoadUpdatesAsync(); };
+            installDependencyButton.Click += (s, e) => ApplyDependencyChange(JavaDependencyOperation.Install);
+            removeDependencyButton.Click += (s, e) => ApplyDependencyChange(JavaDependencyOperation.Remove);
+            applyUpdateButton.Click += (s, e) => ApplyDependencyChange(JavaDependencyOperation.Update);
+            updatesResults.SelectionChanged += (s, e) => RefreshDependencyActions();
+            RefreshDependencyActions();
             retryVersionsButton.Click += (s, e) => { _ = LoadVersionsAsync(requestedVersionsPage, false); };
             tabs.SelectionChanged += (s, e) =>
             {
@@ -385,8 +396,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             detailsToggle.ToolTip = "Mostra o nasconde i metadati completi del pacchetto";
             detailsToggle.Margin = new Thickness(9, 0, 0, 0);
             detailsToggle.Padding = new Thickness(8, 3, 8, 3);
-            Grid.SetColumn(detailsToggle, 1);
-            versionHeader.Children.Add(detailsToggle);
+            // Install only the selected version in the selected project.
+            var versionActions = new StackPanel { Orientation = Orientation.Horizontal };
+            installDependencyButton.Margin = new Thickness(0);
+            installDependencyButton.ToolTip = "Aggiunge la versione selezionata al progetto Maven/Gradle";
+            versionActions.Children.Add(installDependencyButton);
+            versionActions.Children.Add(detailsToggle);
+            Grid.SetColumn(versionActions, 1);
+            versionHeader.Children.Add(versionActions);
             Grid.SetRow(versionHeader, 0);
             right.Children.Add(versionHeader);
 
@@ -568,7 +585,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.Children.Add(Heading("Dipendenze dichiarate nel progetto", 15));
+            var installedHeader = new DockPanel();
+            removeDependencyButton.Margin = new Thickness(9, 0, 0, 0);
+            removeDependencyButton.ToolTip = "Rimuove la dipendenza diretta selezionata";
+            DockPanel.SetDock(removeDependencyButton, Dock.Right);
+            installedHeader.Children.Add(removeDependencyButton);
+            installedHeader.Children.Add(Heading("Dipendenze dichiarate nel progetto", 15));
+            grid.Children.Add(installedHeader);
             DecorateList(installedResults, null);
             installedResults.Margin = new Thickness(0, 10, 0, 8);
             Grid.SetRow(installedResults, 1);
@@ -592,10 +615,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             grid.Children.Add(Heading("Verifica versioni disponibili", 15));
-            updateButton.Margin = new Thickness(0, 10, 0, 10);
-            updateButton.HorizontalAlignment = HorizontalAlignment.Left;
-            Grid.SetRow(updateButton, 1);
-            grid.Children.Add(updateButton);
+            var updateActions = new WrapPanel { Margin = new Thickness(0, 10, 0, 10) };
+            updateButton.Margin = new Thickness(0, 0, 8, 0);
+            updateActions.Children.Add(updateButton);
+            applyUpdateButton.ToolTip = "Applica al progetto solo l'aggiornamento selezionato";
+            updateActions.Children.Add(applyUpdateButton);
+            Grid.SetRow(updateActions, 1);
+            grid.Children.Add(updateActions);
             DecorateList(updatesResults, null);
             Grid.SetRow(updatesResults, 2);
             grid.Children.Add(updatesResults);
@@ -714,6 +740,84 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             status.Text = "Seleziona un progetto dall'elenco.";
         }
 
+        // F4F2111-DIRECT-DEPENDENCIES: Never write on selection or during search.
+        // Only a deliberately confirmed action can change the selected project.
+        private void RefreshDependencyActions()
+        {
+            bool writable = installed != null &&
+                (string.Equals(installed.Backend, "Maven", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(installed.Backend, "Gradle", StringComparison.OrdinalIgnoreCase));
+            var version = versionPicker.SelectedItem as JavaPackageVersionDisplay;
+            var artifact = browseResults.SelectedItem as JavaCentralArtifact;
+            installDependencyButton.IsEnabled = writable && artifact != null && version != null &&
+                lastCatalog != null && lastCatalog.Versions.Contains(version.Version);
+            removeDependencyButton.IsEnabled = writable &&
+                installedResults.SelectedItem is JavaInstalledDependency;
+            applyUpdateButton.IsEnabled = writable &&
+                updatesResults.SelectedItem is JavaPackageUpdateCandidate;
+        }
+
+        private void ApplyDependencyChange(JavaDependencyOperation operation)
+        {
+            if (string.IsNullOrWhiteSpace(projectFile) || installed == null) return;
+            string initialProject = projectFile;
+            try
+            {
+                string group, artifact, version = null;
+                if (operation == JavaDependencyOperation.Install)
+                {
+                    var found = browseResults.SelectedItem as JavaCentralArtifact;
+                    var picked = versionPicker.SelectedItem as JavaPackageVersionDisplay;
+                    if (found == null || picked == null || lastCatalog == null ||
+                        !lastCatalog.Versions.Contains(picked.Version))
+                        throw new InvalidOperationException("Selezionare una libreria e una versione caricata.");
+                    group = found.GroupId; artifact = found.ArtifactId; version = picked.Version;
+                }
+                else if (operation == JavaDependencyOperation.Update)
+                {
+                    var candidate = updatesResults.SelectedItem as JavaPackageUpdateCandidate;
+                    if (candidate == null) throw new InvalidOperationException("Selezionare un aggiornamento.");
+                    group = candidate.Installed.GroupId;
+                    artifact = candidate.Installed.ArtifactId;
+                    version = candidate.Latest;
+                }
+                else
+                {
+                    var declared = installedResults.SelectedItem as JavaInstalledDependency;
+                    if (declared == null || !declared.MavenCoordinate)
+                        throw new InvalidOperationException("Selezionare una dipendenza diretta Maven/Gradle.");
+                    group = declared.GroupId; artifact = declared.ArtifactId;
+                }
+                var change = JavaPackageDirectDependencyEditor.Plan(initialProject,
+                    operation, group, artifact, version);
+                string message = change.Summary + "\n\nProgetto: " +
+                    System.IO.Path.GetFileName(initialProject) +
+                    "\nFile: " + change.FilePath +
+                    "\n\nVerrà creata una copia di sicurezza prima del salvataggio." +
+                    "\nConfermare la modifica della dipendenza diretta?";
+                if (MessageBox.Show(message, "Gestione dipendenze Java",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                if (!string.Equals(initialProject, projectFile, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Il progetto selezionato è cambiato.");
+                change.Apply();
+                CancelAll();
+                updatesResults.ItemsSource = null;
+                RefreshInstalled();
+                RefreshDependencyActions();
+                status.Text = change.Summary + ". Backup: " + change.BackupPath +
+                    ". Controllare la compilazione e la sincronizzazione JDT LS.";
+            }
+            catch (Exception ex) when (ex is System.IO.IOException ||
+                ex is UnauthorizedAccessException || ex is ArgumentException ||
+                ex is NotSupportedException || ex is InvalidOperationException ||
+                ex is XmlException)
+            {
+                status.Text = "Dipendenza non modificata: " + ex.Message;
+                MessageBox.Show(ex.Message, "Gestione dipendenze Java",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
         private void RefreshInstalled()
         {
             if (string.IsNullOrWhiteSpace(projectFile)) return;
@@ -723,9 +827,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 installedResults.ItemsSource = installed.Items.ToList();
                 installedNote.Text = installed.Note;
                 projectInfo.Text = installed.Backend + " · " + installed.Items.Count +
-                    " dipendenze dirette · repository del progetto (sola lettura)";
-                updatesNote.Text = "Il confronto indica versioni diverse, non garantisce un " +
-                    "aggiornamento semantico. Non vengono modificati file di progetto.";
+                    " dipendenze dirette · " + (installed.Backend == "Plain" ?
+                        "JAR Plain: sola lettura" : "modifica assistita");
+                updatesNote.Text = "Il confronto è indicativo e non verifica i vincoli del progetto. " +
+                    "Selezionare un risultato e confermare prima di modificare i file.";
             }
             catch (Exception ex) when (ex is System.IO.IOException || ex is XmlException ||
                 ex is UnauthorizedAccessException || ex is ArgumentException)
@@ -735,6 +840,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 projectInfo.Text = "Impossibile leggere le dipendenze locali.";
                 installedNote.Text = ex.Message;
             }
+            RefreshDependencyActions();
         }
 
         private void ResetSourceSelector()
@@ -1368,7 +1474,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 updatesNote.Text = candidates.Count + " aggiornamenti stabili individuati. " +
                     (failures > 0 ? failures + " verifiche con avvisi/errori. " : "") +
                     "Catalogo aggregato dai repository attivi; confronto indicativo, " +
-                    "nessuna modifica al progetto. Vincoli Gradle/Maven non valutati.";
+                    "nessuna modifica senza conferma. Vincoli Gradle/Maven non valutati.";
+                RefreshDependencyActions();
             }
             catch (OperationCanceledException)
             { if (generation == updatesGeneration) updatesNote.Text = "Verifica annullata."; }
