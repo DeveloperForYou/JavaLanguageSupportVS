@@ -311,6 +311,12 @@ namespace JavaLanguageSupport.Editor.Completion
                 }
             }
 
+            // F4F21111-GRADLE-IMPORT-FALLBACK: JDT LS may expose binary types
+            // through java/searchSymbols even when workspace/symbol and the
+            // completion response did not provide them. Maven remains untouched.
+            if (found.Count == 0 && IsGradleDocument(uri))
+                await AddGradleBinaryTypesAsync(found, simpleName, token).ConfigureAwait(false);
+
             JavaLanguageStatus.LspResponse("java/importQualifiedTypes", found.Count, false, false);
             foreach (string qualifiedName in found.OrderBy(s => s, StringComparer.Ordinal))
             {
@@ -329,6 +335,106 @@ namespace JavaLanguageSupport.Editor.Completion
                     ["edit"] = CreateImportEdit(snapshot, uri, qualifiedName)
                 });
             }
+        }
+
+        // F4F21111-GRADLE-IMPORT-FALLBACK: keep this fallback isolated to
+        // loaded Gradle CPS projects; never query all repositories on the web.
+        private static bool IsGradleDocument(string uri)
+        {
+            Uri documentUri;
+            if (!Uri.TryCreate(uri, UriKind.Absolute, out documentUri) ||
+                !documentUri.IsFile) return false;
+            try
+            {
+                string source = System.IO.Path.GetFullPath(documentUri.LocalPath);
+                string selectedProject = null;
+                int selectedRootLength = -1;
+                foreach (string project in JavaCpsWorkspaceContext.LoadedProjects())
+                {
+                    if (string.IsNullOrWhiteSpace(project) ||
+                        !System.IO.File.Exists(project)) continue;
+                    string root = System.IO.Path.GetDirectoryName(
+                        System.IO.Path.GetFullPath(project)).TrimEnd('\\', '/');
+                    if (!source.StartsWith(root + System.IO.Path.DirectorySeparatorChar,
+                            StringComparison.OrdinalIgnoreCase)) continue;
+                    if (root.Length <= selectedRootLength) continue;
+                    selectedRootLength = root.Length;
+                    selectedProject = project;
+                }
+                if (selectedProject == null) return false;
+                var options = new System.Xml.XmlReaderSettings
+                {
+                    XmlResolver = null,
+                    DtdProcessing = System.Xml.DtdProcessing.Prohibit,
+                    MaxCharactersInDocument = 8 * 1024 * 1024
+                };
+                using (var reader = System.Xml.XmlReader.Create(selectedProject, options))
+                {
+                    var projectXml = System.Xml.Linq.XDocument.Load(reader);
+                    return projectXml.Descendants().Any(element =>
+                        element.Name.LocalName == "JavaBuildSystem" &&
+                        string.Equals(element.Value.Trim(), "Gradle",
+                            StringComparison.OrdinalIgnoreCase));
+                }
+            }
+            catch (Exception exception) when (
+                exception is System.IO.IOException ||
+                exception is UnauthorizedAccessException ||
+                exception is ArgumentException ||
+                exception is NotSupportedException ||
+                exception is System.Xml.XmlException)
+            {
+                return false;
+            }
+        }
+
+        // The result is only a *candidate* for the existing native Ctrl+.
+        // menu. The user still chooses the import; no automatic source edits.
+        // java/searchSymbols returns classes in JDT's binary index, including
+        // dependency JARs that are sometimes absent from workspace/symbol.
+        private static async Task AddGradleBinaryTypesAsync(
+            HashSet<string> names, string simpleName, CancellationToken token)
+        {
+            JToken response;
+            try
+            {
+                response = await JavaLspRpc.RequestAsync("java/searchSymbols",
+                    new { query = simpleName, maxResults = 100, sourceOnly = false },
+                    token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                JavaLanguageStatus.LspFailure("java/importGradleBinarySymbols",
+                    ex.GetType().Name + ": " + ex.Message);
+                return;
+            }
+            var results = response as JArray ??
+                (response as JObject)?["items"] as JArray ??
+                (response as JObject)?["symbols"] as JArray;
+            if (results == null) return;
+            foreach (var symbol in results.OfType<JObject>().Take(100))
+            {
+                if (token.IsCancellationRequested) return;
+                // Standard LSP SymbolKind: Class=5, Interface=11, Enum=10,
+                // Struct=23; annotation may arrive as Property=7.
+                int kind = (int?)symbol["kind"] ?? -1;
+                if (kind != 5 && kind != 7 && kind != 10 &&
+                    kind != 11 && kind != 23) continue;
+                string label = (string)symbol["name"];
+                string container = (string)symbol["containerName"];
+                string qualified = null;
+                if (string.Equals(label, simpleName, StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(container))
+                    qualified = container.Trim() + "." + simpleName;
+                else if (!string.IsNullOrWhiteSpace(label) &&
+                    label.EndsWith("." + simpleName, StringComparison.Ordinal))
+                    qualified = label;
+                if (qualified != null && IsJavaQualifiedName(qualified))
+                    names.Add(qualified);
+            }
+            JavaLanguageStatus.LspResponse("java/importGradleBinarySymbols",
+                names.Count, false, false);
         }
 
         // Evita di applicare import per un altro identificatore presente
