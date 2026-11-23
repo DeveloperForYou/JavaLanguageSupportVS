@@ -47,6 +47,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             bool installedNewDirectory = false;
             bool retainedOldDirectory = false;
             string temporaryFile = null;
+            int sharedJarCount = 0;
             try
             {
                 if (jarNames.Length != 0)
@@ -76,15 +77,18 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     if (preparedDirectory == null)
                         throw new IOException("Impossibile creare una cartella temporanea Plain univoca.");
                     Directory.CreateDirectory(preparedDirectory);
+                    // PLAIN-SHARED-JAR-LINKS-20261123-D: other packages retain
+                    // independent .javaproj references and directory entries.
+                    // Where identical, NTFS hard links share immutable JAR bytes;
+                    // on other volumes/file systems use the original safe copy.
+                    var sharedCandidates = JavaPlainSharedJarLinks.ReadCandidates(ProjectFile, target);
                     foreach (string jar in jarNames)
                     {
                         string source = Path.Combine(stage, jar);
                         string destination = Path.Combine(preparedDirectory, jar);
                         ValidateJar(source);
-                        using (var input = File.OpenRead(source))
-                        using (var output = new FileStream(destination, FileMode.CreateNew,
-                            FileAccess.Write, FileShare.None))
-                        { input.CopyTo(output); output.Flush(true); }
+                        if (JavaPlainSharedJarLinks.CopyOrLink(source, destination, sharedCandidates))
+                            sharedJarCount++;
                     }
 
                     if (Directory.Exists(target) &&
@@ -129,6 +133,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 File.Replace(temporaryFile, ProjectFile, null);
                 temporaryFile = null;
                 applied = true;
+                if (sharedJarCount != 0)
+                    Summary += " JAR condivisi tramite NTFS: " + sharedJarCount + ".";
                 if (retainedOldDirectory)
                     Summary += " Backup JAR: " + retainedJarDirectory + ".";
                 // Old JARs are intentionally retained as a recoverable copy on disk;
@@ -246,6 +252,141 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             try { Directory.Delete(stage, true); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    // PLAIN-SHARED-JAR-LINKS-20261123-D: physical sharing without changing
+    // the existing per-package ownership metadata or JDT LS classpath model.
+    // A link has its own file name/directory entry: removing package A's
+    // references/directory cannot invalidate package B's JAR.
+    // We never hard-link untrusted paths, and never modify a linked JAR in-place.
+    internal static class JavaPlainSharedJarLinks
+    {
+        [System.Runtime.InteropServices.DllImport("kernel32.dll",
+            EntryPoint = "CreateHardLinkW", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+            SetLastError = true)]
+        [return: System.Runtime.InteropServices.MarshalAs(
+            System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool CreateHardLink(string newFileName,
+            string existingFileName, IntPtr securityAttributes);
+
+        // Only explicit package-manager-owned JARs from the *current* .javaproj
+        // are eligible as donors. Old backups/uninstalled package folders are
+        // deliberately ignored (they may be stale or otherwise untrusted).
+        internal static IDictionary<string, List<string>> ReadCandidates(
+            string projectFile, string installingTarget)
+        {
+            var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            string root = Path.GetDirectoryName(Path.GetFullPath(projectFile));
+            string managedRoot = Path.Combine(root, "lib", "java-packages")
+                .TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            string targetPrefix = Path.GetFullPath(installingTarget)
+                .TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            var settings = new XmlReaderSettings
+            {
+                XmlResolver = null, DtdProcessing = DtdProcessing.Prohibit,
+                MaxCharactersInDocument = 8 * 1024 * 1024
+            };
+            var doc = new XmlDocument { XmlResolver = null };
+            using (var reader = XmlReader.Create(projectFile, settings)) doc.Load(reader);
+            if (doc.DocumentElement == null || doc.DocumentElement.LocalName != "Project")
+                throw new InvalidDataException("Il .javaproj non contiene un elemento Project valido.");
+            foreach (var group in doc.DocumentElement.ChildNodes.OfType<XmlElement>()
+                .Where(n => n.LocalName == "ItemGroup"))
+            foreach (var item in group.ChildNodes.OfType<XmlElement>()
+                .Where(n => n.LocalName == "JavaJarReference"))
+            {
+                if (!item.ChildNodes.OfType<XmlElement>().Any(n =>
+                    n.LocalName == "JavaPackageManagerId" &&
+                    !string.IsNullOrWhiteSpace(n.InnerText))) continue;
+                string include = item.GetAttribute("Include");
+                // Never expand MSBuild expressions, wildcards, environment vars,
+                // or a path to a file the user did not explicitly reference.
+                if (string.IsNullOrWhiteSpace(include) ||
+                    include.IndexOfAny(new[] { '$', '%', '*', '?', ';' }) >= 0 ||
+                    !include.EndsWith(".jar", StringComparison.OrdinalIgnoreCase)) continue;
+                string full;
+                try
+                {
+                    full = Path.GetFullPath(Path.IsPathRooted(include) ? include :
+                        Path.Combine(root, include));
+                    if (!full.StartsWith(managedRoot, StringComparison.OrdinalIgnoreCase) ||
+                        full.StartsWith(targetPrefix, StringComparison.OrdinalIgnoreCase) ||
+                        !File.Exists(full) ||
+                        (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+                        continue;
+                    JavaPlainPackageChange.EnsureDirectorySafe(root, Path.GetDirectoryName(full));
+                }
+                catch (Exception error) when (error is IOException ||
+                    error is UnauthorizedAccessException || error is ArgumentException ||
+                    error is NotSupportedException) { continue; }
+                string fileName = Path.GetFileName(full);
+                List<string> names;
+                if (!result.TryGetValue(fileName, out names))
+                    result[fileName] = names = new List<string>();
+                if (!names.Any(p => string.Equals(p, full,
+                    StringComparison.OrdinalIgnoreCase))) names.Add(full);
+            }
+            return result;
+        }
+
+        // Returns true ONLY when Windows actually created a hard link.
+        // Unsupported file system, permissions, MAX_PATH, or hash mismatch
+        // transparently falls back to a byte-for-byte copy into the new staging
+        // directory. No external JARs and no JAR count/size limits are used.
+        internal static bool CopyOrLink(string downloaded, string destination,
+            IDictionary<string, List<string>> candidates)
+        {
+            List<string> matches;
+            if (candidates != null && candidates.TryGetValue(Path.GetFileName(downloaded),
+                out matches))
+            {
+                foreach (string existing in matches)
+                {
+                    try
+                    {
+                        if (!SameContent(downloaded, existing)) continue;
+                        if (!CreateHardLink(destination, existing, IntPtr.Zero)) continue;
+                        // A donor can change between hash check and link creation.
+                        // Never accept a link pointing at different bytes.
+                        if (SameContent(downloaded, destination)) return true;
+                        File.Delete(destination);
+                    }
+                    catch (Exception error) when (error is IOException ||
+                        error is UnauthorizedAccessException ||
+                        error is System.Runtime.InteropServices.ExternalException ||
+                        error is EntryPointNotFoundException ||
+                        error is DllNotFoundException ||
+                        error is BadImageFormatException)
+                    {
+                        // If an attempted link was created but validation failed,
+                        // remove only this temporary directory entry.
+                        if (File.Exists(destination)) File.Delete(destination);
+                    }
+                }
+            }
+            using (var input = File.OpenRead(downloaded))
+            using (var output = new FileStream(destination, FileMode.CreateNew,
+                FileAccess.Write, FileShare.None))
+            {
+                input.CopyTo(output);
+                output.Flush(true);
+            }
+            return false;
+        }
+
+        private static bool SameContent(string left, string right)
+        {
+            if ((File.GetAttributes(right) & FileAttributes.ReparsePoint) != 0 ||
+                new FileInfo(left).Length != new FileInfo(right).Length)
+                return false;
+            using (var digest = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] first, second;
+                using (var stream = File.OpenRead(left)) first = digest.ComputeHash(stream);
+                using (var stream = File.OpenRead(right)) second = digest.ComputeHash(stream);
+                return first.SequenceEqual(second);
+            }
         }
     }
 

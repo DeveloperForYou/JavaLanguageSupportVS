@@ -306,11 +306,40 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             var nameCounts = snapshots.GroupBy(j => Path.GetFileName(j.Path),
                 StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key,
                     g => g.Count(), StringComparer.OrdinalIgnoreCase);
+            // CPS requires every sibling node caption to be unique. A shared
+            // transitive JAR may appear under multiple Plain package owners.
+            var usedCaptions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var jar in snapshots)
             {
                 string caption = Path.GetFileName(jar.Path);
                 if (nameCounts[caption] > 1)
-                    caption += " (" + Path.GetFileName(Path.GetDirectoryName(jar.Path)) + ")";
+                {
+                    string versionFolder = Path.GetDirectoryName(jar.Path);
+                    string artifactFolder = versionFolder == null ? null : Path.GetDirectoryName(versionFolder);
+                    string groupFolder = artifactFolder == null ? null : Path.GetDirectoryName(artifactFolder);
+                    string managerFolder = groupFolder == null ? null : Path.GetDirectoryName(groupFolder);
+                    if (string.Equals(Path.GetFileName(managerFolder), "java-packages",
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Managed layout: lib/java-packages/group/artifact/version/file.jar.
+                        // Show the owning direct dependency, not only the version
+                        // directory (which is identical for Jackson XML and YAML).
+                        caption += " (" + Path.GetFileName(groupFolder) + ":" +
+                            Path.GetFileName(artifactFolder) + ":" +
+                            Path.GetFileName(versionFolder) + ")";
+                    }
+                    else
+                        caption += " (" + Path.GetFileName(versionFolder) + ")";
+                }
+                // Other external JARs may still have the same filename and
+                // parent directory label. Keep both nodes without CPS collisions.
+                if (!usedCaptions.Add(caption))
+                {
+                    string originalCaption = caption;
+                    int suffix = 2;
+                    do { caption = originalCaption + " [" + suffix++ + "]"; }
+                    while (!usedCaptions.Add(caption));
+                }
                 IProjectTree jarNode = NewTree(caption, icon: icon,
                     expandedIcon: icon, flags: flags);
                 if (!string.IsNullOrEmpty(jar.Status))
