@@ -317,6 +317,16 @@ namespace JavaLanguageSupport.Editor.Completion
             if (found.Count == 0 && IsGradleDocument(uri))
                 await AddGradleBinaryTypesAsync(found, simpleName, token).ConfigureAwait(false);
 
+            // Plain: the JAR is already explicitly referenced in the .javaproj.
+            // JDT LS may not yet have indexed its binary types; find candidates
+            // in local JAR central directories without extracting/executing them.
+            // The final Ctrl+. choice remains explicit, never automatic.
+            var plainJarTypes = await JavaPlainJarImportFallback.FindAsync(
+                uri, simpleName, token).ConfigureAwait(false);
+            foreach (string qualified in plainJarTypes) found.Add(qualified);
+            if (plainJarTypes.Count != 0)
+                JavaLanguageStatus.LspResponse("java/importPlainJarTypes", plainJarTypes.Count, false, false);
+
             JavaLanguageStatus.LspResponse("java/importQualifiedTypes", found.Count, false, false);
             foreach (string qualifiedName in found.OrderBy(s => s, StringComparer.Ordinal))
             {

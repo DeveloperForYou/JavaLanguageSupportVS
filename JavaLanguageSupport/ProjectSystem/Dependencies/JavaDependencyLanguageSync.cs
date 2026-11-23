@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml.Linq;
+using System.Xml;
 using JavaLanguageSupport.LanguageServer;
 using Newtonsoft.Json.Linq;
 
@@ -103,6 +105,10 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 string file;
                 lock (Gate) file = instance.project;
                 if (!JavaCpsWorkspaceContext.ContainsProject(file)) continue;
+                // CPS can still expose the *old* ProjectInstance immediately after
+                // the package manager atomically replaces the .javaproj.
+                // Read explicit on-disk references before notifying JDT LS.
+                instance.RefreshPlainReferencesFromProjectFile(file);
                 instance.Signal(file);
                 _ = Task.Run(() =>
                 {
@@ -111,6 +117,68 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 });
             }
             Log("Ricarica dipendenze richiesta.");
+        }
+
+        // RefreshAll is called after the Plain package transaction has committed.
+        // CPS reevaluation may lag behind File.Replace: refresh the authoritative
+        // literal JavaJarReference items from the current .javaproj on disk.
+        // Keep references from imported MSBuild files; only replace the managed
+        // lib\java-packages subtree. CPS will subsequently reconcile its snapshot.
+        private void RefreshPlainReferencesFromProjectFile(string file)
+        {
+            lock (Gate)
+                if (disposed || !Equal(project, file) || !Equal(backend, "Plain")) return;
+            try
+            {
+                var readerSettings = new XmlReaderSettings
+                {
+                    XmlResolver = null, DtdProcessing = DtdProcessing.Prohibit,
+                    MaxCharactersInDocument = 8 * 1024 * 1024
+                };
+                XDocument document;
+                using (var reader = XmlReader.Create(file, readerSettings))
+                    document = XDocument.Load(reader);
+                if (document.Root == null || document.Root.Name.LocalName != "Project") return;
+                string root = Path.GetDirectoryName(Path.GetFullPath(file));
+                var declared = new List<string>();
+                foreach (var itemGroup in document.Root.Elements()
+                    .Where(x => x.Name.LocalName == "ItemGroup"))
+                foreach (var item in itemGroup.Elements()
+                    .Where(x => x.Name.LocalName == "JavaJarReference"))
+                {
+                    string include = (string)item.Attribute("Include");
+                    // Never interpret MSBuild expressions or globs as file paths.
+                    if (string.IsNullOrWhiteSpace(include) ||
+                        include.IndexOfAny(new[] { '*', '?', '$', '%', ';' }) >= 0 ||
+                        !include.EndsWith(".jar", StringComparison.OrdinalIgnoreCase)) continue;
+                    try
+                    {
+                        declared.Add(Path.GetFullPath(Path.IsPathRooted(include) ? include :
+                            Path.Combine(root, include)));
+                    }
+                    catch (Exception ex) when (ex is ArgumentException ||
+                        ex is NotSupportedException || ex is PathTooLongException) { }
+                }
+                string managedRoot = Path.Combine(root, "lib", "java-packages")
+                    .TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+                lock (Gate)
+                {
+                    if (disposed || !Equal(project, file) || !Equal(backend, "Plain")) return;
+                    string[] updated = jars.Where(p => !p.StartsWith(managedRoot,
+                            StringComparison.OrdinalIgnoreCase))
+                        .Concat(declared).Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
+                    if (jars.SequenceEqual(updated, StringComparer.OrdinalIgnoreCase)) return;
+                    jars = updated;
+                    QueueLocked();
+                }
+                Log("Plain: JavaJarReference aggiornati dal .javaproj salvato.");
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException ||
+                ex is ArgumentException || ex is XmlException)
+            {
+                Log("Plain: lettura JAR dal progetto non riuscita: " + ex.GetType().Name);
+            }
         }
 
         private void QueueLocked()

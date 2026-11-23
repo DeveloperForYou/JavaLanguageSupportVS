@@ -744,22 +744,32 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         // Only a deliberately confirmed action can change the selected project.
         private void RefreshDependencyActions()
         {
-            bool writable = installed != null &&
-                (string.Equals(installed.Backend, "Maven", StringComparison.OrdinalIgnoreCase) ||
+            // F4F2112-PLAIN-MANAGEMENT: enable Plain only for package-managed coordinates.
+            bool plain = installed != null && string.Equals(installed.Backend,
+                "Plain", StringComparison.OrdinalIgnoreCase);
+            bool writable = !plainPackageBusy && installed != null &&
+                (plain || string.Equals(installed.Backend, "Maven", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(installed.Backend, "Gradle", StringComparison.OrdinalIgnoreCase));
             var version = versionPicker.SelectedItem as JavaPackageVersionDisplay;
             var artifact = browseResults.SelectedItem as JavaCentralArtifact;
             installDependencyButton.IsEnabled = writable && artifact != null && version != null &&
                 lastCatalog != null && lastCatalog.Versions.Contains(version.Version);
-            removeDependencyButton.IsEnabled = writable &&
-                installedResults.SelectedItem is JavaInstalledDependency;
-            applyUpdateButton.IsEnabled = writable &&
-                updatesResults.SelectedItem is JavaPackageUpdateCandidate;
+            var removable = installedResults.SelectedItem as JavaInstalledDependency;
+            removeDependencyButton.IsEnabled = writable && removable != null &&
+                (!plain || removable.MavenCoordinate);
+            var candidate = updatesResults.SelectedItem as JavaPackageUpdateCandidate;
+            applyUpdateButton.IsEnabled = writable && candidate != null &&
+                (!plain || candidate.Installed.MavenCoordinate);
         }
 
         private void ApplyDependencyChange(JavaDependencyOperation operation)
         {
             if (string.IsNullOrWhiteSpace(projectFile) || installed == null) return;
+            if (string.Equals(installed.Backend, "Plain", StringComparison.OrdinalIgnoreCase))
+            {
+                _ = ApplyPlainDependencyChangeAsync(operation);
+                return;
+            }
             string initialProject = projectFile;
             try
             {
@@ -818,6 +828,96 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             }
         }
 
+        // F4F2112-PLAIN-MANAGEMENT: dependency resolution is never run on the UI thread.
+        // Resolve to an isolated temp folder, confirm exact JAR count, commit atomically.
+        private bool plainPackageBusy;
+
+        private async Task ApplyPlainDependencyChangeAsync(JavaDependencyOperation operation)
+        {
+            if (plainPackageBusy || string.IsNullOrWhiteSpace(projectFile) || installed == null) return;
+            string initialProject = projectFile;
+            plainPackageBusy = true;
+            RefreshDependencyActions();
+            try
+            {
+                string group, artifact, version = null;
+                if (operation == JavaDependencyOperation.Install)
+                {
+                    var found = browseResults.SelectedItem as JavaCentralArtifact;
+                    var picked = versionPicker.SelectedItem as JavaPackageVersionDisplay;
+                    if (found == null || picked == null || lastCatalog == null ||
+                        !lastCatalog.Versions.Contains(picked.Version))
+                        throw new InvalidOperationException("Selezionare una libreria e una versione Plain.");
+                    group = found.GroupId; artifact = found.ArtifactId; version = picked.Version;
+                }
+                else if (operation == JavaDependencyOperation.Update)
+                {
+                    var candidate = updatesResults.SelectedItem as JavaPackageUpdateCandidate;
+                    if (candidate == null || !candidate.Installed.MavenCoordinate)
+                        throw new InvalidOperationException("Selezionare un pacchetto Plain gestito.");
+                    group = candidate.Installed.GroupId;
+                    artifact = candidate.Installed.ArtifactId;
+                    version = candidate.Latest;
+                }
+                else
+                {
+                    var selected = installedResults.SelectedItem as JavaInstalledDependency;
+                    if (selected == null || !selected.MavenCoordinate)
+                        throw new InvalidOperationException("I JAR esterni non gestiti rimangono intatti.");
+                    group = selected.GroupId; artifact = selected.ArtifactId;
+                }
+                var origins = SelectedSources();
+                status.Text = operation == JavaDependencyOperation.Remove ?
+                    "Preparazione rimozione Plain..." :
+                    "Risoluzione Maven delle dipendenze transitive Plain in corso...";
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
+                using (var change = await JavaPlainPackageManager.PrepareAsync(initialProject,
+                    operation, group, artifact, version, origins, timeout.Token))
+                {
+                    if (!string.Equals(initialProject, projectFile, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Il progetto selezionato è cambiato.");
+                    string message = change.Summary + "\n\nProgetto: " +
+                        System.IO.Path.GetFileName(initialProject) +
+                        "\nJAR risolti: " + change.JarCount +
+                        "\n\nMaven risolve le dipendenze runtime anche transitive. " +
+                        "I file JAR precedenti resteranno sul disco come copia di recupero " +
+                        "ma saranno rimossi dal classpath.\n" +
+                        "Il progetto verrà salvato con un backup. Confermare?";
+                    if (MessageBox.Show(message, "Gestione pacchetti Plain",
+                        MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                    {
+                        status.Text = "Operazione Plain annullata: progetto invariato.";
+                        return;
+                    }
+                    change.Apply();
+                    CancelAll();
+                    updatesResults.ItemsSource = null;
+                    RefreshInstalled();
+                    JavaLanguageSupport.ProjectSystem.Dependencies.JavaDependencyLanguageSync.RefreshAll();
+                    status.Text = change.Summary + " Backup: " + change.BackupPath +
+                        ". Verificare Build e JDT LS.";
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                status.Text = "Risoluzione Plain interrotta dopo il timeout: progetto non modificato.";
+            }
+            catch (Exception ex) when (ex is System.IO.IOException ||
+                ex is System.IO.InvalidDataException || ex is UnauthorizedAccessException ||
+                ex is ArgumentException || ex is NotSupportedException ||
+                ex is InvalidOperationException || ex is XmlException)
+            {
+                status.Text = "Pacchetto Plain non modificato: " + ex.Message;
+                MessageBox.Show(ex.Message, "Gestione pacchetti Plain",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
+                plainPackageBusy = false;
+                RefreshDependencyActions();
+            }
+        }
+
         private void RefreshInstalled()
         {
             if (string.IsNullOrWhiteSpace(projectFile)) return;
@@ -828,7 +928,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 installedNote.Text = installed.Note;
                 projectInfo.Text = installed.Backend + " · " + installed.Items.Count +
                     " dipendenze dirette · " + (installed.Backend == "Plain" ?
-                        "JAR Plain: sola lettura" : "modifica assistita");
+                        "JAR Plain: gestione assistita" : "modifica assistita");
                 updatesNote.Text = "Il confronto è indicativo e non verifica i vincoli del progetto. " +
                     "Selezionare un risultato e confermare prima di modificare i file.";
             }

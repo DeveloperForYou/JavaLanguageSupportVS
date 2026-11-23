@@ -143,7 +143,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 .Where(d => !string.IsNullOrWhiteSpace(d) &&
                     !string.Equals(d, projectRoot, StringComparison.OrdinalIgnoreCase) &&
                     !d.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase).Take(80);
+                .Distinct(StringComparer.OrdinalIgnoreCase);
             foreach (string directory in externalDirs)
             {
                 if (!Directory.Exists(directory)) continue;
@@ -243,8 +243,6 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 string status = null;
                 try
                 {
-                    if (paths.Count > 80)
-                        throw new InvalidDataException("Troppi riferimenti JAR");
                     var list = new List<JavaExternalJarSnapshot>();
                     foreach (string path in paths)
                     {

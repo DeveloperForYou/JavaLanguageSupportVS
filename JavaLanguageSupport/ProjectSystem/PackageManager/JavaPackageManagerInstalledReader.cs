@@ -67,16 +67,27 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             }
             else if (string.Equals(backend, "Plain", StringComparison.OrdinalIgnoreCase))
             {
+                // F4F2112-PLAIN-MANAGEMENT: one entry per managed package,
+                // even when Maven resolved several transitive JARs for it.
                 foreach (XElement jar in project.Descendants()
                     .Where(x => x.Name.LocalName == "JavaJarReference"))
                 {
                     string include = (string)jar.Attribute("Include");
-                    if (!string.IsNullOrWhiteSpace(include))
+                    if (string.IsNullOrWhiteSpace(include)) continue;
+                    string id = jar.Elements().Where(x => x.Name.LocalName ==
+                        JavaPlainPackageManager.ManagedId).Select(x => x.Value.Trim()).FirstOrDefault();
+                    string version = jar.Elements().Where(x => x.Name.LocalName ==
+                        JavaPlainPackageManager.ManagedVersion).Select(x => x.Value.Trim()).FirstOrDefault();
+                    string[] parts = (id ?? "").Split(':');
+                    if (parts.Length == 2 && parts.All(x => x.Length > 0) &&
+                        !string.IsNullOrWhiteSpace(version))
+                        list.Add(new JavaInstalledDependency(parts[0], parts[1], version, true));
+                    else
                         list.Add(new JavaInstalledDependency("JAR esterno",
                             Path.GetFileName(include.Replace('\\', '/')), "-", false));
                 }
-                note = "Riferimenti JavaJarReference del progetto Plain. " +
-                    "Non sono coordinate Maven Central.";
+                note = "Pacchetti Plain gestiti con coordinate Maven e JAR esterni manuali. " +
+                    "Le dipendenze transitive sono raccolte sotto il pacchetto diretto.";
             }
             else note = "Backend non riconosciuto: elenco locale non disponibile.";
             return new JavaInstalledSnapshot(backend, list
