@@ -303,74 +303,205 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 return category.Add(NewTree(status, icon: icon, expandedIcon: icon,
                     flags: flags)).Parent;
 
-            var nameCounts = snapshots.GroupBy(j => Path.GetFileName(j.Path),
-                StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key,
-                    g => g.Count(), StringComparer.OrdinalIgnoreCase);
-            // CPS requires every sibling node caption to be unique. A shared
-            // transitive JAR may appear under multiple Plain package owners.
-            var usedCaptions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // PLAIN-TRANSITIVE-OWNER-TREE-20261123: group by managed direct dependency.
+            // Package ownership is read from project metadata, NOT inferred from a file name.
+            var ownerPaths = ReadPlainJarOwnership(projectFile);
+            var managed = new SortedDictionary<string, PlainJarOwner>(
+                StringComparer.OrdinalIgnoreCase);
+            var manual = new List<JavaExternalJarSnapshot>();
             foreach (var jar in snapshots)
             {
-                string caption = Path.GetFileName(jar.Path);
-                if (nameCounts[caption] > 1)
+                List<PlainJarOwner> memberships;
+                if (!ownerPaths.TryGetValue(jar.Path, out memberships) ||
+                    memberships.Count == 0)
                 {
-                    string versionFolder = Path.GetDirectoryName(jar.Path);
-                    string artifactFolder = versionFolder == null ? null : Path.GetDirectoryName(versionFolder);
-                    string groupFolder = artifactFolder == null ? null : Path.GetDirectoryName(artifactFolder);
-                    string managerFolder = groupFolder == null ? null : Path.GetDirectoryName(groupFolder);
-                    if (string.Equals(Path.GetFileName(managerFolder), "java-packages",
-                        StringComparison.OrdinalIgnoreCase))
+                    manual.Add(jar);
+                    continue;
+                }
+                foreach (var membership in memberships)
+                {
+                    string key = membership.Id + "|" + membership.Version;
+                    PlainJarOwner owner;
+                    if (!managed.TryGetValue(key, out owner))
                     {
-                        // Managed layout: lib/java-packages/group/artifact/version/file.jar.
-                        // Show the owning direct dependency, not only the version
-                        // directory (which is identical for Jackson XML and YAML).
-                        caption += " (" + Path.GetFileName(groupFolder) + ":" +
-                            Path.GetFileName(artifactFolder) + ":" +
-                            Path.GetFileName(versionFolder) + ")";
-                    }
-                    else
-                        caption += " (" + Path.GetFileName(versionFolder) + ")";
-                }
-                // Other external JARs may still have the same filename and
-                // parent directory label. Keep both nodes without CPS collisions.
-                if (!usedCaptions.Add(caption))
-                {
-                    string originalCaption = caption;
-                    int suffix = 2;
-                    do { caption = originalCaption + " [" + suffix++ + "]"; }
-                    while (!usedCaptions.Add(caption));
-                }
-                IProjectTree jarNode = NewTree(caption, icon: icon,
-                    expandedIcon: icon, flags: flags);
-                if (!string.IsNullOrEmpty(jar.Status))
-                {
-                    jarNode = jarNode.Add(NewTree(jar.Status,
-                        icon: icon, expandedIcon: icon, flags: flags)).Parent;
-                }
-                else
-                {
-                    int classCount = jar.Packages.Sum(p => p.Value.Count);
-                    IProjectTree classes = NewTree("Classi (" + classCount + ")",
-                        icon: icon, expandedIcon: icon, flags: flags);
-                    foreach (var package in jar.Packages)
-                    {
-                        IProjectTree folder = NewTree(string.IsNullOrEmpty(package.Key)
-                            ? "(package predefinito)" : package.Key,
-                            icon: icon, expandedIcon: icon, flags: flags);
-                        foreach (string className in package.Value)
+                        owner = new PlainJarOwner
                         {
-                            // F4D21-JAR-SOURCE-FLAG
-                            folder = folder.Add(NewTree(className, icon: classIcon,
-                                expandedIcon: classIcon,
-                                flags: flags.Union(JavaExternalJarSourceTreeFlags.ClassNode))).Parent;
-                        }
-                        classes = classes.Add(folder).Parent;
+                            Id = membership.Id,
+                            Version = membership.Version,
+                            Scope = membership.Scope
+                        };
+                        managed.Add(key, owner);
                     }
-                    jarNode = jarNode.Add(classes).Parent;
+                    if (!owner.Jars.Any(j => string.Equals(j.Path, jar.Path,
+                        StringComparison.OrdinalIgnoreCase)))
+                        owner.Jars.Add(jar);
                 }
-                category = category.Add(jarNode).Parent;
             }
+
+            var lookup = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var owner in managed.Values)
+            {
+                string ownerCaption = owner.Id + " (" + owner.Version + ")" +
+                    (string.IsNullOrEmpty(owner.Scope) ? "" : " [" + owner.Scope + "]");
+                IProjectTree packageNode = NewTree(ownerCaption,
+                    icon: icon, expandedIcon: icon, flags: flags);
+                var usedCaptions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                // Maven copy-dependencies prepends groupId to the actual main filename.
+                string[] idParts = owner.Id.Split(':');
+                string mainFile = idParts.Length == 2 ?
+                    idParts[0] + "." + idParts[1] + "-" + owner.Version + ".jar" : "";
+                var direct = owner.Jars.Where(j => string.Equals(
+                    Path.GetFileName(j.Path), mainFile, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                var transitives = owner.Jars.Where(j => !string.Equals(
+                    Path.GetFileName(j.Path), mainFile, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                foreach (var jar in direct.OrderBy(j => j.Path,
+                    StringComparer.OrdinalIgnoreCase))
+                    packageNode = packageNode.Add(BuildPlainJarNode(jar,
+                        ownerCaption, usedCaptions, lookup)).Parent;
+                if (transitives.Count != 0)
+                {
+                    IProjectTree transitiveGroup = NewTree(
+                        "Dipendenze transitive (" + transitives.Count + ")",
+                        icon: icon, expandedIcon: icon, flags: flags);
+                    foreach (var jar in transitives.OrderBy(j => j.Path,
+                        StringComparer.OrdinalIgnoreCase))
+                        transitiveGroup = transitiveGroup.Add(BuildPlainJarNode(jar,
+                            ownerCaption, usedCaptions, lookup)).Parent;
+                    packageNode = packageNode.Add(transitiveGroup).Parent;
+                }
+                category = category.Add(packageNode).Parent;
+            }
+            if (manual.Count != 0)
+            {
+                const string manualOwner = "JAR non gestiti";
+                IProjectTree manualGroup = NewTree(manualOwner,
+                    icon: icon, expandedIcon: icon, flags: flags);
+                var usedCaptions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var jar in manual.OrderBy(j => j.Path,
+                    StringComparer.OrdinalIgnoreCase))
+                    manualGroup = manualGroup.Add(BuildPlainJarNode(jar,
+                        manualOwner, usedCaptions, lookup)).Parent;
+                category = category.Add(manualGroup).Parent;
+            }
+            // Preserve precise source navigation even when the same transitive JAR
+            // has identical names under two different direct dependencies.
+            JavaExternalJarSourceRegistry.ReplaceByOwner(projectFile, lookup);
             return category;
+        }
+
+        // PLAIN-TRANSITIVE-OWNER-TREE-20261123: presentation only, no classpath edits.
+        private sealed class PlainJarOwner
+        {
+            internal string Id;
+            internal string Version;
+            internal string Scope;
+            internal readonly List<JavaExternalJarSnapshot> Jars =
+                new List<JavaExternalJarSnapshot>();
+        }
+
+        private static Dictionary<string, List<PlainJarOwner>> ReadPlainJarOwnership(
+            string projectFile)
+        {
+            var owners = new Dictionary<string, List<PlainJarOwner>>(
+                StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(projectFile) || !File.Exists(projectFile))
+                return owners;
+            try
+            {
+                string projectRoot = Path.GetDirectoryName(Path.GetFullPath(projectFile));
+                var settings = new System.Xml.XmlReaderSettings
+                {
+                    XmlResolver = null,
+                    DtdProcessing = System.Xml.DtdProcessing.Prohibit,
+                    MaxCharactersInDocument = 8 * 1024 * 1024
+                };
+                using (var reader = System.Xml.XmlReader.Create(projectFile, settings))
+                {
+                    var document = System.Xml.Linq.XDocument.Load(reader);
+                    if (document.Root == null) return owners;
+                    foreach (var group in document.Root.Elements().Where(e =>
+                        e.Name.LocalName == "ItemGroup"))
+                    foreach (var item in group.Elements().Where(e =>
+                        e.Name.LocalName == "JavaJarReference"))
+                    {
+                        string include = (string)item.Attribute("Include");
+                        if (string.IsNullOrWhiteSpace(include) || include.Contains("$("))
+                            continue;
+                        string id = item.Elements().Where(e => e.Name.LocalName ==
+                            "JavaPackageManagerId").Select(e => e.Value.Trim()).FirstOrDefault();
+                        string version = item.Elements().Where(e => e.Name.LocalName ==
+                            "JavaPackageManagerVersion").Select(e => e.Value.Trim()).FirstOrDefault();
+                        string scope = item.Elements().Where(e => e.Name.LocalName ==
+                            "JavaPackageManagerScope").Select(e => e.Value.Trim()).FirstOrDefault();
+                        if (string.IsNullOrWhiteSpace(id) ||
+                            string.IsNullOrWhiteSpace(version)) continue;
+                        try
+                        {
+                            string fullPath = Path.GetFullPath(Path.IsPathRooted(include) ?
+                                include : Path.Combine(projectRoot, include));
+                            List<PlainJarOwner> entries;
+                            if (!owners.TryGetValue(fullPath, out entries))
+                            {
+                                entries = new List<PlainJarOwner>();
+                                owners.Add(fullPath, entries);
+                            }
+                            if (!entries.Any(o => string.Equals(o.Id, id,
+                                StringComparison.OrdinalIgnoreCase) &&
+                                string.Equals(o.Version, version,
+                                StringComparison.OrdinalIgnoreCase)))
+                                entries.Add(new PlainJarOwner
+                                {
+                                    Id = id, Version = version, Scope = scope
+                                });
+                        }
+                        catch (ArgumentException) { /* Unevaluated or invalid path. */ }
+                        catch (NotSupportedException) { }
+                        catch (System.IO.PathTooLongException) { }
+                    }
+                }
+            }
+            catch (System.Xml.XmlException) { /* Tree still shows raw JARs. */ }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return owners;
+        }
+
+        private IProjectTree BuildPlainJarNode(JavaExternalJarSnapshot jar,
+            string ownerCaption, HashSet<string> usedCaptions,
+            IDictionary<string, string> lookup)
+        {
+            var icon = KnownMonikers.Library.ToProjectSystemType();
+            var classIcon = KnownMonikers.Class.ToProjectSystemType();
+            var flags = ProjectTreeFlags.Create(ProjectTreeFlags.Common.VirtualFolder);
+            string rawCaption = Path.GetFileName(jar.Path);
+            string caption = rawCaption;
+            int suffix = 2;
+            while (!usedCaptions.Add(caption))
+                caption = rawCaption + " [" + suffix++ + "]";
+            if (!string.IsNullOrEmpty(jar.Path) && File.Exists(jar.Path))
+                lookup[JavaExternalJarSourceRegistry.OwnerKey(ownerCaption, caption)] = jar.Path;
+            IProjectTree jarNode = NewTree(caption, icon: icon,
+                expandedIcon: icon, flags: flags);
+            if (!string.IsNullOrEmpty(jar.Status))
+                return jarNode.Add(NewTree(jar.Status, icon: icon,
+                    expandedIcon: icon, flags: flags)).Parent;
+            int classCount = jar.Packages.Sum(p => p.Value.Count);
+            IProjectTree classes = NewTree("Classi (" + classCount + ")",
+                icon: icon, expandedIcon: icon, flags: flags);
+            foreach (var package in jar.Packages)
+            {
+                IProjectTree folder = NewTree(string.IsNullOrEmpty(package.Key)
+                    ? "(package predefinito)" : package.Key,
+                    icon: icon, expandedIcon: icon, flags: flags);
+                foreach (string className in package.Value)
+                    folder = folder.Add(NewTree(className, icon: classIcon,
+                        expandedIcon: classIcon,
+                        flags: flags.Union(JavaExternalJarSourceTreeFlags.ClassNode))).Parent;
+                classes = classes.Add(folder).Parent;
+            }
+            return jarNode.Add(classes).Parent;
         }
 
         private void StopPlainJarsLocked()

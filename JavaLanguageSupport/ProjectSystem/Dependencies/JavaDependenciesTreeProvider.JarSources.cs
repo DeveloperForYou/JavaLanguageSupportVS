@@ -56,6 +56,32 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             lock (Sync) Projects[projectFile] = map;
         }
 
+        // PLAIN-TRANSITIVE-OWNER-TREE-20261123: a JAR caption alone is not unique.
+        internal static string OwnerKey(string ownerCaption, string jarCaption)
+        {
+            return (ownerCaption ?? "") + "\u001f" + (jarCaption ?? "");
+        }
+
+        internal static void ReplaceByOwner(string projectFile,
+            IDictionary<string, string> paths)
+        {
+            if (string.IsNullOrWhiteSpace(projectFile)) return;
+            var copy = new Dictionary<string, string>(paths, StringComparer.Ordinal);
+            lock (Sync) Projects[projectFile] = copy;
+        }
+
+        internal static bool TryGetByOwner(string projectFile, string ownerCaption,
+            string jarCaption, out string path)
+        {
+            path = null;
+            lock (Sync)
+            {
+                Dictionary<string, string> entries;
+                return Projects.TryGetValue(projectFile, out entries) &&
+                    entries.TryGetValue(OwnerKey(ownerCaption, jarCaption), out path);
+            }
+        }
+
         internal static void Clear(string projectFile)
         {
             if (string.IsNullOrWhiteSpace(projectFile)) return;
@@ -103,7 +129,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 string.Equals(node.Caption, "Greeting", StringComparison.Ordinal))
                 return true;
             IProjectTree ancestor = node.Parent;
-            for (int depth = 0; ancestor != null && depth < 6;
+            for (int depth = 0; ancestor != null && depth < 10;
                 ancestor = ancestor.Parent, depth++)
             {
                 if (string.Equals(ancestor.Caption, "JAR Esterni", StringComparison.Ordinal))
@@ -119,7 +145,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             if (nodes.Count != 1) return "nodes=" + nodes.Count;
             IProjectTree node = nodes.First();
             var parts = new List<string>();
-            for (int depth = 0; node != null && depth < 7; depth++, node = node.Parent)
+            for (int depth = 0; node != null && depth < 10; depth++, node = node.Parent)
             {
                 string caption = (node.Caption ?? "").Replace('\r', ' ').Replace('\n', ' ');
                 if (caption.Length > 90) caption = caption.Substring(0, 90);
@@ -149,6 +175,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
     internal sealed class JavaExternalJarSourceLocator
     {
         internal string JarCaption;
+        internal string OwnerCaption;
         internal string Package;
         internal string Class;
 
@@ -168,24 +195,36 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             location = null;
             if (nodes == null || nodes.Count != 1) return false;
             IProjectTree leaf = nodes.First();
-            // CPS may project away custom flags. Confirm the full JAR
-            // hierarchy and resolve the library from the registered CPS items.
             IProjectTree package = leaf.Parent;
             IProjectTree classes = package == null ? null : package.Parent;
             IProjectTree jar = classes == null ? null : classes.Parent;
-            IProjectTree category = jar == null ? null : jar.Parent;
-            if (category == null || category.Caption != "JAR Esterni" ||
-                package == null || classes == null || jar == null ||
+            if (package == null || classes == null || jar == null ||
                 !classes.Caption.StartsWith("Classi (", StringComparison.Ordinal) ||
                 !IsJavaIdentifier(leaf.Caption) || string.IsNullOrWhiteSpace(jar.Caption) ||
                 jar.Caption.IndexOf(".jar", StringComparison.OrdinalIgnoreCase) < 0)
                 return false;
+            string ownerCaption = "";
+            bool categoryFound = false;
+            IProjectTree ancestor = jar.Parent;
+            // JAR -> (transitives) -> direct dependency -> JAR Esterni.
+            for (int depth = 0; ancestor != null && depth < 5;
+                depth++, ancestor = ancestor.Parent)
+            {
+                if (string.Equals(ancestor.Caption, "JAR Esterni", StringComparison.Ordinal))
+                {
+                    categoryFound = true;
+                    break;
+                }
+                ownerCaption = ancestor.Caption;
+            }
+            if (!categoryFound) return false;
             string pkg = package.Caption == "(package predefinito)" ? "" : package.Caption;
             if (pkg.Length > 320 || (pkg.Length > 0 &&
                 !pkg.Split('.').All(IsJavaIdentifier))) return false;
             location = new JavaExternalJarSourceLocator
             {
-                JarCaption = jar.Caption, Package = pkg, Class = leaf.Caption
+                JarCaption = jar.Caption, OwnerCaption = ownerCaption,
+                Package = pkg, Class = leaf.Caption
             };
             return true;
         }
@@ -462,8 +501,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                     string file = await Task.Run(() =>
                     {
                         string jar;
-                        if (!JavaExternalJarSourceRegistry.TryGet(projectFile,
-                            locator.JarCaption, out jar))
+                        if (!JavaExternalJarSourceRegistry.TryGetByOwner(projectFile,
+                            locator.OwnerCaption, locator.JarCaption, out jar))
                         {
                             JavaExternalJarSourceTrace.Write("risoluzione: JAR assente nel registro CPS");
                             throw new FileNotFoundException(
