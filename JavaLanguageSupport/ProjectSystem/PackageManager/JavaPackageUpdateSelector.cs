@@ -25,8 +25,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             foreach (string candidate in versions)
             {
                 if (string.IsNullOrWhiteSpace(candidate) || IsPreRelease(candidate)) continue;
-                // Guava publishes separate Android and JRE tracks: do not suggest
-                // an Android artifact as an upgrade for an installed JRE artifact.
+                // Preserve the installed release flavor for packages offering
+                // distinct -jre and -android version tracks.
                 if (flavor != null && !string.Equals(flavor, Flavor(candidate),
                     StringComparison.OrdinalIgnoreCase)) continue;
                 if (CompareVersions(candidate, installed) <= 0) continue;

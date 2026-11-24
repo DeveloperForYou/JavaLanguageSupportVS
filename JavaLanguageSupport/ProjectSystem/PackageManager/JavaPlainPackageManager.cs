@@ -63,8 +63,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     string parent = Path.GetDirectoryName(target);
                     Directory.CreateDirectory(parent);
                     // PLAIN-JAR-LONGPATH-20261123-C: stage inside the SAME project
-                    // volume, but outside the long group/artifact path. Guava's
-                    // listenablefuture filename can otherwise exceed MAX_PATH.
+                    // volume, but outside long group/artifact paths. JAR files
+                    // with long filenames can otherwise exceed Windows path limits.
                     string stagingParent = Path.Combine(projectRoot, ".java-vs", "pkg-stage");
                     EnsureDirectorySafe(projectRoot, stagingParent);
                     Directory.CreateDirectory(stagingParent);
@@ -176,7 +176,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             }
             // Only after a successful commit. Failures here must not roll back
             // the new JAR directory or misreport a successful installation.
-            try { JavaDependencyLanguageSync.RefreshAll(); }
+            // JPM-S124-CLASSPATH-RECONCILE-20261124:
+            // Update the Eclipse model immediately from the committed .javaproj,
+            // even before CPS/JDT LS is ready; then notify the ordinary pump.
+            try
+            {
+                JavaDependencyLanguageSync.RefreshPlainProjectNow(ProjectFile);
+                JavaDependencyLanguageSync.RefreshAll();
+            }
             catch (Exception ex) { Debug.WriteLine("Plain dependency refresh: " + ex); }
         }
 
