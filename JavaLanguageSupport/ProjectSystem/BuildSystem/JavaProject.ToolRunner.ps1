@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][ValidateSet('Maven','Gradle')][string]$Tool,
-    [Parameter(Mandatory=$true)][ValidateSet('Build','Rebuild','Clean')][string]$Action,
+    [Parameter(Mandatory=$true)][ValidateSet('Build','Rebuild','Clean','Dependencies')][string]$Action, # JPM-LOG-20261124
     [Parameter(Mandatory=$true)][string]$ProjectDirectory,
     [string]$CommandPath
 )
@@ -117,12 +117,14 @@ try {
             'Build'   { @('-B', '-DskipTests', 'package') }
             'Rebuild' { @('-B', '-DskipTests', 'clean', 'package') }
             'Clean'   { @('-B', 'clean') }
+            'Dependencies' { @('-B', '-ntp', 'dependency:tree') }
         }
     } else {
         switch ($Action) {
             'Build'   { @('--console=plain', 'build') }
             'Rebuild' { @('--console=plain', 'clean', 'build') }
             'Clean'   { @('--console=plain', 'clean') }
+            'Dependencies' { @('--console=plain', 'dependencies') }
         }
     }
     [Console]::Out.WriteLine('[Java Build] ' + $Tool + ' risolto: ' + $executable)

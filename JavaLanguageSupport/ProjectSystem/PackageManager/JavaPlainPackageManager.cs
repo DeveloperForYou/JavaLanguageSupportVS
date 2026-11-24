@@ -439,8 +439,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 {
                     stage = Path.Combine(Path.GetTempPath(), "java-vsix-plain-" + Guid.NewGuid().ToString("N"));
                     Directory.CreateDirectory(stage);
-                    await ResolveAsync(root, group, artifact, version, sources, stage, token, scope)
-                        .ConfigureAwait(false);
+                    await ResolveAsync(projectFile, root, group, artifact, version,
+                        sources, stage, token, scope).ConfigureAwait(false);
                 }
                 token.ThrowIfCancellationRequested();
                 return BuildPlan(projectFile, operation, group, artifact, version, stage, scope);
@@ -596,9 +596,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 .Where(x => x.LocalName == name).Select(x => x.InnerText.Trim()).FirstOrDefault();
         }
 
-        private static async Task ResolveAsync(string projectRoot, string group, string artifact,
-            string version, IList<JavaPackageSource> sources, string stage, CancellationToken token,
-            string scope)
+        // JPM-LOG-20261124: log the Maven transcript to the owning .javaproj.
+        private static async Task ResolveAsync(string projectFile, string projectRoot, string group,
+            string artifact, string version, IList<JavaPackageSource> sources, string stage,
+            CancellationToken token, string scope)
         {
             var eligible = (sources ?? new List<JavaPackageSource>())
                 .Where(JavaPackageMultiRepositorySearchService.IsEligible)
@@ -635,6 +636,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = true })) xml.Save(writer);
             string script = Path.Combine(stage, "resolve.ps1");
             File.WriteAllText(script, MavenRunner, new UTF8Encoding(false));
+            JavaJpmProjectLogger.Info(projectFile, "Maven",
+                "Risoluzione dipendenze Plain: " + group + ":" + artifact + ":" + version +
+                "; scope: " + scope + "; repository HTTPS: " + eligible.Count + ".");
             var start = new ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\"")
             { WorkingDirectory = projectRoot, UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true };
@@ -651,6 +655,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     await Task.Run(() => process.WaitForExit(), token).ConfigureAwait(false);
                     string log = await standard.ConfigureAwait(false);
                     string error = await errors.ConfigureAwait(false);
+                    JavaJpmProjectLogger.Transcript(projectFile, "Maven", log, error);
+                    JavaJpmProjectLogger.Info(projectFile, "Maven", "Resolver terminato: exit code " +
+                        process.ExitCode + ".");
                     token.ThrowIfCancellationRequested();
                     if (process.ExitCode != 0)
                         throw new IOException("Risoluzione Maven Plain non riuscita (exit " +

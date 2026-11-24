@@ -145,6 +145,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly ComboBox installScopeSelector = new ComboBox { Width = 108 };
         private readonly ComboBox installedScopeSelector = new ComboBox { Width = 108 };
         private readonly Button changeScopeButton = ActionButton("Modifica scope...");
+        // JPM-LOG-20261124: per-project VS Output pane, disk log and opt-in build tool transcript.
+        private readonly Button jpmOpenOutputButton = ActionButton("Output JPM");
+        private readonly Button jpmToolLogButton = ActionButton("Log tool");
+        private bool jpmToolBusy;
         // JPM-S2A-CONFLICT-GUARD-20261124
         private readonly Button plainConflictsButton = ActionButton("Verifica conflitti Plain");
         private bool auditingPlainConflicts;
@@ -258,8 +262,18 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             root.Children.Add(tabs);
 
             var statusPanel = new Border { Padding = new Thickness(2, 8, 2, 2), Child = status };
-            Grid.SetRow(statusPanel, 2);
-            root.Children.Add(statusPanel);
+            var jpmLogFooter = new DockPanel();
+            jpmOpenOutputButton.Margin = new Thickness(6, 4, 0, 0);
+            jpmOpenOutputButton.ToolTip = "Apri Visualizza > Output, sezione JPM del progetto selezionato";
+            DockPanel.SetDock(jpmOpenOutputButton, Dock.Right);
+            jpmLogFooter.Children.Add(jpmOpenOutputButton);
+            jpmToolLogButton.Margin = new Thickness(6, 4, 0, 0);
+            jpmToolLogButton.ToolTip = "Esegui la diagnostica delle dipendenze Maven/Gradle in sola lettura; log in Output e su disco";
+            DockPanel.SetDock(jpmToolLogButton, Dock.Right);
+            jpmLogFooter.Children.Add(jpmToolLogButton);
+            jpmLogFooter.Children.Add(statusPanel);
+            Grid.SetRow(jpmLogFooter, 2);
+            root.Children.Add(jpmLogFooter);
             Content = root;
             MinWidth = 320;
             MinHeight = 310;
@@ -330,6 +344,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             applyUpdateButton.Click += (s, e) => ApplyDependencyChange(JavaDependencyOperation.Update);
             installedScopeSelector.SelectionChanged += (s, e) => RefreshDependencyActions();
             changeScopeButton.Click += (s, e) => ApplyInstalledScopeChange();
+            jpmOpenOutputButton.Click += (s, e) => JavaJpmProjectLogger.Open(projectFile);
+            jpmToolLogButton.Click += (s, e) => { _ = RunJpmToolLogAsync(); };
             plainConflictsButton.Click += (s, e) => { _ = AuditPlainConflictsAsync(); };
             updatesResults.SelectionChanged += (s, e) => RefreshDependencyActions();
             RefreshDependencyActions();
@@ -693,6 +709,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             }
             CancelAll();
             projectFile = newProjectFile;
+            JavaJpmProjectLogger.Info(projectFile, "JPM", "Progetto selezionato nel Java Package Manager.");
+            JavaJpmProjectLogger.Open(projectFile);
             recentCoordinates.Clear();
             searchBox.Clear();
             packageSources = null;
@@ -813,6 +831,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     StringComparison.OrdinalIgnoreCase);
             installedScopeSelector.IsEnabled = writable && scopeItem != null &&
                 scopeItem.MavenCoordinate && JavaPackageScopes.IsSupported(scopeItem.Scope);
+            jpmOpenOutputButton.IsEnabled = !string.IsNullOrWhiteSpace(projectFile);
+            bool hasTool = installed != null && (string.Equals(installed.Backend,
+                "Maven", StringComparison.OrdinalIgnoreCase) || string.Equals(installed.Backend,
+                "Gradle", StringComparison.OrdinalIgnoreCase));
+            jpmToolLogButton.Visibility = hasTool ? Visibility.Visible : Visibility.Collapsed;
+            jpmToolLogButton.IsEnabled = hasTool && !jpmToolBusy && !plainPackageBusy;
         }
 
         private void ApplyInstalledScopeChange()
@@ -830,6 +854,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 return;
             }
             string originalProject = projectFile;
+            JavaJpmProjectLogger.Info(originalProject, "JPM", "Richiesta modifica scope " +
+                selected.Coordinate + " da " + selected.Scope + " a " + wanted + ".");
             try
             {
                 JavaDependencyChange change = JavaPackageDirectDependencyEditor.Plan(originalProject,
@@ -842,19 +868,21 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 if (!string.Equals(originalProject, projectFile, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Il progetto selezionato è cambiato.");
                 change.Apply();
+                JavaJpmProjectLogger.Info(originalProject, "JPM", change.Summary +
+                    ". Backup: " + change.BackupPath);
                 CancelAll();
                 updatesResults.ItemsSource = null;
                 RefreshInstalled();
                 JavaLanguageSupport.ProjectSystem.Dependencies.JavaDependencyLanguageSync.RefreshAll();
-                status.Text = change.Summary + ". Backup: " + change.BackupPath;
+                status.Text = "Scope modificato. Dettagli in Output JPM.";
+                _ = RunJpmToolLogAsync();
             }
             catch (Exception ex) when (ex is System.IO.IOException || ex is UnauthorizedAccessException ||
                 ex is ArgumentException || ex is InvalidOperationException ||
                 ex is NotSupportedException || ex is XmlException)
             {
-                status.Text = "Scope non modificato: " + ex.Message;
-                MessageBox.Show(ex.Message, "JPM - Modifica scope",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                JavaJpmProjectLogger.Error(originalProject, "JPM scope", ex);
+                status.Text = "Scope non modificato. Dettagli in Output JPM.";
             }
         }
 
@@ -867,6 +895,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 return;
             }
             string initialProject = projectFile;
+            JavaJpmProjectLogger.Info(initialProject, "JPM", "Richiesta " + operation +
+                " di una dipendenza diretta " + installed.Backend + ".");
             try
             {
                 string group, artifact, version = null;
@@ -908,21 +938,22 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 if (!string.Equals(initialProject, projectFile, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Il progetto selezionato è cambiato.");
                 change.Apply();
+                JavaJpmProjectLogger.Info(initialProject, "JPM", change.Summary +
+                    ". Backup: " + change.BackupPath);
                 CancelAll();
                 updatesResults.ItemsSource = null;
                 RefreshInstalled();
                 RefreshDependencyActions();
-                status.Text = change.Summary + ". Backup: " + change.BackupPath +
-                    ". Controllare la compilazione e la sincronizzazione JDT LS.";
+                status.Text = "Dipendenza modificata. Dettagli in Output JPM.";
+                _ = RunJpmToolLogAsync();
             }
             catch (Exception ex) when (ex is System.IO.IOException ||
                 ex is UnauthorizedAccessException || ex is ArgumentException ||
                 ex is NotSupportedException || ex is InvalidOperationException ||
                 ex is XmlException)
             {
-                status.Text = "Dipendenza non modificata: " + ex.Message;
-                MessageBox.Show(ex.Message, "Gestione dipendenze Java",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                JavaJpmProjectLogger.Error(initialProject, "JPM dipendenze", ex);
+                status.Text = "Dipendenza non modificata. Dettagli in Output JPM.";
             }
         }
 
@@ -934,6 +965,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         {
             if (plainPackageBusy || string.IsNullOrWhiteSpace(projectFile) || installed == null) return;
             string initialProject = projectFile;
+            JavaJpmProjectLogger.Info(initialProject, "JPM", "Richiesta " + operation +
+                " su progetto Plain.");
             plainPackageBusy = true;
             RefreshDependencyActions();
             try
@@ -1005,30 +1038,33 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     if (MessageBox.Show(message, "Gestione pacchetti Plain",
                         MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
                     {
-                        status.Text = "Operazione Plain annullata: progetto invariato.";
+                        JavaJpmProjectLogger.Info(initialProject, "JPM", "Operazione annullata dall'utente: .javaproj invariato.");
+                        status.Text = "Operazione annullata.";
                         return;
                     }
                     change.Apply();
+                    JavaJpmProjectLogger.Info(initialProject, "JPM", change.Summary +
+                        ". Backup: " + change.BackupPath);
                     CancelAll();
                     updatesResults.ItemsSource = null;
                     RefreshInstalled();
                     JavaLanguageSupport.ProjectSystem.Dependencies.JavaDependencyLanguageSync.RefreshAll();
-                    status.Text = change.Summary + " Backup: " + change.BackupPath +
-                        ". Verificare Build e JDT LS.";
+                    status.Text = "Operazione Plain completata. Dettagli in Output JPM.";
                 }
             }
             catch (OperationCanceledException)
             {
-                status.Text = "Risoluzione Plain interrotta dopo il timeout: progetto non modificato.";
+                JavaJpmProjectLogger.Warning(initialProject, "Maven/Plain",
+                    "Risoluzione interrotta per annullamento o timeout.");
+                status.Text = "Operazione Plain interrotta. Dettagli in Output JPM.";
             }
             catch (Exception ex) when (ex is System.IO.IOException ||
                 ex is System.IO.InvalidDataException || ex is UnauthorizedAccessException ||
                 ex is ArgumentException || ex is NotSupportedException ||
                 ex is InvalidOperationException || ex is XmlException)
             {
-                status.Text = "Pacchetto Plain non modificato: " + ex.Message;
-                MessageBox.Show(ex.Message, "Gestione pacchetti Plain",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                JavaJpmProjectLogger.Error(initialProject, "JPM Plain", ex);
+                status.Text = "Pacchetto Plain non modificato. Dettagli in Output JPM.";
             }
             finally
             {
@@ -1044,6 +1080,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 !string.Equals(installed.Backend, "Plain", StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrWhiteSpace(projectFile)) return;
             string selectedProject = projectFile;
+            JavaJpmProjectLogger.Info(selectedProject, "JPM conflitti", "Avvio verifica conflitti Plain.");
             auditingPlainConflicts = true;
             plainConflictsButton.IsEnabled = false;
             try
@@ -1055,9 +1092,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 status.Text = report.ConflictCount == 0 ?
                     "Verifica Plain: nessun conflitto di versione rilevato." :
                     "Verifica Plain: " + report.ConflictCount + " conflitti di versione.";
-                MessageBox.Show(report.Details, "JPM - Conflitti di versione Plain",
-                    MessageBoxButton.OK, report.ConflictCount == 0 ?
-                        MessageBoxImage.Information : MessageBoxImage.Warning);
+                if (report.ConflictCount == 0)
+                    JavaJpmProjectLogger.Info(selectedProject, "JPM conflitti", report.Details);
+                else JavaJpmProjectLogger.Warning(selectedProject, "JPM conflitti", report.Details);
             }
             catch (Exception ex) when (ex is System.IO.IOException ||
                 ex is System.IO.InvalidDataException || ex is UnauthorizedAccessException ||
@@ -1065,14 +1102,54 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             {
                 if (string.Equals(selectedProject, projectFile,
                     StringComparison.OrdinalIgnoreCase))
-                    MessageBox.Show(ex.Message, "JPM - Verifica conflitti",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    JavaJpmProjectLogger.Error(selectedProject, "JPM conflitti", ex);
             }
             finally
             {
                 auditingPlainConflicts = false;
                 RefreshDependencyActions();
             }
+        }
+
+        // JPM-LOG-20261124: explicit, read-only Maven/Gradle dependency diagnostic.
+        private async Task RunJpmToolLogAsync()
+        {
+            if (jpmToolBusy || installed == null || string.IsNullOrWhiteSpace(projectFile)) return;
+            string selectedProject = projectFile;
+            string selectedBackend = installed.Backend;
+            if (selectedBackend != "Maven" && selectedBackend != "Gradle") return;
+            jpmToolBusy = true;
+            RefreshDependencyActions();
+            JavaJpmProjectLogger.Open(selectedProject);
+            status.Text = "Diagnostica dipendenze avviata. Consultare Output JPM.";
+            try
+            {
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
+                {
+                    int result = await JavaJpmToolDiagnostics.RunAsync(selectedProject,
+                        selectedBackend, timeout.Token);
+                    if (string.Equals(selectedProject, projectFile, StringComparison.OrdinalIgnoreCase))
+                        status.Text = result == 0 ? "Diagnostica completata. Dettagli in Output JPM." :
+                            "Diagnostica non riuscita. Dettagli in Output JPM.";
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                JavaJpmProjectLogger.Warning(selectedProject, selectedBackend,
+                    "Diagnostica interrotta o scaduta dopo cinque minuti.");
+                if (string.Equals(selectedProject, projectFile, StringComparison.OrdinalIgnoreCase))
+                    status.Text = "Diagnostica interrotta. Dettagli in Output JPM.";
+            }
+            catch (Exception ex) when (ex is System.IO.IOException ||
+                ex is UnauthorizedAccessException || ex is ArgumentException ||
+                ex is InvalidOperationException || ex is NotSupportedException ||
+                ex is System.ComponentModel.Win32Exception)
+            {
+                JavaJpmProjectLogger.Error(selectedProject, selectedBackend, ex);
+                if (string.Equals(selectedProject, projectFile, StringComparison.OrdinalIgnoreCase))
+                    status.Text = "Diagnostica non riuscita. Dettagli in Output JPM.";
+            }
+            finally { jpmToolBusy = false; RefreshDependencyActions(); }
         }
 
         private void RefreshInstalled()
@@ -1095,7 +1172,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 installed = null;
                 installedResults.ItemsSource = null;
                 projectInfo.Text = "Impossibile leggere le dipendenze locali.";
-                installedNote.Text = ex.Message;
+                JavaJpmProjectLogger.Error(projectFile, "JPM installati", ex);
+                installedNote.Text = "Impossibile leggere le dipendenze. Dettagli in Output JPM.";
             }
             RefreshDependencyActions();
         }
@@ -1541,6 +1619,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var token = searchCts.Token;
             var selectedSources = SelectedSources();
             SetSearchBusy(true);
+            JavaJpmProjectLogger.Info(projectFile, "JPM ricerca", "Ricerca: " + search +
+                "; pagina " + page + "; repository selezionati: " + selectedSources.Count + ".");
             status.Text = "Ricerca nelle origini attive...";
             try
             {
@@ -1590,7 +1670,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             catch (Exception ex) when (ex is JavaMavenCentralSearchException ||
                 ex is ArgumentException || ex is ArgumentOutOfRangeException ||
                 ex is System.IO.IOException)
-            { if (generation == searchGeneration) status.Text = "Ricerca: " + ex.Message; }
+            {
+                JavaJpmProjectLogger.Error(projectFile, "JPM ricerca", ex);
+                if (generation == searchGeneration)
+                    status.Text = "Ricerca non riuscita. Dettagli in Output JPM.";
+            }
             finally { if (generation == searchGeneration) SetSearchBusy(false); }
         }
 
@@ -1667,8 +1751,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 long first = versions.Items.Count == 0 ? 0 : (long)(page - 1) * VersionPageSize + 1;
                 long last = versions.Items.Count == 0 ? 0 : first + versions.Items.Count - 1;
                 versionInfo.Text = "Versioni " + first + "–" + last + " di " + versions.TotalCount +
-                    " · Origini consultate: " + catalog.RepositoriesQueried +
-                    (catalog.Warnings.Count > 0 ? "\n" + catalog.WarningText : "");
+                    " · Origini consultate: " + catalog.RepositoriesQueried;
+                if (catalog.Warnings.Count > 0)
+                    JavaJpmProjectLogger.Warning(projectFile, "JPM versioni", catalog.WarningText);
             }
             catch (OperationCanceledException)
             {
@@ -1681,7 +1766,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 if (generation == versionsGeneration)
                 {
                     ShowVersionPlaceholder("Versioni temporaneamente non disponibili.");
-                    versionInfo.Text = ex.Message;
+                    JavaJpmProjectLogger.Error(projectFile, "JPM versioni", ex);
+                    versionInfo.Text = "Errore caricamento. Dettagli in Output JPM.";
                     versionsPageInfo.Text = "Pagina " + page + " · errore";
                     retryVersionsButton.Visibility = Visibility.Visible;
                 }
@@ -1719,7 +1805,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     try { catalog = await repositoryService.GetCatalogAsync(dep.GroupId,
                         dep.ArtifactId, selectedSources, token); }
                     catch (Exception ex) when (ex is ArgumentException || ex is System.IO.IOException)
-                    { failures++; continue; }
+                    {
+                        JavaJpmProjectLogger.Error(projectFile, "JPM aggiornamenti", ex);
+                        failures++; continue;
+                    }
                     if (catalog.Warnings.Count > 0) failures++;
                     string latest = JavaPackageUpdateSelector.NewestCompatible(dep.Version,
                         catalog.Versions);
@@ -1767,6 +1856,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 var snapshot = await Task.Run(() => JavaPackageSourceDiscovery.Discover(path, backend, token), token);
                 if (generation != sourcesGeneration || token.IsCancellationRequested) return;
                 packageSources = snapshot;
+                JavaJpmProjectLogger.Info(path, "JPM repository", snapshot.Describe());
                 RefreshSourceSelector();
                 // No duplicate origin list in the header. Retain diagnostics,
                 // including excluded/inactive repositories, via the button tooltip.
@@ -1777,8 +1867,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     " Ricerca per coordinate sui repository selezionati.";
             }
             catch (OperationCanceledException) { }
-            catch (Exception)
+            catch (Exception ex)
             {
+                JavaJpmProjectLogger.Error(path, "JPM repository", ex);
                 if (generation != sourcesGeneration) return;
                 ResetSourceSelector();
                 discoverSourcesButton.ToolTip =
