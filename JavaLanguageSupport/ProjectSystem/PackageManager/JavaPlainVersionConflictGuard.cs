@@ -14,11 +14,40 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
     // graph across direct roots requires explicit mediation in JPM-S2B.
     internal static class JavaPlainVersionConflictGuard
     {
+        // JPM-S2C-20261124: expose the exact same verified identities used by S2A.
+        // Data is a snapshot only; no mutation or version mediation occurs here.
+        internal sealed class Library
+        {
+            internal string Identity;
+            internal string Version;
+            internal string Owner;
+            internal string Scope;
+            internal string Name;
+        }
+
+        internal sealed class Conflict
+        {
+            internal string Identity;
+            internal List<string> Versions;
+            internal List<Library> Libraries;
+        }
+
         internal sealed class Report
         {
             internal int ConflictCount { get; set; }
             internal int UnverifiedCount { get; set; }
             internal string Details { get; set; }
+            internal List<Conflict> Conflicts { get; set; }
+            internal List<Library> Libraries { get; set; }
+        }
+
+        // Preserve InvalidOperationException contract used by S2B logging, but
+        // expose a structured snapshot of the rejected candidate to the UI.
+        internal sealed class CandidateConflictException : InvalidOperationException
+        {
+            internal Report Candidate { get; private set; }
+            internal CandidateConflictException(Report candidate, string message)
+                : base(message) { Candidate = candidate; }
         }
 
         private sealed class Entry
@@ -49,7 +78,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             }
             Report report = Summarize(entries, unknown);
             if (report.ConflictCount != 0)
-                throw new InvalidOperationException(
+                throw new CandidateConflictException(report,
                     "Conflitto tra versioni transitive Plain: installazione non applicata.\n\n" +
                     report.Details + "\n\nAllineare le versioni delle dipendenze " +
                     "dirette oppure modificare la selezione, poi riprovare. " +
@@ -237,7 +266,21 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             message.AppendLine("\nAnalisi limitata ai JAR Plain gestiti. I JAR manuali e " +
                 "l'effettiva compatibilità binaria delle versioni non sono verificati.");
             return new Report { ConflictCount = conflicts.Count,
-                UnverifiedCount = unknown, Details = message.ToString().TrimEnd() };
+                UnverifiedCount = unknown, Details = message.ToString().TrimEnd(),
+                Libraries = entries.Select(ToLibrary).ToList(),
+                Conflicts = conflicts.Select(group => new Conflict
+                {
+                    Identity = group.Key,
+                    Versions = group.Versions.ToList(),
+                    Libraries = group.Items.Select(ToLibrary).ToList()
+                }).ToList()
+            };
+        }
+
+        private static Library ToLibrary(Entry value)
+        {
+            return new Library { Identity = value.Identity, Version = value.Version,
+                Owner = value.Owner, Scope = value.Scope, Name = value.Name };
         }
     }
 }

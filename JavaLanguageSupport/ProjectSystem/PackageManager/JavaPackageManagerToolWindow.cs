@@ -156,6 +156,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly SemaphoreSlim plainConflictAuditGate = new SemaphoreSlim(1, 1);
         private int plainConflictAuditRevision;
         private bool auditingPlainConflicts;
+        // JPM-S2C-20261124: explorer isolato per progetto Plain, sola lettura.
+        private readonly JavaPlainConflictExplorerControl plainConflictExplorer =
+            new JavaPlainConflictExplorerControl();
         private readonly TabControl tabs = new TabControl();
         private CancellationTokenSource searchCts;
         private CancellationTokenSource versionsCts;
@@ -261,6 +264,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             tabs.Items.Add(ThemedTab("Sfoglia", MakeBrowse()));
             tabs.Items.Add(ThemedTab("Installati", MakeInstalled()));
             tabs.Items.Add(ThemedTab("Aggiornamenti", MakeUpdates()));
+            tabs.Items.Add(ThemedTab("Conflitti Plain", plainConflictExplorer));
             ApplyNuGetLikeTabs(tabs); // F4F24_NUGET_TABS
             Grid.SetRow(tabs, 1);
             root.Children.Add(tabs);
@@ -717,6 +721,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             if (string.Equals(projectFile, newProjectFile, StringComparison.OrdinalIgnoreCase))
             {
                 RefreshInstalled();
+                plainConflictExplorer.SetProject(projectFile, installed != null &&
+                    string.Equals(installed.Backend, "Plain", StringComparison.OrdinalIgnoreCase));
                 QueuePlainConflictAudit("selezione progetto");
                 return;
             }
@@ -749,6 +755,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             installedDetails.Text = "Seleziona una dipendenza.";
             projectHeader.Text = System.IO.Path.GetFileNameWithoutExtension(projectFile);
             RefreshInstalled();
+            plainConflictExplorer.SetProject(projectFile, installed != null &&
+                string.Equals(installed.Backend, "Plain", StringComparison.OrdinalIgnoreCase));
             QueuePlainConflictAudit("apertura progetto");
             tabs.SelectedIndex = 0;
             status.Text = "Rilevamento delle origini del progetto...";
@@ -789,6 +797,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             Interlocked.Increment(ref plainConflictAuditRevision);
             plainConflictsIndicator.Visibility = Visibility.Collapsed;
             projectFile = null;
+            plainConflictExplorer.SetProject(null, false);
             recentCoordinates.Clear();
             searchBox.Clear();
             installed = null;
@@ -1071,6 +1080,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     status.Text = "Operazione Plain completata. Dettagli in Output JPM.";
                     // Post-commit audit (Install/Update/Remove/ChangeScope), no modal dialogs.
                     QueuePlainConflictAudit("operazione " + operation);
+                    plainConflictExplorer.Reload();
                 }
             }
             catch (OperationCanceledException)
@@ -1085,6 +1095,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 ex is InvalidOperationException || ex is XmlException)
             {
                 JavaJpmProjectLogger.Error(initialProject, "JPM Plain", ex);
+                var rejected = ex as JavaPlainVersionConflictGuard.CandidateConflictException;
+                if (rejected != null)
+                    plainConflictExplorer.ShowRejectedCandidate(initialProject,
+                        rejected.Candidate, operation.ToString());
                 // S2B: the S2A pre-commit guard may reject a conflicted candidate.
                 // Do not claim the installed classpath itself contains this conflict.
                 if (ex is InvalidOperationException && ex.Message.StartsWith(
@@ -2108,7 +2122,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             return new DataTemplate { VisualTree = row };
         }
 
-        private static DataTemplate ListItemTemplate(string property)
+        internal static DataTemplate ListItemTemplate(string property)
         {
             var factory = new FrameworkElementFactory(typeof(TextBlock));
             factory.SetBinding(TextBlock.TextProperty,
@@ -2222,7 +2236,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         // F4F2841-PROJECT-SELECTOR-THEME: self-contained dark/light VS ComboBox.
         // Stock WPF ComboBox uses OS colors for its selection area and popup;
         // explicit VS resources keep both the selected value and entries readable.
-        private static void ThemeProjectSelector(ComboBox selector)
+        // JPM-S2C1-RESPONSIVE-COMBO-20261124: share the existing native-looking VS ComboBox template.
+        internal static void ThemeProjectSelector(ComboBox selector)
         {
             ThemeControl(selector);
             // DisplayMemberPath and ItemTemplate cannot be set together.
