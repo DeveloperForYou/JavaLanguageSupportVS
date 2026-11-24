@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<classpath>
+  <!--JavaLanguageSupportVS:JPM-S1.2:Managed-->
+  <classpathentry kind="src" path="src/main/java" />
+  <classpathentry kind="src" path="src/test/java">
+    <attributes>
+      <attribute name="test" value="true" />
+    </attributes>
+  </classpathentry>
+  <classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/libs/demo-utils.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-xml/2.18.3/com.fasterxml.jackson.core.jackson-annotations-2.18.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-xml/2.18.3/com.fasterxml.jackson.core.jackson-core-2.18.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-xml/2.18.3/com.fasterxml.jackson.core.jackson-databind-2.18.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-xml/2.18.3/com.fasterxml.jackson.dataformat.jackson-dataformat-xml-2.18.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-xml/2.18.3/com.fasterxml.woodstox.woodstox-core-7.0.0.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-xml/2.18.3/org.codehaus.woodstox.stax2-api-4.2.2.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-yaml/2.18.3/com.fasterxml.jackson.core.jackson-annotations-2.18.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-yaml/2.18.3/com.fasterxml.jackson.core.jackson-core-2.18.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-yaml/2.18.3/com.fasterxml.jackson.core.jackson-databind-2.18.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-yaml/2.18.3/com.fasterxml.jackson.dataformat.jackson-dataformat-yaml-2.18.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.fasterxml.jackson.dataformat/jackson-dataformat-yaml/2.18.3/org.yaml.snakeyaml-2.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.google.guava/guava/33.8.0-jre/com.google.errorprone.error_prone_annotations-2.52.0.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.google.guava/guava/33.8.0-jre/com.google.guava.failureaccess-1.0.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.google.guava/guava/33.8.0-jre/com.google.guava.guava-33.8.0-jre.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.google.guava/guava/33.8.0-jre/com.google.guava.listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.google.guava/guava/33.8.0-jre/com.google.j2objc.j2objc-annotations-3.1.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/com.google.guava/guava/33.8.0-jre/org.jspecify.jspecify-1.0.1.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/junit/junit/4.13.2/junit.junit-4.13.2.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/junit/junit/4.13.2/org.hamcrest.hamcrest-core-1.3.jar" />
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJarsAcceptance/lib/java-packages/org.json/json/20260814/org.json.json-20260814.jar" />
+  <classpathentry kind="output" path=".java-vs/jdtls-classes" />
+</classpath>

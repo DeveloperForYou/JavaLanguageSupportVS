@@ -98,16 +98,16 @@
   <ItemGroup>
     <Folder Include="src\test\java\" />
   </ItemGroup>
-    <ItemGroup Label="JavaPackageManager">
-	    <JavaJarReference Include="lib\java-packages\junit\junit\4.13.2\junit.junit-4.13.2.jar">
-		    <JavaPackageManagerId>junit:junit</JavaPackageManagerId>
-		    <JavaPackageManagerVersion>4.13.2</JavaPackageManagerVersion>
-		    <JavaPackageManagerScope>runtime</JavaPackageManagerScope>
-	    </JavaJarReference>
-	    <JavaJarReference Include="lib\java-packages\junit\junit\4.13.2\org.hamcrest.hamcrest-core-1.3.jar">
-		    <JavaPackageManagerId>junit:junit</JavaPackageManagerId>
-		    <JavaPackageManagerVersion>4.13.2</JavaPackageManagerVersion>
-		    <JavaPackageManagerScope>runtime</JavaPackageManagerScope>
-	    </JavaJarReference>
-    </ItemGroup>
+    
+
+  
+
+  
+
+  
+
+  <ItemGroup Label="JavaPackageManager">
+    <JavaJarReference Include="lib\java-packages\junit\junit\4.13.2\junit.junit-4.13.2.jar"><JavaPackageManagerId>junit:junit</JavaPackageManagerId><JavaPackageManagerVersion>4.13.2</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\junit\junit\4.13.2\org.hamcrest.hamcrest-core-1.3.jar"><JavaPackageManagerId>junit:junit</JavaPackageManagerId><JavaPackageManagerVersion>4.13.2</JavaPackageManagerVersion></JavaJarReference>
+  </ItemGroup>
 </Project>

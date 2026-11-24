@@ -238,6 +238,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
         {
             string kind, home;
             string[] references;
+            string[] scopedRoots;
             Dictionary<string, string> oldReferences;
             var connection = JavaLspRpc.ConnectionIdentity;
             lock (Gate)
@@ -246,6 +247,7 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 kind = backend;
                 home = resolvedJdk;
                 references = jars;
+                scopedRoots = sourceRoots;
                 oldReferences = ReferenceEquals(connection, previousConnection) ? previousJars : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             }
             string root = Path.GetDirectoryName(file);
@@ -257,10 +259,62 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             if (Equal(kind, "Plain"))
                 await EnsurePlainWorkspaceAsync(file, connection).ConfigureAwait(false);
             if (!IsCurrent(file, version, connection)) return;
+            // JPM-S1.2: unmanaged JDT settings cannot model per-source-root scopes.
+            // Generate an Eclipse classpath only for a solitary Plain project
+            // that needs it. Existing user-owned .project/.classpath are untouched.
+            JavaScopedClasspathBridge.Result scoped = null;
+            if (Equal(kind, "Plain"))
+            {
+                scoped = JavaScopedClasspathBridge.Synchronize(file, references, scopedRoots);
+                if (!string.IsNullOrWhiteSpace(scoped.Note)) Log(scoped.Note);
+            }
+            if (!IsCurrent(file, version, connection)) return;
             // Reconcile global unmanaged-project settings only for the sole CPS
             // root. Absolute paths must never bleed into a different project.
             await SendPlainSettingsAsync(connection).ConfigureAwait(false);
             if (!IsCurrent(file, version, connection)) return;
+            // JPM-S1.2-JDTLS-SCOPED-ECLIPSE: imported Eclipse projects use the
+            // source/test library flags in .classpath, not a shared unmanaged
+            // referencedLibraries list. Keep the existing Maven/Gradle flows.
+            if (scoped != null && scoped.Active)
+            {
+                bool notify = scoped.Changed || !ReferenceEquals(previousConnection, connection);
+                if (notify)
+                {
+                    var scopedChanges = new[]
+                    {
+                        new { uri = FileUri(Path.Combine(root, ".classpath")), type = scoped.Created ? 1 : 2 },
+                        new { uri = FileUri(Path.Combine(root, ".project")), type = scoped.Created ? 1 : 2 }
+                    };
+                    await JavaLspRpc.NotifyForConnectionAsync(connection,
+                        "workspace/didChangeWatchedFiles", new { changes = scopedChanges }).ConfigureAwait(false);
+                    if (!IsCurrent(file, version, connection)) return;
+                    string scopedRootUri = FileUri(root.TrimEnd('\\', '/') + Path.DirectorySeparatorChar);
+                    using (var scopedTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(45)))
+                        await JavaLspRpc.CommandForConnectionAsync(connection,
+                            "java.project.changeImportedProjects",
+                            new object[] { new string[0], new[] { scopedRootUri }, new string[0] },
+                            scopedTimeout.Token).ConfigureAwait(false);
+                    if (!IsCurrent(file, version, connection)) return;
+                    await JavaLspRpc.NotifyForConnectionAsync(connection,
+                        "java/projectConfigurationUpdate",
+                        new { uri = FileUri(Path.Combine(root, ".classpath")) }).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(home) && IsCurrent(file, version, connection))
+                    {
+                        using (var scopedJdkTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(45)))
+                            await JavaLspRpc.CommandForConnectionAsync(connection,
+                                "java.project.updateJdk", new object[] { scopedRootUri, home },
+                                scopedJdkTimeout.Token).ConfigureAwait(false);
+                    }
+                }
+                lock (Gate)
+                {
+                    previousConnection = connection;
+                    previousJars = references.ToDictionary(p => p, Stamp, StringComparer.OrdinalIgnoreCase);
+                }
+                Log("Plain: JDT LS scoped Eclipse classpath richiesto; JAR=" + references.Length + ".");
+                return;
+            }
             if (Equal(kind, "Maven") || Equal(kind, "Gradle"))
             {
                 string[] names = Equal(kind, "Maven") ? new[] { "pom.xml" } :
