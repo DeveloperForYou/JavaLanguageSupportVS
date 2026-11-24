@@ -57,6 +57,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         };
         private readonly TextBlock summary = CreateLabel("Seleziona un progetto Plain.");
         private readonly TextBlock note = CreateLabel("Solo anteprima. Nessuna modifica automatica.");
+        // JPM-S2D1-MAVEN-READONLY-20261124: explicit, non-mutating Maven graph simulation.
+        private readonly Button mavenPlanButton = CreateButton("Analizza con Maven");
+        private CancellationTokenSource mavenPlanCts;
+        private bool mavenPlanRunning;
         private readonly Button refreshButton = CreateButton("Aggiorna analisi");
         private readonly Button recordButton = CreateButton("Registra scelta in Output JPM");
         private readonly SemaphoreSlim scanGate = new SemaphoreSlim(1, 1);
@@ -95,6 +99,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             refreshButton.Margin = new Thickness(0, 0, 12, 0);
             DockPanel.SetDock(refreshButton, Dock.Left);
             toolbar.Children.Add(refreshButton);
+            mavenPlanButton.Margin = new Thickness(0, 0, 12, 0);
+            mavenPlanButton.ToolTip = "Risolvi il grafo completo con Maven in una cartella temporanea. " +
+                "Nessun file del progetto viene modificato; eventuali download Maven usano la cache utente.";
+            DockPanel.SetDock(mavenPlanButton, Dock.Left);
+            toolbar.Children.Add(mavenPlanButton);
             summary.VerticalAlignment = VerticalAlignment.Center;
             toolbar.Children.Add(summary);
             Grid.SetRow(toolbar, 1);
@@ -193,6 +202,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             Content = root;
 
             refreshButton.Click += (s, e) => Reload();
+            mavenPlanButton.Click += (s, e) => { _ = RunMavenPlanAsync(); };
+            Unloaded += (s, e) => CancelMavenPlan();
             conflictList.SelectionChanged += (s, e) => ConflictChanged();
             strategyPicker.SelectionChanged += (s, e) => UpdatePreview();
             targetVersionPicker.SelectionChanged += (s, e) => UpdatePreview();
@@ -274,6 +285,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         internal void SetProject(string selected, bool isPlain)
         {
+            CancelMavenPlan();
             Interlocked.Increment(ref generation);
             projectFile = selected;
             validPlain = isPlain && !string.IsNullOrWhiteSpace(selected);
@@ -297,6 +309,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         internal void ShowRejectedCandidate(string selected,
             JavaPlainVersionConflictGuard.Report candidate, string operation)
         {
+            CancelMavenPlan();
             if (!validPlain || candidate == null ||
                 !string.Equals(projectFile, selected, StringComparison.OrdinalIgnoreCase)) return;
             Interlocked.Increment(ref generation);
@@ -315,6 +328,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         internal void Reload()
         {
+            CancelMavenPlan();
             int stamp = Interlocked.Increment(ref generation);
             rejectedCandidate = false;
             candidateOperation = null;
@@ -439,6 +453,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private void UpdatePreview()
         {
+            CancelMavenPlan();
             var choice = conflictList.SelectedItem as Choice;
             bool keep = string.Equals(strategyPicker.SelectedItem as string, Keep, StringComparison.Ordinal);
             targetVersionPicker.IsEnabled = choice != null && !keep;
@@ -504,8 +519,91 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private void RefreshActions()
         {
             refreshButton.IsEnabled = validPlain;
+            mavenPlanButton.IsEnabled = validPlain && report != null &&
+                !rejectedCandidate && !mavenPlanRunning;
             recordButton.IsEnabled = validPlain && report != null &&
                 conflictList.SelectedItem is Choice && !string.IsNullOrEmpty(previewText);
+        }
+
+        private void CancelMavenPlan()
+        {
+            var previous = mavenPlanCts;
+            mavenPlanCts = null;
+            mavenPlanRunning = false;
+            if (previous != null)
+            {
+                try { previous.Cancel(); }
+                catch (ObjectDisposedException) { }
+                // The original task owns disposal after its process has exited.
+            }
+            RefreshActions();
+        }
+
+        private async Task RunMavenPlanAsync()
+        {
+            if (!validPlain || rejectedCandidate || report == null ||
+                mavenPlanRunning || string.IsNullOrWhiteSpace(projectFile)) return;
+            string selected = projectFile;
+            int stamp = Volatile.Read(ref generation);
+            var selectedConflict = conflictList.SelectedItem as Choice;
+            bool align = string.Equals(strategyPicker.SelectedItem as string, Align,
+                StringComparison.Ordinal);
+            string version = align ? targetVersionPicker.SelectedItem as string : null;
+            string identity = selectedConflict != null && !string.IsNullOrWhiteSpace(version) ?
+                selectedConflict.Value.Identity : null;
+            // No conflict/target selected: still resolve the real Maven baseline,
+            // allowing S2D.1 to be tested on projects without active conflicts.
+            var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(4));
+            mavenPlanCts = cancellation;
+            mavenPlanRunning = true;
+            RefreshActions();
+            preview.Text = "Risoluzione Maven in corso. Il piano non modifica il progetto...";
+            note.Text = "Operazione consultiva: Maven puo utilizzare la rete e la propria cache utente.";
+            try
+            {
+                var plan = await Task.Run(() =>
+                    JavaPlainMavenResolutionPlanner.CreateAsync(selected,
+                        identity, version, cancellation.Token));
+                if (!ReferenceEquals(mavenPlanCts, cancellation) ||
+                    stamp != Volatile.Read(ref generation) ||
+                    !string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase)) return;
+                preview.Text = plan.Details;
+                note.Text = "Piano Maven generato: " + plan.CurrentJarCount +
+                    " JAR; variazioni simulate: " + plan.Changes +
+                    ". Nessuna modifica applicata.";
+                previewScroller.ScrollToTop();
+                JavaJpmProjectLogger.Info(selected, "JPM S2D.1", plan.Details);
+            }
+            catch (OperationCanceledException)
+            {
+                if (ReferenceEquals(mavenPlanCts, cancellation))
+                {
+                    note.Text = "Pianificazione Maven annullata o scaduta. Progetto invariato.";
+                    preview.Text = "Nessuna modifica applicata.";
+                    JavaJpmProjectLogger.Warning(selected, "JPM S2D.1",
+                        "Analisi annullata o scaduta. Progetto invariato.");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ReferenceEquals(mavenPlanCts, cancellation))
+                {
+                    note.Text = "Risoluzione Maven non riuscita. Consultare Output JPM.";
+                    preview.Text = "Il piano non e stato generato; nessun file modificato. " +
+                        "Consultare Output JPM per la causa.";
+                    JavaJpmProjectLogger.Error(selected, "JPM S2D.1", ex);
+                }
+            }
+            finally
+            {
+                if (ReferenceEquals(mavenPlanCts, cancellation))
+                {
+                    mavenPlanCts = null;
+                    mavenPlanRunning = false;
+                    RefreshActions();
+                }
+                cancellation.Dispose();
+            }
         }
 
         private void RecordChoice()
