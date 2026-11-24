@@ -19,8 +19,10 @@ try {
     }
     $cacheRoot = Join-Path $root '.java-vs'
     $classes = Join-Path $cacheRoot 'classes'
+    $testClasses = Join-Path $cacheRoot 'test-classes'
+    # JPM-S1-PLAIN-SCOPES
     # A junction at .java-vs or classes must never redirect Clean outside the project.
-    foreach ($safeDir in @($cacheRoot, $classes)) {
+    foreach ($safeDir in @($cacheRoot, $classes, $testClasses)) {
         if (Test-Path -LiteralPath $safeDir) {
             $entry = Get-Item -LiteralPath $safeDir -Force
             if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -44,7 +46,20 @@ try {
             }
             Remove-Item -LiteralPath $directory -Recurse -Force
         }
-        Write-Output '[Java Build] Output Plain JDK pulito (.java-vs/classes).'
+        if (Test-Path -LiteralPath $testClasses) {
+            $directory = [IO.Path]::GetFullPath($testClasses)
+            if (-not $directory.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
+                    [StringComparison]::OrdinalIgnoreCase) -or
+                (Split-Path -Leaf $directory) -ne 'test-classes') {
+                throw 'Cartella test-classes non sicura: Clean interrotto.'
+            }
+            $entry = Get-Item -LiteralPath $directory -Force
+            if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Cartella test-classes collegata: Clean interrotto.'
+            }
+            Remove-Item -LiteralPath $directory -Recurse -Force
+        }
+        Write-Output '[Java Build] Output Plain JDK pulito (.java-vs/classes e test-classes).' 
         if ($Action -eq 'Clean') { exit 0 }
     }
 
@@ -97,16 +112,24 @@ try {
         $javac = $found.Source
     }
 
-    # F4D2-PLAIN-CLASSPATH: validate explicit JavaJarReference entries.
-    # JARs can reside outside the project, but they are never executed or modified.
-    $jarFiles = New-Object 'System.Collections.Generic.List[string]'
+    # JPM-S1-PLAIN-SCOPES: explicit <FullPath>|<JavaPackageManagerScope> lines.
+    # Legacy lines without separator remain compile. No fixed JAR count limit.
+    $compileJarFiles = New-Object 'System.Collections.Generic.List[string]'
+    $runtimeJarFiles = New-Object 'System.Collections.Generic.List[string]'
+    $testJarFiles = New-Object 'System.Collections.Generic.List[string]'
     if (-not [string]::IsNullOrWhiteSpace($ClasspathFile) -and
         (Test-Path -LiteralPath $ClasspathFile -PathType Leaf)) {
         $jarItems = @(Get-Content -LiteralPath $ClasspathFile -Encoding UTF8 |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
-        if ($jarItems.Count -gt 80) { throw 'Oltre 80 riferimenti JAR non supportati.' }
         foreach ($jarItem in $jarItems) {
-            $jarPath = [IO.Path]::GetFullPath([string]$jarItem)
+            $parts = ([string]$jarItem).Split([char[]]@('|'), 2)
+            $jarPath = [IO.Path]::GetFullPath([string]$parts[0])
+            $scope = if ($parts.Length -lt 2 -or [string]::IsNullOrWhiteSpace($parts[1])) {
+                'compile'
+            } else { $parts[1].Trim().ToLowerInvariant() }
+            if ($scope -notin @('compile', 'provided', 'runtime', 'test')) {
+                throw ('Scope JAR sconosciuto: ' + $scope + ' (' + $jarPath + ')')
+            }
             if (-not $jarPath.EndsWith('.jar', [StringComparison]::OrdinalIgnoreCase) -or
                 -not [IO.File]::Exists($jarPath)) {
                 throw ('JAR esterno non trovato o non valido: ' + $jarPath)
@@ -115,32 +138,52 @@ try {
                 $jarPath.IndexOfAny([char[]]@([char]34, [char]10, [char]13)) -ge 0) {
                 throw ('Percorso JAR non valido per il classpath javac: ' + $jarPath)
             }
-            $jarFiles.Add($jarPath.Replace('\', '/'))
+            $jarPath = $jarPath.Replace('\', '/')
+            if ($scope -in @('compile','provided') -and -not $compileJarFiles.Contains($jarPath)) {
+                $compileJarFiles.Add($jarPath)
+            }
+            if ($scope -in @('compile','runtime') -and -not $runtimeJarFiles.Contains($jarPath)) {
+                $runtimeJarFiles.Add($jarPath)
+            }
+            if (-not $testJarFiles.Contains($jarPath)) { $testJarFiles.Add($jarPath) }
         }
     }
 
     $buildDirectory = Join-Path $cacheRoot 'build'
     [IO.Directory]::CreateDirectory($classes) | Out-Null
     [IO.Directory]::CreateDirectory($buildDirectory) | Out-Null
-    $argfile = Join-Path $buildDirectory 'javac.args'
-    $entries = New-Object 'System.Collections.Generic.List[string]'
-    $entries.Add('-encoding')
-    $entries.Add('UTF-8')
-    $entries.Add('-d')
-    $entries.Add('"' + $classes.Replace('\', '/') + '"')
-    if ($jarFiles.Count -gt 0) {
-        $entries.Add('-classpath')
-        $entries.Add('"' + [string]::Join(';', $jarFiles) + '"')
+    $mainSources = New-Object 'System.Collections.Generic.List[string]'
+    $testSources = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($source in $normalized) {
+        # Only canonical test source roots are considered test-only; all other
+        # JavaCompile inputs continue to belong to the existing main build.
+        if ($source -match '(?i)/src/test/java/' -or $source -match '(?i)/src/test/') {
+            $testSources.Add($source)
+        } else { $mainSources.Add($source) }
     }
-    foreach ($source in $normalized) { $entries.Add('"' + $source + '"') }
-    [IO.File]::WriteAllLines($argfile, $entries, ([System.Text.UTF8Encoding]::new($false)))
+    $runtimeList = Join-Path $buildDirectory 'runtime-jars.txt'
+    [IO.File]::WriteAllLines($runtimeList, [string[]]$runtimeJarFiles.ToArray(),
+        ([System.Text.UTF8Encoding]::new($false)))
 
-    Write-Output ('[Java Build] javac: ' + $sources.Count + ' sorgenti, output ' + $classes)
-    Write-Output ('[Java Build] JAR esterni nel classpath: ' + $jarFiles.Count)
-    Push-Location -LiteralPath $root
-    try {
-        $ErrorActionPreference = 'Continue' # javac stderr must not become a terminating PowerShell error.
-        & $javac ('@' + $argfile) 2>&1 | ForEach-Object {
+    function Invoke-ScopedJavac {
+        param([string]$Phase, [string]$OutputDirectory, [string[]]$PhaseSources,
+            [string[]]$PhaseClasspath, [string]$ArgumentsFile)
+        if ($PhaseSources.Count -eq 0) { return }
+        [IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
+        $entries = New-Object 'System.Collections.Generic.List[string]'
+        $entries.Add('-encoding'); $entries.Add('UTF-8')
+        $entries.Add('-d'); $entries.Add('"' + $OutputDirectory.Replace('\','/') + '"')
+        if ($PhaseClasspath.Count -gt 0) {
+            $entries.Add('-classpath')
+            $entries.Add('"' + [string]::Join(';', $PhaseClasspath) + '"')
+        }
+        foreach ($source in $PhaseSources) { $entries.Add('"' + $source + '"') }
+        [IO.File]::WriteAllLines($ArgumentsFile, $entries,
+            ([System.Text.UTF8Encoding]::new($false)))
+        Write-Output ('[Java Build] ' + $Phase + ': ' + $PhaseSources.Count +
+            ' sorgenti; ' + $PhaseClasspath.Count + ' riferimenti classpath')
+        $ErrorActionPreference = 'Continue' # javac stderr must be converted, not terminate the pipeline.
+        & $javac ('@' + $ArgumentsFile) 2>&1 | ForEach-Object {
             $line = if ($_ -is [System.Management.Automation.ErrorRecord]) {
                 $_.Exception.Message
             } else { [string]$_ }
@@ -149,12 +192,29 @@ try {
             else { Write-Output $line }
         }
         $exitCode = $LASTEXITCODE
-    } finally {
-        Pop-Location
+        if ($null -eq $exitCode -or [int]$exitCode -ne 0) {
+            throw ('javac ' + $Phase + ' terminato con codice ' + $exitCode)
+        }
     }
-    if ($null -eq $exitCode -or [int]$exitCode -ne 0) {
-        throw ('javac terminato con codice ' + $exitCode)
-    }
+
+    Push-Location -LiteralPath $root
+    try {
+        Invoke-ScopedJavac -Phase 'main' -OutputDirectory $classes `
+            -PhaseSources ([string[]]$mainSources.ToArray()) `
+            -PhaseClasspath ([string[]]$compileJarFiles.ToArray()) `
+            -ArgumentsFile (Join-Path $buildDirectory 'javac-main.args')
+        if ($testSources.Count -gt 0) {
+            $testClasspath = New-Object 'System.Collections.Generic.List[string]'
+            $testClasspath.Add($classes.Replace('\','/'))
+            foreach ($jar in $testJarFiles) { if (-not $testClasspath.Contains($jar)) {
+                $testClasspath.Add($jar)
+            } }
+            Invoke-ScopedJavac -Phase 'test' -OutputDirectory $testClasses `
+                -PhaseSources ([string[]]$testSources.ToArray()) `
+                -PhaseClasspath ([string[]]$testClasspath.ToArray()) `
+                -ArgumentsFile (Join-Path $buildDirectory 'javac-test.args')
+        }
+    } finally { Pop-Location }
     Write-Output '[Java Build] Build Plain JDK completata.'
     exit 0
 } catch {

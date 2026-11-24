@@ -13,6 +13,8 @@ using JavaLanguageSupport.ProjectSystem.Dependencies;
 
 namespace JavaLanguageSupport.ProjectSystem.PackageManager
 {
+    // JPM-S1-SCOPES-20261123
+
     // F4F2112-PLAIN-PACKAGES: isolated Maven resolution, explicit project-owned JARs.
     // The JARs are never loaded or executed by this component.
     internal sealed class JavaPlainPackageChange : IDisposable
@@ -413,12 +415,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         internal static async Task<JavaPlainPackageChange> PrepareAsync(string projectFile,
             JavaDependencyOperation operation, string group, string artifact, string version,
-            IList<JavaPackageSource> sources, CancellationToken token)
+            IList<JavaPackageSource> sources, CancellationToken token, string scope = "compile")
         {
             string stage = null;
             try
             {
                 ValidateCoordinate(group, artifact, operation == JavaDependencyOperation.Remove ? null : version);
+                scope = JavaPackageScopes.Require(scope);
                 if (string.IsNullOrWhiteSpace(projectFile) || !File.Exists(projectFile))
                     throw new IOException("Progetto .javaproj non disponibile.");
                 var snapshot = JavaPackageManagerInstalledReader.Read(projectFile);
@@ -429,11 +432,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 {
                     stage = Path.Combine(Path.GetTempPath(), "java-vsix-plain-" + Guid.NewGuid().ToString("N"));
                     Directory.CreateDirectory(stage);
-                    await ResolveAsync(root, group, artifact, version, sources, stage, token)
+                    await ResolveAsync(root, group, artifact, version, sources, stage, token, scope)
                         .ConfigureAwait(false);
                 }
                 token.ThrowIfCancellationRequested();
-                return BuildPlan(projectFile, operation, group, artifact, version, stage);
+                return BuildPlan(projectFile, operation, group, artifact, version, stage, scope);
             }
             catch
             {
@@ -445,9 +448,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         // Internal/testable offline plan: stage already contains JARs that Maven resolved.
         internal static JavaPlainPackageChange BuildPlan(string projectFile,
-            JavaDependencyOperation operation, string group, string artifact, string version, string stage)
+            JavaDependencyOperation operation, string group, string artifact, string version, string stage,
+            string scope = "compile")
         {
             ValidateCoordinate(group, artifact, operation == JavaDependencyOperation.Remove ? null : version);
+            scope = JavaPackageScopes.Require(scope);
             string root = Path.GetDirectoryName(Path.GetFullPath(projectFile));
             byte[] raw = File.ReadAllBytes(projectFile);
             bool bom = raw.Length >= 3 && raw[0] == 239 && raw[1] == 187 && raw[2] == 191;
@@ -485,6 +490,17 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 throw new InvalidOperationException("Pacchetto Plain gestito non trovato.");
             if (operation == JavaDependencyOperation.Update && currentVersions[0] == version)
                 throw new InvalidOperationException("La versione è già installata.");
+            if (operation == JavaDependencyOperation.ChangeScope)
+            {
+                if (!string.Equals(currentVersions[0], version, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Per cambiare scope mantenere la versione installata.");
+                var oldScopes = current.Select(x => JavaPackageScopes.Normalize(ChildValue(x,
+                    JavaPackageScopes.PlainMetadata))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (oldScopes.Count != 1 || !JavaPackageScopes.IsSupported(oldScopes[0]))
+                    throw new NotSupportedException("Scope Plain esistente incoerente.");
+                if (oldScopes[0] == scope)
+                    throw new InvalidOperationException("La dipendenza ha già lo scope selezionato.");
+            }
             string[] jars = new string[0];
             string target = null;
             if (operation != JavaDependencyOperation.Remove)
@@ -535,6 +551,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     var packageVersion = doc.CreateElement(project.Prefix, ManagedVersion, project.NamespaceURI);
                     packageVersion.InnerText = version;
                     item.AppendChild(packageId); item.AppendChild(packageVersion);
+                    if (scope != "compile")
+                    {
+                        var scopeNode = doc.CreateElement(project.Prefix,
+                            JavaPackageScopes.PlainMetadata, project.NamespaceURI);
+                        scopeNode.InnerText = scope;
+                        item.AppendChild(scopeNode);
+                    }
                     groupNode.AppendChild(doc.CreateWhitespace(nl + "    "));
                     groupNode.AppendChild(item);
                 }
@@ -550,10 +573,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             if (bom) { bytes[0] = 239; bytes[1] = 187; bytes[2] = 191; }
             Buffer.BlockCopy(body, 0, bytes, bom ? 3 : 0, body.Length);
             string verb = operation == JavaDependencyOperation.Install ? "Installazione" :
-                operation == JavaDependencyOperation.Update ? "Aggiornamento" : "Rimozione";
+                operation == JavaDependencyOperation.Update ? "Aggiornamento" :
+                operation == JavaDependencyOperation.ChangeScope ? "Cambio scope" : "Rimozione";
             return new JavaPlainPackageChange(projectFile, raw, bytes, stage, target, jars,
                 verb + " Plain " + id + (operation == JavaDependencyOperation.Remove ? "" : " " + version) +
-                "; JAR nel classpath: " + jars.Length + ".");
+                "; JAR nel classpath: " + jars.Length + "; scope: " + scope + ".");
         }
 
         private static string ChildValue(XmlElement node, string name)
@@ -563,7 +587,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         }
 
         private static async Task ResolveAsync(string projectRoot, string group, string artifact,
-            string version, IList<JavaPackageSource> sources, string stage, CancellationToken token)
+            string version, IList<JavaPackageSource> sources, string stage, CancellationToken token,
+            string scope)
         {
             var eligible = (sources ?? new List<JavaPackageSource>())
                 .Where(JavaPackageMultiRepositorySearchService.IsEligible)
@@ -595,6 +620,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var dependency = xml.CreateElement("dependency", p.NamespaceURI); dependencies.AppendChild(dependency);
             Add(xml, dependency, "groupId", group); Add(xml, dependency, "artifactId", artifact);
             Add(xml, dependency, "version", version);
+            Add(xml, dependency, "scope", scope);
             using (var writer = XmlWriter.Create(pom,
                 new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = true })) xml.Save(writer);
             string script = Path.Combine(stage, "resolve.ps1");
@@ -669,7 +695,7 @@ function Resolve-Maven {
 }
 try {
     $launcher = Resolve-Maven
-    & $launcher '-B' '-ntp' '-f' $env:JAVA_CPS_PLAIN_POM '-N' 'org.apache.maven.plugins:maven-dependency-plugin:3.7.1:copy-dependencies' '-DincludeScope=runtime' '-DexcludeTypes=pom' ('-DoutputDirectory=' + $env:JAVA_CPS_PLAIN_OUT) '-Dmdep.useRepositoryLayout=false' '-Dmdep.prependGroupId=true'
+    & $launcher '-B' '-ntp' '-f' $env:JAVA_CPS_PLAIN_POM '-N' 'org.apache.maven.plugins:maven-dependency-plugin:3.7.1:copy-dependencies' '-DincludeScope=test' '-DexcludeTypes=pom' ('-DoutputDirectory=' + $env:JAVA_CPS_PLAIN_OUT) '-Dmdep.useRepositoryLayout=false' '-Dmdep.prependGroupId=true'
     if ($LASTEXITCODE -ne 0) { throw ('Maven exit code: ' + $LASTEXITCODE) }
     exit 0
 } catch {

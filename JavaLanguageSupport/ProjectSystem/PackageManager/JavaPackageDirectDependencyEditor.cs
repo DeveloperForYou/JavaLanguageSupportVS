@@ -7,7 +7,9 @@ using System.Xml;
 
 namespace JavaLanguageSupport.ProjectSystem.PackageManager
 {
-    internal enum JavaDependencyOperation { Install, Update, Remove }
+    // JPM-S1-SCOPES-20261123
+
+    internal enum JavaDependencyOperation { Install, Update, Remove, ChangeScope }
 
     // F4F2111-DIRECT-DEPENDENCIES: preview first; commit only after user confirmation.
     // No build tool is executed, no external repository/credential file is edited.
@@ -75,17 +77,19 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             @"(?m)^[ \t]*\}[ \t]*(?://[^\r\n]*)?\r?$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
         private static readonly Regex GradleDependency = new Regex(
-            @"(?m)^[ \t]*(?<config>api|implementation|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|annotationProcessor|kapt|compile)[ \t]*(?:\([ \t]*)?(?<quote>['""])(?<group>[A-Za-z0-9_.-]+):(?<artifact>[A-Za-z0-9_.-]+):(?<version>[A-Za-z0-9_.+\-]+)\k<quote>[ \t]*\)?[ \t]*(?://[^\r\n]*)?\r?$",
+            @"(?m)^[ \t]*(?<config>api|implementation|compileOnly|runtimeOnly|testImplementation|testCompileOnly|testRuntimeOnly|annotationProcessor|kapt|compile)[ \t]*(?:\([ \t]*)?(?<quote>['""])(?<group>[A-Za-z0-9_.-]+):(?<artifact>[A-Za-z0-9_.-]+):(?<version>[A-Za-z0-9_.+\-]+)\k<quote>[ \t]*\)?[ \t]*(?://[^\r\n]*)?\r?$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         internal static JavaDependencyChange Plan(string projectFile, JavaDependencyOperation operation,
-            string group, string artifact, string version)
+            string group, string artifact, string version, string scope = "compile")
         {
+            scope = JavaPackageScopes.Require(scope);
             if (string.IsNullOrWhiteSpace(projectFile) || !File.Exists(projectFile))
                 throw new IOException("Selezionare un progetto Java caricato.");
             if (!CoordinatePart.IsMatch(group ?? "") || !CoordinatePart.IsMatch(artifact ?? ""))
                 throw new ArgumentException("Le coordinate Maven contengono caratteri non ammessi.");
-            if (operation != JavaDependencyOperation.Remove && !VersionPart.IsMatch(version ?? ""))
+            if ((operation == JavaDependencyOperation.Install ||
+                operation == JavaDependencyOperation.Update) && !VersionPart.IsMatch(version ?? ""))
                 throw new ArgumentException("Selezionare una versione letterale valida.");
             var snapshot = JavaPackageManagerInstalledReader.Read(projectFile);
             string folder = Path.GetDirectoryName(Path.GetFullPath(projectFile));
@@ -114,17 +118,21 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             if (source.Contains("\r\n") && source.Replace("\r\n", "").Contains("\n"))
                 throw new NotSupportedException("Terminatori di riga misti.");
             string result = string.Equals(snapshot.Backend, "Maven", StringComparison.OrdinalIgnoreCase)
-                ? EditMaven(source, nl, operation, group, artifact, version)
+                ? EditMaven(source, nl, operation, group, artifact, version, scope)
                 : EditGradle(source, nl, path.EndsWith(".kts", StringComparison.OrdinalIgnoreCase),
-                    operation, group, artifact, version);
+                    operation, group, artifact, version, scope);
             byte[] content = new UTF8Encoding(false).GetBytes(result);
             byte[] target = new byte[content.Length + (bom ? 3 : 0)];
             if (bom) { target[0] = 239; target[1] = 187; target[2] = 191; }
             Buffer.BlockCopy(content, 0, target, bom ? 3 : 0, content.Length);
             string action = operation == JavaDependencyOperation.Install ? "Installazione" :
-                operation == JavaDependencyOperation.Update ? "Aggiornamento" : "Rimozione";
+                operation == JavaDependencyOperation.Update ? "Aggiornamento" :
+                operation == JavaDependencyOperation.ChangeScope ? "Cambio scope" : "Rimozione";
             string summary = action + " di " + group + ":" + artifact +
-                (operation == JavaDependencyOperation.Remove ? "" : " → " + version);
+                (operation == JavaDependencyOperation.Remove ? "" :
+                    operation == JavaDependencyOperation.ChangeScope ? " [" + scope + "]" :
+                    operation == JavaDependencyOperation.Install ? " → " + version + " [" + scope + "]" :
+                    " → " + version);
             return new JavaDependencyChange(path, raw, target, summary);
         }
 
@@ -138,7 +146,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         }
 
         private static string EditMaven(string source, string nl, JavaDependencyOperation op,
-            string group, string artifact, string version)
+            string group, string artifact, string version, string scope)
         {
             var document = new XmlDocument { PreserveWhitespace = true, XmlResolver = null };
             var settings = new XmlReaderSettings { XmlResolver = null,
@@ -183,6 +191,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 AddMavenValue(document, item, "groupId", group, nl);
                 AddMavenValue(document, item, "artifactId", artifact, nl);
                 AddMavenValue(document, item, "version", version, nl);
+                if (scope != "compile") AddMavenValue(document, item, "scope", scope, nl);
                 item.AppendChild(document.CreateWhitespace(nl + "    "));
                 var tail = dependencies.LastChild;
                 if (tail is XmlWhitespace || tail is XmlSignificantWhitespace)
@@ -208,6 +217,24 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     if (previous is XmlWhitespace || previous is XmlSignificantWhitespace)
                         dependencies.RemoveChild(previous);
                 }
+                else if (op == JavaDependencyOperation.ChangeScope)
+                {
+                    var scopeNode = Direct(existing, "scope");
+                    if (scopeNode != null && !JavaPackageScopes.IsSupported(scopeNode.InnerText))
+                        throw new NotSupportedException("Scope POM esistente non supportato.");
+                    if (scope == "compile")
+                    {
+                        if (scopeNode != null)
+                        {
+                            var previous = scopeNode.PreviousSibling;
+                            existing.RemoveChild(scopeNode);
+                            if (previous is XmlWhitespace || previous is XmlSignificantWhitespace)
+                                existing.RemoveChild(previous);
+                        }
+                    }
+                    else if (scopeNode != null) scopeNode.InnerText = scope;
+                    else AddMavenValue(document, existing, "scope", scope, nl);
+                }
                 else
                 {
                     var versionNode = Direct(existing, "version");
@@ -232,7 +259,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         }
 
         private static string EditGradle(string source, string nl, bool kotlin,
-            JavaDependencyOperation op, string group, string artifact, string version)
+            JavaDependencyOperation op, string group, string artifact, string version, string scope)
         {
             var opens = GradleBlock.Matches(source).Cast<Match>().ToList();
             if (opens.Count != 1)
@@ -261,8 +288,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 var first = GradleDependency.Match(body);
                 if (first.Success) indent = first.Value.Substring(0, first.Value.Length - first.Value.TrimStart(' ', '\t').Length);
                 string declaration = kotlin ?
-                    "implementation(\"" + coordinate + ":" + version + "\")" :
-                    "implementation '" + coordinate + ":" + version + "'";
+                    JavaPackageScopes.ToGradle(scope) + "(\"" + coordinate + ":" + version + "\")" :
+                    JavaPackageScopes.ToGradle(scope) + " '" + coordinate + ":" + version + "'";
                 string insertion = (body.EndsWith(nl, StringComparison.Ordinal) ? "" : nl) +
                     indent + declaration + nl;
                 return source.Insert(close.Index, insertion);
@@ -270,6 +297,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             if (existing == null)
                 throw new InvalidOperationException("Dipendenza diretta non presente in build.gradle.");
             int start = open.Index + open.Length + existing.Index;
+            if (op == JavaDependencyOperation.ChangeScope)
+            {
+                var config = existing.Groups["config"];
+                string replacement = JavaPackageScopes.ToGradle(scope);
+                return source.Remove(start + config.Index - existing.Index, config.Length)
+                    .Insert(start + config.Index - existing.Index, replacement);
+            }
             if (op == JavaDependencyOperation.Update)
             {
                 var oldVersion = existing.Groups["version"];

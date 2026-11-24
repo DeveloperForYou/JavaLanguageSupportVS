@@ -15,6 +15,8 @@ using Microsoft.VisualStudio.PlatformUI;
 
 namespace JavaLanguageSupport.ProjectSystem.PackageManager
 {
+    // JPM-S1-SCOPES-20261123
+
     /// <summary>F4.F.2: dockable, read-only Java package browser.</summary>
     [System.Runtime.InteropServices.Guid("d4b00c0f-39f6-4e89-9acc-c19c2844f132")]
     public sealed class JavaPackageManagerToolWindow : ToolWindowPane
@@ -139,6 +141,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly Button installDependencyButton = ActionButton("Installa...");
         private readonly Button removeDependencyButton = ActionButton("Rimuovi...");
         private readonly Button applyUpdateButton = ActionButton("Aggiorna selezionato...");
+        // JPM-S1: scope selection and edit. Use the existing VS-themed picker.
+        private readonly ComboBox installScopeSelector = new ComboBox { Width = 108 };
+        private readonly ComboBox installedScopeSelector = new ComboBox { Width = 108 };
+        private readonly Button changeScopeButton = ActionButton("Modifica scope...");
         private readonly TabControl tabs = new TabControl();
         private CancellationTokenSource searchCts;
         private CancellationTokenSource versionsCts;
@@ -229,6 +235,17 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             };
             root.Children.Add(header);
 
+            ThemeProjectSelector(installScopeSelector);
+            ThemeProjectSelector(installedScopeSelector);
+            // The project picker template binds DisplayName; scope items are strings.
+            installScopeSelector.ItemTemplate = ListItemTemplate(null);
+            installedScopeSelector.ItemTemplate = ListItemTemplate(null);
+            installScopeSelector.ItemsSource = JavaPackageScopes.Supported;
+            installedScopeSelector.ItemsSource = JavaPackageScopes.Supported;
+            installScopeSelector.SelectedItem = "compile";
+            installedScopeSelector.SelectedItem = "compile";
+            installScopeSelector.ToolTip = "Scope della nuova dipendenza: compile, provided, runtime, test";
+            installedScopeSelector.ToolTip = "Nuovo scope della dipendenza selezionata";
             ThemeControl(tabs);
             tabs.Items.Add(ThemedTab("Sfoglia", MakeBrowse()));
             tabs.Items.Add(ThemedTab("Installati", MakeInstalled()));
@@ -298,13 +315,18 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 var dep = installedResults.SelectedItem as JavaInstalledDependency;
                 installedDetails.Text = dep == null ? "Seleziona una dipendenza." :
                     dep.Coordinate + "\nVersione dichiarata: " + dep.Version +
+                    "\nScope: " + dep.Scope +
                     "\nOrigine: " + (installed == null ? "-" : installed.Backend);
+                installedScopeSelector.SelectedItem = dep != null && JavaPackageScopes.IsSupported(dep.Scope)
+                    ? dep.Scope : "compile";
                 RefreshDependencyActions();
             };
             updateButton.Click += (s, e) => { _ = LoadUpdatesAsync(); };
             installDependencyButton.Click += (s, e) => ApplyDependencyChange(JavaDependencyOperation.Install);
             removeDependencyButton.Click += (s, e) => ApplyDependencyChange(JavaDependencyOperation.Remove);
             applyUpdateButton.Click += (s, e) => ApplyDependencyChange(JavaDependencyOperation.Update);
+            installedScopeSelector.SelectionChanged += (s, e) => RefreshDependencyActions();
+            changeScopeButton.Click += (s, e) => ApplyInstalledScopeChange();
             updatesResults.SelectionChanged += (s, e) => RefreshDependencyActions();
             RefreshDependencyActions();
             retryVersionsButton.Click += (s, e) => { _ = LoadVersionsAsync(requestedVersionsPage, false); };
@@ -400,6 +422,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var versionActions = new StackPanel { Orientation = Orientation.Horizontal };
             installDependencyButton.Margin = new Thickness(0);
             installDependencyButton.ToolTip = "Aggiunge la versione selezionata al progetto Maven/Gradle";
+            var installScopeLabel = CaptionText("Scope:");
+            installScopeLabel.VerticalAlignment = VerticalAlignment.Center;
+            installScopeLabel.Margin = new Thickness(0, 0, 5, 0);
+            versionActions.Children.Add(installScopeLabel);
+            installScopeSelector.Margin = new Thickness(0, 0, 8, 0);
+            versionActions.Children.Add(installScopeSelector);
             versionActions.Children.Add(installDependencyButton);
             versionActions.Children.Add(detailsToggle);
             Grid.SetColumn(versionActions, 1);
@@ -590,6 +618,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             removeDependencyButton.ToolTip = "Rimuove la dipendenza diretta selezionata";
             DockPanel.SetDock(removeDependencyButton, Dock.Right);
             installedHeader.Children.Add(removeDependencyButton);
+            changeScopeButton.Margin = new Thickness(8, 0, 0, 0);
+            DockPanel.SetDock(changeScopeButton, Dock.Right);
+            installedHeader.Children.Add(changeScopeButton);
+            installedScopeSelector.Margin = new Thickness(8, 0, 0, 0);
+            DockPanel.SetDock(installedScopeSelector, Dock.Right);
+            installedHeader.Children.Add(installedScopeSelector);
             installedHeader.Children.Add(Heading("Dipendenze dichiarate nel progetto", 15));
             grid.Children.Add(installedHeader);
             DecorateList(installedResults, null);
@@ -760,6 +794,57 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var candidate = updatesResults.SelectedItem as JavaPackageUpdateCandidate;
             applyUpdateButton.IsEnabled = writable && candidate != null &&
                 (!plain || candidate.Installed.MavenCoordinate);
+            installScopeSelector.IsEnabled = writable;
+            var scopeItem = installedResults.SelectedItem as JavaInstalledDependency;
+            changeScopeButton.IsEnabled = writable && scopeItem != null &&
+                scopeItem.MavenCoordinate && JavaPackageScopes.IsSupported(scopeItem.Scope) &&
+                !string.Equals(scopeItem.Scope, installedScopeSelector.SelectedItem as string,
+                    StringComparison.OrdinalIgnoreCase);
+            installedScopeSelector.IsEnabled = writable && scopeItem != null &&
+                scopeItem.MavenCoordinate && JavaPackageScopes.IsSupported(scopeItem.Scope);
+        }
+
+        private void ApplyInstalledScopeChange()
+        {
+            var selected = installedResults.SelectedItem as JavaInstalledDependency;
+            string wanted = installedScopeSelector.SelectedItem as string;
+            if (plainPackageBusy || installed == null || selected == null || !selected.MavenCoordinate ||
+                !JavaPackageScopes.IsSupported(selected.Scope) ||
+                !JavaPackageScopes.IsSupported(wanted) ||
+                string.Equals(selected.Scope, wanted, StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(projectFile)) return;
+            if (string.Equals(installed.Backend, "Plain", StringComparison.OrdinalIgnoreCase))
+            {
+                _ = ApplyPlainDependencyChangeAsync(JavaDependencyOperation.ChangeScope);
+                return;
+            }
+            string originalProject = projectFile;
+            try
+            {
+                JavaDependencyChange change = JavaPackageDirectDependencyEditor.Plan(originalProject,
+                    JavaDependencyOperation.ChangeScope, selected.GroupId,
+                    selected.ArtifactId, null, wanted);
+                string message = change.Summary + "\n\n" +
+                    "La modifica verrà applicata al progetto con backup. Confermare?";
+                if (MessageBox.Show(message, "JPM - Modifica scope", MessageBoxButton.YesNo,
+                    MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                if (!string.Equals(originalProject, projectFile, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Il progetto selezionato è cambiato.");
+                change.Apply();
+                CancelAll();
+                updatesResults.ItemsSource = null;
+                RefreshInstalled();
+                JavaLanguageSupport.ProjectSystem.Dependencies.JavaDependencyLanguageSync.RefreshAll();
+                status.Text = change.Summary + ". Backup: " + change.BackupPath;
+            }
+            catch (Exception ex) when (ex is System.IO.IOException || ex is UnauthorizedAccessException ||
+                ex is ArgumentException || ex is InvalidOperationException ||
+                ex is NotSupportedException || ex is XmlException)
+            {
+                status.Text = "Scope non modificato: " + ex.Message;
+                MessageBox.Show(ex.Message, "JPM - Modifica scope",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         private void ApplyDependencyChange(JavaDependencyOperation operation)
@@ -799,7 +884,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     group = declared.GroupId; artifact = declared.ArtifactId;
                 }
                 var change = JavaPackageDirectDependencyEditor.Plan(initialProject,
-                    operation, group, artifact, version);
+                    operation, group, artifact, version,
+                    operation == JavaDependencyOperation.Install ?
+                        (installScopeSelector.SelectedItem as string ?? "compile") : "compile");
                 string message = change.Summary + "\n\nProgetto: " +
                     System.IO.Path.GetFileName(initialProject) +
                     "\nFile: " + change.FilePath +
@@ -866,13 +953,34 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                         throw new InvalidOperationException("I JAR esterni non gestiti rimangono intatti.");
                     group = selected.GroupId; artifact = selected.ArtifactId;
                 }
+                if (operation == JavaDependencyOperation.ChangeScope)
+                {
+                    var selectedScopePackage = installedResults.SelectedItem as JavaInstalledDependency;
+                    if (selectedScopePackage == null || !selectedScopePackage.MavenCoordinate)
+                        throw new InvalidOperationException("Selezionare una dipendenza Plain gestita.");
+                    version = selectedScopePackage.Version;
+                }
+                string candidateScope = null;
+                if (operation == JavaDependencyOperation.Update)
+                {
+                    var selectedUpdate = updatesResults.SelectedItem as JavaPackageUpdateCandidate;
+                    candidateScope = selectedUpdate == null ? null : selectedUpdate.Installed.Scope;
+                }
                 var origins = SelectedSources();
                 status.Text = operation == JavaDependencyOperation.Remove ?
                     "Preparazione rimozione Plain..." :
-                    "Risoluzione Maven delle dipendenze transitive Plain in corso...";
+                    operation == JavaDependencyOperation.ChangeScope ?
+                        "Cambio scope e risoluzione transitive Plain in corso..." :
+                        "Risoluzione Maven delle dipendenze transitive Plain in corso...";
                 using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
                 using (var change = await JavaPlainPackageManager.PrepareAsync(initialProject,
-                    operation, group, artifact, version, origins, timeout.Token))
+                    operation, group, artifact, version, origins, timeout.Token,
+                    operation == JavaDependencyOperation.Install ?
+                        (installScopeSelector.SelectedItem as string ?? "compile") :
+                        operation == JavaDependencyOperation.Update ?
+                            (candidateScope ?? "compile") :
+                            operation == JavaDependencyOperation.ChangeScope ?
+                            (installedScopeSelector.SelectedItem as string ?? "compile") : "compile"))
                 {
                     if (!string.Equals(initialProject, projectFile, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("Il progetto selezionato è cambiato.");

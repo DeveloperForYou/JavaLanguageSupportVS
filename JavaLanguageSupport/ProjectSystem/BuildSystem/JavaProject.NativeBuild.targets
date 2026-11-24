@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
+  <!-- JPM-S1-PLAIN-SCOPES: classpath entries have path|scope, empty scope=compile. -->
   <!-- Native MSBuild entry points for Java CPS. No compiler is embedded in the VSIX.
        pom.xml / build.gradle remain authoritative. Only Windows is supported. -->
   <Target Name="JavaValidateBuild" Condition="'$(DesignTimeBuild)' != 'true'">
@@ -54,7 +55,7 @@
             Files="$(JavaCompilerJarList)" />
     <WriteLinesToFile Condition="'$(JavaBuildSystem)' == 'Plain' and '@(JavaJarReference)' != ''"
                       File="$(JavaCompilerJarList)"
-                      Lines="@(JavaJarReference->'%(FullPath)')"
+                      Lines="@(JavaJarReference->'%(FullPath)|%(JavaPackageManagerScope)')"
                       Overwrite="true" Encoding="UTF-8" />
     <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
           EnvironmentVariables="$(JavaPlainJdkEnvironment)"
@@ -104,7 +105,7 @@
             Files="$(JavaCompilerJarList)" />
     <WriteLinesToFile Condition="'$(JavaBuildSystem)' == 'Plain' and '@(JavaJarReference)' != ''"
                       File="$(JavaCompilerJarList)"
-                      Lines="@(JavaJarReference->'%(FullPath)')"
+                      Lines="@(JavaJarReference->'%(FullPath)|%(JavaPackageManagerScope)')"
                       Overwrite="true" Encoding="UTF-8" />
     <Exec Condition="'$(JavaBuildSystem)' == 'Plain'"
           EnvironmentVariables="$(JavaPlainJdkEnvironment)"
