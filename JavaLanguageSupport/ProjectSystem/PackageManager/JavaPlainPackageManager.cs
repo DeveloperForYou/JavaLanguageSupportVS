@@ -525,6 +525,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     StringComparison.OrdinalIgnoreCase)))
                     throw new InvalidDataException("JAR principale non presente. Atteso: " +
                         primaryJar + "; trovati: " + string.Join(", ", jars) + ".");
+                // JPM-S2A-CONFLICT-GUARD-20261124: examine the complete *resulting*
+                // Plain managed classpath before touching either JARs or .javaproj.
+                JavaPlainVersionConflictGuard.VerifyCandidate(projectFile, id, stage, jars);
                 target = Path.Combine(root, "lib", "java-packages", group, artifact, version);
                 JavaPlainPackageChange.EnsureDirectorySafe(root, Path.GetDirectoryName(target));
             }

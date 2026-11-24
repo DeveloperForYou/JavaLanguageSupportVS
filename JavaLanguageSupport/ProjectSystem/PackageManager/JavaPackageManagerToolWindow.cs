@@ -145,6 +145,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly ComboBox installScopeSelector = new ComboBox { Width = 108 };
         private readonly ComboBox installedScopeSelector = new ComboBox { Width = 108 };
         private readonly Button changeScopeButton = ActionButton("Modifica scope...");
+        // JPM-S2A-CONFLICT-GUARD-20261124
+        private readonly Button plainConflictsButton = ActionButton("Verifica conflitti Plain");
+        private bool auditingPlainConflicts;
         private readonly TabControl tabs = new TabControl();
         private CancellationTokenSource searchCts;
         private CancellationTokenSource versionsCts;
@@ -327,6 +330,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             applyUpdateButton.Click += (s, e) => ApplyDependencyChange(JavaDependencyOperation.Update);
             installedScopeSelector.SelectionChanged += (s, e) => RefreshDependencyActions();
             changeScopeButton.Click += (s, e) => ApplyInstalledScopeChange();
+            plainConflictsButton.Click += (s, e) => { _ = AuditPlainConflictsAsync(); };
             updatesResults.SelectionChanged += (s, e) => RefreshDependencyActions();
             RefreshDependencyActions();
             retryVersionsButton.Click += (s, e) => { _ = LoadVersionsAsync(requestedVersionsPage, false); };
@@ -613,6 +617,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var installedHeader = new DockPanel();
             removeDependencyButton.Margin = new Thickness(9, 0, 0, 0);
             removeDependencyButton.ToolTip = "Rimuove la dipendenza diretta selezionata";
@@ -637,6 +642,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             installedNote.TextWrapping = TextWrapping.Wrap;
             Grid.SetRow(installedNote, 3);
             grid.Children.Add(installedNote);
+            plainConflictsButton.HorizontalAlignment = HorizontalAlignment.Left;
+            plainConflictsButton.Margin = new Thickness(0, 7, 0, 0);
+            plainConflictsButton.ToolTip = "Verifica le versioni dei JAR Plain gestiti senza modificare il progetto";
+            Grid.SetRow(plainConflictsButton, 4);
+            grid.Children.Add(plainConflictsButton);
             return grid;
         }
 
@@ -781,6 +791,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             // F4F2112-PLAIN-MANAGEMENT: enable Plain only for package-managed coordinates.
             bool plain = installed != null && string.Equals(installed.Backend,
                 "Plain", StringComparison.OrdinalIgnoreCase);
+            plainConflictsButton.IsEnabled = plain && !auditingPlainConflicts && !plainPackageBusy;
             bool writable = !plainPackageBusy && installed != null &&
                 (plain || string.Equals(installed.Backend, "Maven", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(installed.Backend, "Gradle", StringComparison.OrdinalIgnoreCase));
@@ -1022,6 +1033,44 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             finally
             {
                 plainPackageBusy = false;
+                RefreshDependencyActions();
+            }
+        }
+
+        // JPM-S2A: explicit, non-mutating audit; keep heavy ZIP inspection off the UI thread.
+        private async Task AuditPlainConflictsAsync()
+        {
+            if (auditingPlainConflicts || installed == null ||
+                !string.Equals(installed.Backend, "Plain", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(projectFile)) return;
+            string selectedProject = projectFile;
+            auditingPlainConflicts = true;
+            plainConflictsButton.IsEnabled = false;
+            try
+            {
+                var report = await Task.Run(() =>
+                    JavaPlainVersionConflictGuard.Audit(selectedProject));
+                if (!string.Equals(selectedProject, projectFile,
+                    StringComparison.OrdinalIgnoreCase)) return;
+                status.Text = report.ConflictCount == 0 ?
+                    "Verifica Plain: nessun conflitto di versione rilevato." :
+                    "Verifica Plain: " + report.ConflictCount + " conflitti di versione.";
+                MessageBox.Show(report.Details, "JPM - Conflitti di versione Plain",
+                    MessageBoxButton.OK, report.ConflictCount == 0 ?
+                        MessageBoxImage.Information : MessageBoxImage.Warning);
+            }
+            catch (Exception ex) when (ex is System.IO.IOException ||
+                ex is System.IO.InvalidDataException || ex is UnauthorizedAccessException ||
+                ex is ArgumentException || ex is XmlException)
+            {
+                if (string.Equals(selectedProject, projectFile,
+                    StringComparison.OrdinalIgnoreCase))
+                    MessageBox.Show(ex.Message, "JPM - Verifica conflitti",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
+                auditingPlainConflicts = false;
                 RefreshDependencyActions();
             }
         }
