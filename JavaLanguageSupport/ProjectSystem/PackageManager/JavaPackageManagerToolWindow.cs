@@ -150,7 +150,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly Button jpmToolLogButton = ActionButton("Log tool");
         private bool jpmToolBusy;
         // JPM-S2A-CONFLICT-GUARD-20261124
+        // JPM-S2B-AUTO-AUDIT-20261124
         private readonly Button plainConflictsButton = ActionButton("Verifica conflitti Plain");
+        private readonly TextBlock plainConflictsIndicator = CaptionText("Conflitti Plain: non verificati.");
+        private readonly SemaphoreSlim plainConflictAuditGate = new SemaphoreSlim(1, 1);
+        private int plainConflictAuditRevision;
         private bool auditingPlainConflicts;
         private readonly TabControl tabs = new TabControl();
         private CancellationTokenSource searchCts;
@@ -658,11 +662,19 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             installedNote.TextWrapping = TextWrapping.Wrap;
             Grid.SetRow(installedNote, 3);
             grid.Children.Add(installedNote);
+            // S2B: compact, theme-aware status; only counts in the UI, details in Output JPM.
+            var conflictBar = new DockPanel { Margin = new Thickness(0, 7, 0, 0) };
             plainConflictsButton.HorizontalAlignment = HorizontalAlignment.Left;
-            plainConflictsButton.Margin = new Thickness(0, 7, 0, 0);
-            plainConflictsButton.ToolTip = "Verifica le versioni dei JAR Plain gestiti senza modificare il progetto";
-            Grid.SetRow(plainConflictsButton, 4);
-            grid.Children.Add(plainConflictsButton);
+            plainConflictsButton.Margin = new Thickness(0, 0, 10, 0);
+            plainConflictsButton.ToolTip = "Verifica i JAR Plain gestiti; report completo in Output JPM";
+            DockPanel.SetDock(plainConflictsButton, Dock.Left);
+            conflictBar.Children.Add(plainConflictsButton);
+            plainConflictsIndicator.VerticalAlignment = VerticalAlignment.Center;
+            plainConflictsIndicator.TextWrapping = TextWrapping.Wrap;
+            plainConflictsIndicator.Visibility = Visibility.Collapsed;
+            conflictBar.Children.Add(plainConflictsIndicator);
+            Grid.SetRow(conflictBar, 4);
+            grid.Children.Add(conflictBar);
             return grid;
         }
 
@@ -705,9 +717,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             if (string.Equals(projectFile, newProjectFile, StringComparison.OrdinalIgnoreCase))
             {
                 RefreshInstalled();
+                QueuePlainConflictAudit("selezione progetto");
                 return;
             }
             CancelAll();
+            // Cancel stale audit results when changing the target project.
+            Interlocked.Increment(ref plainConflictAuditRevision);
+            plainConflictsIndicator.Visibility = Visibility.Collapsed;
             projectFile = newProjectFile;
             JavaJpmProjectLogger.Info(projectFile, "JPM", "Progetto selezionato nel Java Package Manager.");
             JavaJpmProjectLogger.Open(projectFile);
@@ -733,6 +749,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             installedDetails.Text = "Seleziona una dipendenza.";
             projectHeader.Text = System.IO.Path.GetFileNameWithoutExtension(projectFile);
             RefreshInstalled();
+            QueuePlainConflictAudit("apertura progetto");
             tabs.SelectedIndex = 0;
             status.Text = "Rilevamento delle origini del progetto...";
             if (installed != null) _ = DiscoverSourcesAsync();
@@ -769,6 +786,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private void ClearProjectTarget()
         {
             CancelAll();
+            Interlocked.Increment(ref plainConflictAuditRevision);
+            plainConflictsIndicator.Visibility = Visibility.Collapsed;
             projectFile = null;
             recentCoordinates.Clear();
             searchBox.Clear();
@@ -1050,6 +1069,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     RefreshInstalled();
                     JavaLanguageSupport.ProjectSystem.Dependencies.JavaDependencyLanguageSync.RefreshAll();
                     status.Text = "Operazione Plain completata. Dettagli in Output JPM.";
+                    // Post-commit audit (Install/Update/Remove/ChangeScope), no modal dialogs.
+                    QueuePlainConflictAudit("operazione " + operation);
                 }
             }
             catch (OperationCanceledException)
@@ -1064,6 +1085,16 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 ex is InvalidOperationException || ex is XmlException)
             {
                 JavaJpmProjectLogger.Error(initialProject, "JPM Plain", ex);
+                // S2B: the S2A pre-commit guard may reject a conflicted candidate.
+                // Do not claim the installed classpath itself contains this conflict.
+                if (ex is InvalidOperationException && ex.Message.StartsWith(
+                    "Conflitto tra versioni transitive Plain:", StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(ref plainConflictAuditRevision);
+                    plainConflictsIndicator.Visibility = Visibility.Visible;
+                    plainConflictsIndicator.Text = "⚠ Operazione bloccata: conflitto nelle dipendenze proposte.";
+                    plainConflictsIndicator.ToolTip = "Classpath invariato. Dettagli in Output JPM.";
+                }
                 status.Text = "Pacchetto Plain non modificato. Dettagli in Output JPM.";
             }
             finally
@@ -1074,40 +1105,84 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         }
 
         // JPM-S2A: explicit, non-mutating audit; keep heavy ZIP inspection off the UI thread.
-        private async Task AuditPlainConflictsAsync()
+        // S2B: same read-only audit for manual checks and automatic post-commit checks.
+        // Results of a previous project/operation are discarded, including after project switch.
+        private Task AuditPlainConflictsAsync()
         {
-            if (auditingPlainConflicts || installed == null ||
-                !string.Equals(installed.Backend, "Plain", StringComparison.OrdinalIgnoreCase) ||
-                string.IsNullOrWhiteSpace(projectFile)) return;
+            QueuePlainConflictAudit("verifica manuale");
+            return Task.CompletedTask;
+        }
+
+        private void QueuePlainConflictAudit(string reason)
+        {
+            int revision = Interlocked.Increment(ref plainConflictAuditRevision);
+            if (installed == null || !string.Equals(installed.Backend, "Plain",
+                StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(projectFile))
+            {
+                plainConflictsIndicator.Visibility = Visibility.Collapsed;
+                return;
+            }
             string selectedProject = projectFile;
-            JavaJpmProjectLogger.Info(selectedProject, "JPM conflitti", "Avvio verifica conflitti Plain.");
-            auditingPlainConflicts = true;
-            plainConflictsButton.IsEnabled = false;
+            plainConflictsIndicator.Visibility = Visibility.Visible;
+            plainConflictsIndicator.Text = "Conflitti Plain: verifica in corso...";
+            plainConflictsIndicator.ToolTip = "Analisi dei JAR sul disco; il report sarà registrato in Output JPM.";
+            _ = RunPlainConflictAuditAsync(selectedProject, revision, reason);
+        }
+
+        private async Task RunPlainConflictAuditAsync(string selectedProject,
+            int revision, string reason)
+        {
+            // Large JAR archives may take time; do not block the UI thread.
+            // Serialize scans and discard stale requests before opening ZIP files.
+            await plainConflictAuditGate.WaitAsync();
             try
             {
+                if (revision != Volatile.Read(ref plainConflictAuditRevision) ||
+                    !string.Equals(selectedProject, projectFile,
+                        StringComparison.OrdinalIgnoreCase)) return;
+                auditingPlainConflicts = true;
+                RefreshDependencyActions();
+                JavaJpmProjectLogger.Info(selectedProject, "JPM conflitti",
+                    "Avvio analisi " + reason + " (sola lettura).");
                 var report = await Task.Run(() =>
                     JavaPlainVersionConflictGuard.Audit(selectedProject));
-                if (!string.Equals(selectedProject, projectFile,
-                    StringComparison.OrdinalIgnoreCase)) return;
-                status.Text = report.ConflictCount == 0 ?
-                    "Verifica Plain: nessun conflitto di versione rilevato." :
-                    "Verifica Plain: " + report.ConflictCount + " conflitti di versione.";
-                if (report.ConflictCount == 0)
-                    JavaJpmProjectLogger.Info(selectedProject, "JPM conflitti", report.Details);
-                else JavaJpmProjectLogger.Warning(selectedProject, "JPM conflitti", report.Details);
+                if (revision != Volatile.Read(ref plainConflictAuditRevision) ||
+                    !string.Equals(selectedProject, projectFile,
+                        StringComparison.OrdinalIgnoreCase)) return;
+
+                string summary = "Conflitti Plain: " + report.ConflictCount +
+                    "; JAR non verificabili: " + report.UnverifiedCount + ".";
+                plainConflictsIndicator.Text = report.ConflictCount > 0 ?
+                    "⚠ " + summary : report.UnverifiedCount > 0 ?
+                    "⚠ " + summary : "✓ " + summary;
+                plainConflictsIndicator.ToolTip =
+                    "Verifica " + reason + " completata. Dettagli in Output JPM.";
+                // Keep the full report out of the tool window. Do not block edits
+                // or mediate versions silently: S2A still guards candidate commits.
+                if (report.ConflictCount > 0 || report.UnverifiedCount > 0)
+                    JavaJpmProjectLogger.Warning(selectedProject, "JPM conflitti",
+                        summary + "\n" + report.Details);
+                else
+                    JavaJpmProjectLogger.Info(selectedProject, "JPM conflitti",
+                        summary + "\n" + report.Details);
             }
-            catch (Exception ex) when (ex is System.IO.IOException ||
-                ex is System.IO.InvalidDataException || ex is UnauthorizedAccessException ||
-                ex is ArgumentException || ex is XmlException)
+            catch (Exception ex)
             {
-                if (string.Equals(selectedProject, projectFile,
-                    StringComparison.OrdinalIgnoreCase))
-                    JavaJpmProjectLogger.Error(selectedProject, "JPM conflitti", ex);
+                if (revision == Volatile.Read(ref plainConflictAuditRevision) &&
+                    string.Equals(selectedProject, projectFile,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    plainConflictsIndicator.Text = "⚠ Conflitti Plain: verifica non riuscita.";
+                    plainConflictsIndicator.ToolTip = "Errore nel report. Aprire Output JPM.";
+                    try { JavaJpmProjectLogger.Error(selectedProject, "JPM conflitti", ex); }
+                    catch (Exception) { /* Optional logging must not crash Visual Studio. */ }
+                }
             }
             finally
             {
                 auditingPlainConflicts = false;
                 RefreshDependencyActions();
+                plainConflictAuditGate.Release();
             }
         }
 
