@@ -63,6 +63,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly Button previewModeButton = CreateButton("Anteprima testuale");
         private readonly Button diffModeButton = CreateButton("Confronto classpath");
         private readonly Button recordComparisonButton = CreateButton("Registra confronto");
+        // JPM-S2D31-TRANSACTION-PREFLIGHT-20261125: opt-in validation only; never applies a Maven plan.
+        private readonly Button prepareTransactionButton = CreateButton("Valida transazione");
+        private CancellationTokenSource prepareCts;
+        private bool prepareRunning;
+        private JavaPlainResolutionTransactionPreflight.Validation preparedValidation;
         private readonly ListView classpathDiffList = new ListView();
         private readonly TextBlock classpathDiffSummary = CreateLabel(
             "Esegui Analizza con Maven per generare il confronto.");
@@ -219,6 +224,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             resultButtons.Children.Add(previewModeButton);
             resultButtons.Children.Add(diffModeButton);
             resultButtons.Children.Add(recordComparisonButton);
+            prepareTransactionButton.Margin = new Thickness(8, 0, 0, 0);
+            prepareTransactionButton.ToolTip =
+                "Riesegui Maven, confronta il piano e valida SHA-256 dei JAR. " +
+                "Solo preflight: nessuna copia, rimozione, modifica o commit.";
+            resultButtons.Children.Add(prepareTransactionButton);
             resultArea.Children.Add(resultButtons);
             Grid.SetRow(previewFrame, 1);
             resultArea.Children.Add(previewFrame);
@@ -277,6 +287,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             previewModeButton.Click += (s, e) => ShowClasspathComparison(false);
             diffModeButton.Click += (s, e) => ShowClasspathComparison(true);
             recordComparisonButton.Click += (s, e) => RecordClasspathComparison();
+            prepareTransactionButton.Click += (s, e) => { _ = PrepareTransactionAsync(); };
             ShowClasspathComparison(false);
             // JPM-S2D22-TAB-PERSISTENCE-20261125: Maven state survives TabControl Unloaded.
             // Switching tabs is not a project change; the WPF content presenter
@@ -613,15 +624,18 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         {
             refreshButton.IsEnabled = validPlain;
             mavenPlanButton.IsEnabled = validPlain && report != null &&
-                !rejectedCandidate && !mavenPlanRunning;
+                !rejectedCandidate && !mavenPlanRunning && !prepareRunning;
             recordButton.IsEnabled = validPlain && report != null &&
                 conflictList.SelectedItem is Choice && !string.IsNullOrEmpty(previewText);
             recordComparisonButton.IsEnabled = validPlain && !rejectedCandidate &&
-                !mavenPlanRunning && lastMavenPlan != null;
+                !mavenPlanRunning && !prepareRunning && lastMavenPlan != null;
+            prepareTransactionButton.IsEnabled = validPlain && !rejectedCandidate &&
+                !mavenPlanRunning && !prepareRunning && lastMavenPlan != null;
         }
 
         private void CancelMavenPlan()
         {
+            CancelPreparation();
             var previous = mavenPlanCts;
             mavenPlanCts = null;
             mavenPlanRunning = false;
@@ -641,7 +655,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private async Task RunMavenPlanAsync()
         {
             if (!validPlain || rejectedCandidate || report == null ||
-                mavenPlanRunning || string.IsNullOrWhiteSpace(projectFile)) return;
+                mavenPlanRunning || prepareRunning ||
+                string.IsNullOrWhiteSpace(projectFile)) return;
             string selected = projectFile;
             int stamp = Volatile.Read(ref generation);
             var selectedConflict = conflictList.SelectedItem as Choice;
@@ -712,6 +727,88 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 {
                     mavenPlanCts = null;
                     mavenPlanRunning = false;
+                    RefreshActions();
+                }
+                cancellation.Dispose();
+            }
+        }
+
+        // JPM-S2D31-TRANSACTION-PREFLIGHT-20261125: WPF tab Unloaded is deliberately NOT a cancellation.
+        // Only a changed project/selection or explicit refresh invalidates this
+        // preflight; the next phase must still revalidate before writing files.
+        private void CancelPreparation()
+        {
+            var previous = prepareCts;
+            prepareCts = null;
+            prepareRunning = false;
+            preparedValidation = null;
+            if (previous != null)
+            {
+                try { previous.Cancel(); }
+                catch (ObjectDisposedException) { }
+            }
+        }
+
+        private async Task PrepareTransactionAsync()
+        {
+            if (!validPlain || rejectedCandidate || mavenPlanRunning ||
+                prepareRunning || lastMavenPlan == null ||
+                string.IsNullOrWhiteSpace(projectFile)) return;
+            string selected = projectFile;
+            int stamp = Volatile.Read(ref generation);
+            var original = lastMavenPlan;
+            var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(6));
+            prepareCts = cancellation;
+            prepareRunning = true;
+            preparedValidation = null;
+            note.Text = "Preflight: controllo SHA-256 e nuova risoluzione Maven in corso...";
+            RefreshActions();
+            try
+            {
+                var validation = await Task.Run(() =>
+                    JavaPlainResolutionTransactionPreflight.PrepareAsync(
+                        selected, original, cancellation.Token));
+                if (!ReferenceEquals(prepareCts, cancellation) ||
+                    stamp != Volatile.Read(ref generation) ||
+                    !string.Equals(projectFile, selected, StringComparison.OrdinalIgnoreCase) ||
+                    !ReferenceEquals(lastMavenPlan, original)) return;
+                preparedValidation = validation;
+                // Keep the diff intact; the full validation report is available
+                // through the existing scrollable text-preview mode and Output.
+                preview.Text = validation.Details + "\n\n" + original.Details;
+                note.Text = validation.HasBlockers ?
+                    "Preflight con blocchi/revisioni: vedere Anteprima testuale e Output JPM." :
+                    validation.ReadyForStaging ?
+                    "Preflight superato: solo pronto per il futuro staging, NON applicato." :
+                    "Preflight OK: classpath invariato; nessuna transazione necessaria.";
+                if (validation.HasBlockers)
+                    JavaJpmProjectLogger.Warning(selected, "JPM S2D.3.1", validation.Details);
+                else
+                    JavaJpmProjectLogger.Info(selected, "JPM S2D.3.1", validation.Details);
+            }
+            catch (OperationCanceledException)
+            {
+                if (ReferenceEquals(prepareCts, cancellation))
+                {
+                    note.Text = "Preflight annullato o scaduto. Piano non applicato.";
+                    JavaJpmProjectLogger.Warning(selected, "JPM S2D.3.1",
+                        "Validazione annullata/scaduta, progetto invariato.");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ReferenceEquals(prepareCts, cancellation))
+                {
+                    note.Text = "Preflight non valido: nessuna operazione autorizzata. Vedere Output JPM.";
+                    JavaJpmProjectLogger.Error(selected, "JPM S2D.3.1", ex);
+                }
+            }
+            finally
+            {
+                if (ReferenceEquals(prepareCts, cancellation))
+                {
+                    prepareCts = null;
+                    prepareRunning = false;
                     RefreshActions();
                 }
                 cancellation.Dispose();

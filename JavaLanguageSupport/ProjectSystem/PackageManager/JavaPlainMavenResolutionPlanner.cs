@@ -37,6 +37,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             internal int Unverified;
             internal long ProjectStampTicks;
             internal long ProjectFileLength;
+            // JPM-S2D31-TRANSACTION-PREFLIGHT-20261125: persist the exact Maven mediation request for a
+            // fresh independent preflight re-resolution, never infer it from UI.
+            internal string SelectedIdentity;
+            internal string TargetVersion;
         }
 
         internal sealed class ClasspathDiff
@@ -206,6 +210,8 @@ try {
                     throw new IOException("Il .javaproj e cambiato durante la pianificazione.");
                 result.ProjectStampTicks = stampInfo.LastWriteTimeUtc.Ticks;
                 result.ProjectFileLength = stampInfo.Length;
+                result.SelectedIdentity = selectedIdentity;
+                result.TargetVersion = targetVersion;
                 return result;
             }
             finally
