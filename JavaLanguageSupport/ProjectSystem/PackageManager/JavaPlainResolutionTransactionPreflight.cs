@@ -243,7 +243,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                         throw new InvalidDataException("JAR esterno alla directory del progetto: " +
                             Path.GetFileName(path));
                     EnsureNoReparse(root, path);
-                    if (!File.Exists(path))
+                    if (!File.Exists(ForFileIo(path)))
                         throw new FileNotFoundException("JAR referenziato non presente", path);
                     var owner = item.ChildNodes.OfType<XmlElement>().FirstOrDefault(x =>
                         x.LocalName == JavaPlainPackageManager.ManagedId);
@@ -261,7 +261,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             foreach (string path in unique.Keys)
             {
                 token.ThrowIfCancellationRequested();
-                var jarInfo = new FileInfo(path);
+                var jarInfo = new FileInfo(ForFileIo(path));
                 long jarStamp = jarInfo.LastWriteTimeUtc.Ticks;
                 long jarSize = jarInfo.Length;
                 string sha = HashFile(path, token);
@@ -298,16 +298,34 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 StringComparison.OrdinalIgnoreCase);
         }
 
+        // JPM-S2D342-LONGPATH-PREFLIGHT-20261125: .NET Framework hosted by VS may
+        // reject a real existing file at the legacy 260-character MAX_PATH limit.
+        // Use extended paths ONLY at the Win32 file I/O boundary, never when
+        // comparing project-relative paths, checking roots, or writing manifests.
+        private static string ForFileIo(string fullPath)
+        {
+            if (Path.DirectorySeparatorChar != '\\' || fullPath.Length < 240)
+                return fullPath;
+            if (fullPath.StartsWith(@"\\?\", StringComparison.Ordinal))
+                return fullPath;
+            if (fullPath.StartsWith(@"\\", StringComparison.Ordinal))
+                return @"\\?\UNC\" + fullPath.Substring(2);
+            if (fullPath.Length >= 3 && char.IsLetter(fullPath[0]) &&
+                fullPath[1] == ':' && fullPath[2] == '\\')
+                return @"\\?\" + fullPath;
+            throw new InvalidDataException("Percorso Windows assoluto non valido per il preflight.");
+        }
+
         private static void EnsureNoReparse(string root, string path)
         {
-            if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            if ((File.GetAttributes(ForFileIo(root)) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidDataException("Root del progetto con reparse point non supportata.");
             string current = path;
             while (!string.Equals(current, root, StringComparison.OrdinalIgnoreCase))
             {
                 if (!IsBelow(root, current))
                     throw new InvalidDataException("Percorso fuori dal progetto.");
-                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                if ((File.GetAttributes(ForFileIo(current)) & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidDataException("Link simbolico/Junction non supportato: " +
                         Path.GetFileName(current));
                 current = Path.GetDirectoryName(current);
@@ -318,7 +336,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private static string HashFile(string path, CancellationToken token)
         {
-            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            using (var stream = new FileStream(ForFileIo(path), FileMode.Open, FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete))
             using (var sha = SHA256.Create())
             {

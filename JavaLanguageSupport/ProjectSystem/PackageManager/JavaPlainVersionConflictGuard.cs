@@ -130,8 +130,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     full = Path.GetFullPath(Path.IsPathRooted(include) ? include :
                         Path.Combine(root, include));
                     if (!full.StartsWith(managedRoot, StringComparison.OrdinalIgnoreCase) ||
-                        !File.Exists(full) ||
-                        (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+                        !File.Exists(ForJarIo(full)) ||
+                        (File.GetAttributes(ForJarIo(full)) & FileAttributes.ReparsePoint) != 0)
                     { unknown++; continue; }
                     JavaPlainPackageChange.EnsureDirectorySafe(root, Path.GetDirectoryName(full));
                 }
@@ -158,6 +158,24 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             return child == null ? null : child.InnerText.Trim();
         }
 
+        // JPM-S2D343-LONGPATH-CONFLICT-AUDIT-20261125: the legacy .NET
+        // Framework file APIs may reject an existing JAR at MAX_PATH (260).
+        // Keep canonical non-prefixed paths for security/ownership checks;
+        // only add Win32 extended syntax at the filesystem I/O boundary.
+        private static string ForJarIo(string absolutePath)
+        {
+            if (Path.DirectorySeparatorChar != '\\' || absolutePath.Length < 240)
+                return absolutePath;
+            if (absolutePath.StartsWith(@"\\?\", StringComparison.Ordinal))
+                return absolutePath;
+            if (absolutePath.StartsWith(@"\\", StringComparison.Ordinal))
+                return @"\\?\UNC\" + absolutePath.Substring(2);
+            if (absolutePath.Length >= 3 && char.IsLetter(absolutePath[0]) &&
+                absolutePath[1] == ':' && absolutePath[2] == '\\')
+                return @"\\?\" + absolutePath;
+            throw new InvalidDataException("Percorso JAR assoluto non valido per audit Plain.");
+        }
+
         private static Entry Identify(string path, string owner, string scope)
         {
             string name = Path.GetFileName(path);
@@ -168,7 +186,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             // Maven's copy-dependencies -Dmdep.prependGroupId=true creates
             // group.artifact-version.jar. Match embedded Maven metadata against
             // that filename to avoid trusting a shaded/foreign pom.properties.
-            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+            using (var fs = new FileStream(ForJarIo(path), FileMode.Open, FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete))
             using (var zip = new ZipArchive(fs, ZipArchiveMode.Read))
             {
