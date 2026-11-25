@@ -73,6 +73,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private CancellationTokenSource stageCts;
         private bool stageRunning;
         private JavaPlainResolutionJarStaging.StageResult stagedJars;
+        // JPM-S2D33-ADDITIVE-TRANSACTION-20261125: explicit, opt-in, additive-only disk commit.
+        private readonly Button commitButton = CreateButton("Applica aggiunte");
+        private bool commitRunning;
         private readonly ListView classpathDiffList = new ListView();
         private readonly TextBlock classpathDiffSummary = CreateLabel(
             "Esegui Analizza con Maven per generare il confronto.");
@@ -238,6 +241,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             stageJarsButton.ToolTip = "Copia i JAR del piano Maven in TEMP e ne verifica SHA-256; " +
                 "preserva i JAR manuali. Non modifica il progetto.";
             resultButtons.Children.Add(stageJarsButton);
+            commitButton.Margin = new Thickness(8, 0, 0, 0);
+            commitButton.ToolTip = "Conferma e applica SOLO le aggiunte da staging verificato. " +
+                "Backup .javaproj, rollback e sincronizzazione JDT LS. " +
+                "Aggiornamenti e rimozioni NON sono autorizzati.";
+            resultButtons.Children.Add(commitButton);
             resultArea.Children.Add(resultButtons);
             Grid.SetRow(previewFrame, 1);
             resultArea.Children.Add(previewFrame);
@@ -298,6 +306,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             recordComparisonButton.Click += (s, e) => RecordClasspathComparison();
             prepareTransactionButton.Click += (s, e) => { _ = PrepareTransactionAsync(); };
             stageJarsButton.Click += (s, e) => { _ = StageJarsAsync(); };
+            commitButton.Click += (s, e) => { _ = CommitAdditionsAsync(); };
             ShowClasspathComparison(false);
             // JPM-S2D22-TAB-PERSISTENCE-20261125: Maven state survives TabControl Unloaded.
             // Switching tabs is not a project change; the WPF content presenter
@@ -632,18 +641,25 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private void RefreshActions()
         {
-            refreshButton.IsEnabled = validPlain;
+            refreshButton.IsEnabled = validPlain && !commitRunning;
             mavenPlanButton.IsEnabled = validPlain && report != null &&
+                !commitRunning &&
                 !rejectedCandidate && !mavenPlanRunning && !prepareRunning && !stageRunning;
-            recordButton.IsEnabled = validPlain && report != null &&
+            recordButton.IsEnabled = validPlain && !commitRunning && report != null &&
                 conflictList.SelectedItem is Choice && !string.IsNullOrEmpty(previewText);
             recordComparisonButton.IsEnabled = validPlain && !rejectedCandidate &&
-                !mavenPlanRunning && !prepareRunning && !stageRunning && lastMavenPlan != null;
+                !mavenPlanRunning && !prepareRunning && !stageRunning && !commitRunning && lastMavenPlan != null;
             prepareTransactionButton.IsEnabled = validPlain && !rejectedCandidate &&
-                !mavenPlanRunning && !prepareRunning && !stageRunning && lastMavenPlan != null;
+                !mavenPlanRunning && !prepareRunning && !stageRunning && !commitRunning && lastMavenPlan != null;
             stageJarsButton.IsEnabled = validPlain && !rejectedCandidate &&
-                !mavenPlanRunning && !prepareRunning && !stageRunning &&
+                !mavenPlanRunning && !prepareRunning && !stageRunning && !commitRunning &&
                 lastMavenPlan != null && preparedValidation != null;
+            commitButton.IsEnabled = validPlain && !rejectedCandidate && !commitRunning &&
+                !mavenPlanRunning && !prepareRunning && !stageRunning &&
+                lastMavenPlan != null && preparedValidation != null && stagedJars != null &&
+                !stagedJars.NothingToStage && lastMavenPlan.Added > 0 &&
+                lastMavenPlan.Updated == 0 && lastMavenPlan.Removed == 0 &&
+                !lastMavenPlan.HasOverride;
         }
 
         private void CancelMavenPlan()
@@ -667,7 +683,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private async Task RunMavenPlanAsync()
         {
-            if (!validPlain || rejectedCandidate || report == null ||
+            if (commitRunning || !validPlain || rejectedCandidate || report == null ||
                 mavenPlanRunning || prepareRunning || stageRunning ||
                 string.IsNullOrWhiteSpace(projectFile)) return;
             CancelPreparation();
@@ -766,7 +782,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private async Task PrepareTransactionAsync()
         {
-            if (!validPlain || rejectedCandidate || mavenPlanRunning ||
+            if (commitRunning || !validPlain || rejectedCandidate || mavenPlanRunning ||
                 prepareRunning || stageRunning || lastMavenPlan == null ||
                 string.IsNullOrWhiteSpace(projectFile)) return;
             string selected = projectFile;
@@ -854,7 +870,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private async Task StageJarsAsync()
         {
-            if (!validPlain || rejectedCandidate || mavenPlanRunning ||
+            if (commitRunning || !validPlain || rejectedCandidate || mavenPlanRunning ||
                 prepareRunning || stageRunning || lastMavenPlan == null ||
                 preparedValidation == null || string.IsNullOrWhiteSpace(projectFile)) return;
             string selected = projectFile;
@@ -914,6 +930,77 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     RefreshActions();
                 }
                 cancellation.Dispose();
+            }
+        }
+
+        // JPM-S2D33-ADDITIVE-TRANSACTION-20261125: do not apply anything until the user explicitly confirms.
+        // Once confirmed, the engine owns the stage; WPF tab Unloaded does not
+        // cancel or roll back a transaction in progress.
+        private async Task CommitAdditionsAsync()
+        {
+            if (commitRunning || !validPlain || rejectedCandidate ||
+                mavenPlanRunning || prepareRunning || stageRunning ||
+                lastMavenPlan == null || preparedValidation == null ||
+                stagedJars == null || stagedJars.NothingToStage ||
+                string.IsNullOrWhiteSpace(projectFile)) return;
+            string selected = projectFile;
+            int stamp = Volatile.Read(ref generation);
+            var plan = lastMavenPlan;
+            var prior = preparedValidation;
+            var stage = stagedJars;
+            string proposal;
+            try { proposal = JavaPlainResolutionCommit.Preview(selected, plan, stage); }
+            catch (Exception ex)
+            {
+                note.Text = "Piano non applicabile; consultare Output JPM.";
+                JavaJpmProjectLogger.Error(selected, "JPM S2D.3.3", ex);
+                return;
+            }
+            var choice = MessageBox.Show(
+                proposal + "\n\nConfermi l'aggiunta di questi JAR al progetto Plain?",
+                "Java Package Manager - Conferma commit",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (choice != MessageBoxResult.Yes) return;
+            commitRunning = true;
+            // Detach the stage from the UI so SetProject/Reload cannot delete it
+            // while the engine is reading its JARs. Revalidation is mandatory.
+            stagedJars = null;
+            note.Text = "Commit in corso: backup, copia JAR, aggiornamento .javaproj...";
+            RefreshActions();
+            try
+            {
+                var result = await JavaPlainResolutionCommit.ApplyAsync(
+                    selected, plan, prior, stage);
+                JavaJpmProjectLogger.Info(selected, "JPM S2D.3.3", result.Details);
+                JavaPlainResolutionJarStaging.Discard(stage.StageDirectory);
+                if (stamp == Volatile.Read(ref generation) &&
+                    string.Equals(projectFile, selected, StringComparison.OrdinalIgnoreCase))
+                {
+                    // A new graph must be requested; the successful commit has
+                    // invalidated the old preflight and Maven comparison.
+                    Reload();
+                    note.Text = "Commit completato: " + result.Added +
+                        " JAR aggiunti. Rieseguire Analizza con Maven; dettagli in Output JPM.";
+                }
+            }
+            catch (Exception ex)
+            {
+                JavaJpmProjectLogger.Error(selected, "JPM S2D.3.3", ex);
+                if (stamp == Volatile.Read(ref generation) &&
+                    string.Equals(projectFile, selected, StringComparison.OrdinalIgnoreCase))
+                {
+                    preview.Text = "Commit non concluso: " + ex.Message +
+                        "\nControllare Output JPM e il backup prima di riprovare.";
+                    ShowClasspathComparison(false);
+                    note.Text = "Commit non riuscito. Verificare rollback in Output JPM.";
+                }
+                // On failure preserve stage for diagnostics; the old plan must
+                // be re-analyzed before any further attempt.
+            }
+            finally
+            {
+                commitRunning = false;
+                RefreshActions();
             }
         }
 

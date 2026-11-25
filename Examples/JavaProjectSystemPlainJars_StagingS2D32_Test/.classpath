@@ -26,5 +26,10 @@
       <attribute name="test" value="true" />
     </attributes>
   </classpathentry>
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJars_StagingS2D32_Test/lib/java-packages/junit/junit/4.13.2/org.hamcrest.hamcrest-core-1.3.jar">
+    <attributes>
+      <attribute name="test" value="true" />
+    </attributes>
+  </classpathentry>
   <classpathentry kind="output" path=".java-vs/jdtls-classes" />
 </classpath>
