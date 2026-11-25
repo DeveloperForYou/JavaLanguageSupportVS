@@ -26,6 +26,31 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             internal int SimulatedJarCount;
             internal int Changes;
             internal bool HasOverride;
+            // JPM-S2D2-CLASSPATH-DIFF-20261124: snapshot of the installed Plain classpath vs
+            // the resolved Maven proposal, not just two Maven graphs.
+            internal IList<ClasspathDiff> ClasspathDiffs;
+            internal string ComparisonDetails;
+            internal int Added;
+            internal int Updated;
+            internal int Removed;
+            internal int Unchanged;
+            internal int Unverified;
+            internal long ProjectStampTicks;
+            internal long ProjectFileLength;
+        }
+
+        internal sealed class ClasspathDiff
+        {
+            // Public read-only presentation properties for WPF binding.
+            public string Status { get; internal set; }
+            public string Coordinate { get; internal set; }
+            public string InstalledVersion { get; internal set; }
+            public string ProposedVersion { get; internal set; }
+            public string RequiredBy { get; internal set; }
+            public string Scope { get; internal set; }
+            public string StatusLabel { get { return Status == "Aggiunto" ? "+ Aggiunto" :
+                Status == "Aggiornato" ? "~ Aggiornato" :
+                Status == "Rimosso" ? "- Rimosso" : "= Invariato"; } }
         }
 
         private sealed class Node
@@ -173,8 +198,15 @@ try {
                     new FileInfo(projectFile).Length;
                 if (!string.Equals(stamp, now, StringComparison.Ordinal))
                     throw new IOException("Il .javaproj e cambiato durante la simulazione: ripetere l'analisi.");
-                return MakePlan(currentTree, proposedTree, declarations, projectFile,
+                Plan result = MakePlan(currentTree, proposedTree, declarations, projectFile,
                     selectedIdentity, targetVersion, sources.Count);
+                var stampInfo = new FileInfo(projectFile);
+                if (!stampInfo.Exists || stampInfo.LastWriteTimeUtc.Ticks.ToString() + ":" +
+                    stampInfo.Length != stamp)
+                    throw new IOException("Il .javaproj e cambiato durante la pianificazione.");
+                result.ProjectStampTicks = stampInfo.LastWriteTimeUtc.Ticks;
+                result.ProjectFileLength = stampInfo.Length;
+                return result;
             }
             finally
             {
@@ -443,11 +475,139 @@ try {
             lines.AppendLine("La selezione reale Plain risolve le radici separatamente; il risultato");
             lines.AppendLine("non dimostra compatibilita API/binaria, non modifica JAR, .javaproj,");
             lines.AppendLine(".classpath o JDT LS. Ri-risolvere prima di qualsiasi applicazione.");
+            // S2D.2 compares the actual managed Plain jars with the proposed
+            // mediated graph. Differences between two Maven graphs (Changes)
+            // remain an independent S2D.1 metric.
+            var comparison = CompareClasspath(audit, to, proposed);
+            string comparisonDetails = FormatClasspathComparison(comparison, audit.UnverifiedCount);
+            lines.AppendLine();
+            lines.AppendLine(comparisonDetails);
             return new Plan {
                 Details = lines.ToString().TrimEnd(), DirectCount = declarations.Count,
                 CurrentJarCount = from.Count, SimulatedJarCount = to.Count,
-                Changes = changes, HasOverride = identity != null
+                Changes = changes, HasOverride = identity != null,
+                ComparisonDetails = comparisonDetails, ClasspathDiffs = comparison,
+                Added = comparison.Count(x => x.Status == "Aggiunto"),
+                Updated = comparison.Count(x => x.Status == "Aggiornato"),
+                Removed = comparison.Count(x => x.Status == "Rimosso"),
+                Unchanged = comparison.Count(x => x.Status == "Invariato"),
+                Unverified = audit.UnverifiedCount
             };
+        }
+
+        // JPM-S2D2-CLASSPATH-DIFF-20261124: keep the roots in the Maven tree. They are
+        // informative, not proof of runtime binary/API compatibility.
+        private static Dictionary<string, List<string>> MavenOwners(Node graph)
+        {
+            var owners = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (Node direct in graph.Children)
+            {
+                string root = direct.Id + ":" + direct.Version;
+                foreach (Node item in Flatten(direct).Where(x =>
+                    string.Equals(x.Type, "jar", StringComparison.OrdinalIgnoreCase)))
+                {
+                    string alias = item.Group + "." + item.Artifact;
+                    if (!owners.TryGetValue(alias, out HashSet<string> names))
+                    {
+                        names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        owners.Add(alias, names);
+                    }
+                    names.Add(root);
+                }
+            }
+            return owners.ToDictionary(x => x.Key,
+                x => x.Value.OrderBy(y => y, StringComparer.OrdinalIgnoreCase).ToList(),
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static List<ClasspathDiff> CompareClasspath(
+            JavaPlainVersionConflictGuard.Report audit,
+            Dictionary<string, string> proposed, Node graph)
+        {
+            var libraries = audit.Libraries ?? new List<JavaPlainVersionConflictGuard.Library>();
+            var current = libraries.GroupBy(x => x.Identity,
+                StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key,
+                g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+            // S2A identity uses groupId.artifactId, while Maven uses group:artifact.
+            // Refuse the rare ambiguous dotted alias rather than merging unrelated
+            // Maven artifacts (e.g. group a.b:c versus a:b.c).
+            var future = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var ids = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var resolved in proposed)
+            {
+                string alias = resolved.Key.Replace(':', '.');
+                if (ids.TryGetValue(alias, out string other) &&
+                    !string.Equals(other, resolved.Key, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Identita Maven ambigua per confronto Plain: " + alias);
+                ids[alias] = resolved.Key;
+                future[alias] = resolved.Value;
+            }
+            var owners = MavenOwners(graph);
+            var all = new HashSet<string>(current.Keys, StringComparer.OrdinalIgnoreCase);
+            all.UnionWith(future.Keys);
+            var rows = new List<ClasspathDiff>();
+            foreach (string identity in all)
+            {
+                current.TryGetValue(identity, out List<JavaPlainVersionConflictGuard.Library> actual);
+                future.TryGetValue(identity, out string desired);
+                var versions = (actual ?? new List<JavaPlainVersionConflictGuard.Library>())
+                    .Select(x => x.Version).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+                string state = versions.Count == 0 ? "Aggiunto" : desired == null ? "Rimosso" :
+                    versions.Count == 1 && string.Equals(versions[0], desired,
+                        StringComparison.OrdinalIgnoreCase) ? "Invariato" : "Aggiornato";
+                string plainOwners = string.Join(", ", (actual ??
+                    new List<JavaPlainVersionConflictGuard.Library>()).Select(x => x.Owner)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).Take(12));
+                owners.TryGetValue(identity, out List<string> mavenRoots);
+                string mavenOwners = mavenRoots == null ? "" :
+                    string.Join(", ", mavenRoots.Take(12));
+                string scopes = string.Join(", ", (actual ??
+                    new List<JavaPlainVersionConflictGuard.Library>()).Select(x => x.Scope)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x,
+                        StringComparer.OrdinalIgnoreCase));
+                rows.Add(new ClasspathDiff {
+                    Status = state,
+                    Coordinate = ids.TryGetValue(identity, out string coordinate) ? coordinate : identity,
+                    InstalledVersion = versions.Count == 0 ? "—" : string.Join(" / ", versions),
+                    ProposedVersion = desired ?? "—",
+                    RequiredBy = "Plain: " + (plainOwners.Length == 0 ? "—" : plainOwners) +
+                        " | Maven: " + (mavenOwners.Length == 0 ? "—" : mavenOwners),
+                    Scope = scopes.Length == 0 ? "—" : scopes
+                });
+            }
+            var order = new Dictionary<string, int>(StringComparer.Ordinal) {
+                { "Aggiornato", 0 }, { "Aggiunto", 1 }, { "Rimosso", 2 }, { "Invariato", 3 }
+            };
+            return rows.OrderBy(x => order[x.Status]).ThenBy(x => x.Coordinate,
+                StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static string FormatClasspathComparison(
+            IList<ClasspathDiff> rows, int unverified)
+        {
+            var text = new StringBuilder();
+            text.AppendLine("JPM-S2D.2 | CONFRONTO CLASSPATH - SOLA LETTURA");
+            text.AppendLine("Attuale = JAR Plain verificati; Proposto = grafo Maven mediato.");
+            text.AppendLine("Aggiunti: " + rows.Count(x => x.Status == "Aggiunto") +
+                "; aggiornati: " + rows.Count(x => x.Status == "Aggiornato") +
+                "; rimossi: " + rows.Count(x => x.Status == "Rimosso") +
+                "; invariati: " + rows.Count(x => x.Status == "Invariato") + ".");
+            if (unverified > 0)
+                text.AppendLine("ATTENZIONE: " + unverified +
+                    " JAR non verificabili non sono classificati nella tabella.");
+            foreach (var row in rows.Take(240))
+                text.AppendLine("  [" + row.Status + "] " + row.Coordinate +
+                    ": " + row.InstalledVersion + " -> " + row.ProposedVersion +
+                    " [" + row.Scope + "] " + row.RequiredBy);
+            if (rows.Count > 240)
+                text.AppendLine("  ... altre " + (rows.Count - 240) +
+                    " righe consultabili nella tabella del Package Manager.");
+            text.AppendLine("Differenze simulate; alcune versioni dirette possono prevalere su dependencyManagement.");
+            text.AppendLine("Non dimostra compatibilita binaria o sicurezza della rimozione dei JAR.");
+            text.AppendLine("Nessun JAR, .javaproj, .classpath o workspace JDT LS modificato.");
+            return text.ToString().TrimEnd();
         }
 
         private static void AppendTree(StringBuilder output, Node node, int depth, ref int count)

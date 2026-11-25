@@ -59,6 +59,24 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private readonly TextBlock note = CreateLabel("Solo anteprima. Nessuna modifica automatica.");
         // JPM-S2D1-MAVEN-READONLY-20261124: explicit, non-mutating Maven graph simulation.
         private readonly Button mavenPlanButton = CreateButton("Analizza con Maven");
+        // JPM-S2D2-CLASSPATH-DIFF-20261124: compare actual Plain jars with the Maven simulation.
+        private readonly Button previewModeButton = CreateButton("Anteprima testuale");
+        private readonly Button diffModeButton = CreateButton("Confronto classpath");
+        private readonly Button recordComparisonButton = CreateButton("Registra confronto");
+        private readonly ListView classpathDiffList = new ListView();
+        private readonly TextBlock classpathDiffSummary = CreateLabel(
+            "Esegui Analizza con Maven per generare il confronto.");
+        private readonly Border classpathDiffFrame = new Border {
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(105, 105, 105)),
+            CornerRadius = new CornerRadius(2),
+            Padding = new Thickness(8, 5, 8, 5),
+            Margin = new Thickness(0, 4, 0, 4),
+            MinHeight = 0,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Visibility = Visibility.Collapsed
+        };
+        private JavaPlainMavenResolutionPlanner.Plan lastMavenPlan;
         private CancellationTokenSource mavenPlanCts;
         private bool mavenPlanRunning;
         private readonly Button refreshButton = CreateButton("Aggiorna analisi");
@@ -189,8 +207,61 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             previewFrame.Child = previewScroller;
             previewFrame.SetResourceReference(Border.BackgroundProperty,
                 EnvironmentColors.ToolWindowBackgroundBrushKey);
-            Grid.SetRow(previewFrame, 4);
-            root.Children.Add(previewFrame);
+            // S2D.2 uses two views of the SAME bounded content row. Neither may
+            // demand a fixed minimum height or cover the existing footer.
+            var resultArea = new Grid();
+            resultArea.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            resultArea.RowDefinitions.Add(new RowDefinition {
+                Height = new GridLength(1, GridUnitType.Star), MinHeight = 0 });
+            var resultButtons = new WrapPanel { Margin = new Thickness(0, 1, 0, 1) };
+            previewModeButton.Margin = new Thickness(0, 0, 8, 0);
+            diffModeButton.Margin = new Thickness(0, 0, 8, 0);
+            resultButtons.Children.Add(previewModeButton);
+            resultButtons.Children.Add(diffModeButton);
+            resultButtons.Children.Add(recordComparisonButton);
+            resultArea.Children.Add(resultButtons);
+            Grid.SetRow(previewFrame, 1);
+            resultArea.Children.Add(previewFrame);
+
+            classpathDiffFrame.SetResourceReference(Border.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            var diffGrid = new Grid();
+            diffGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            diffGrid.RowDefinitions.Add(new RowDefinition {
+                Height = new GridLength(1, GridUnitType.Star), MinHeight = 0 });
+            classpathDiffSummary.Margin = new Thickness(0, 0, 0, 5);
+            diffGrid.Children.Add(classpathDiffSummary);
+            Theme(classpathDiffList);
+            // JPM-S2D21-CLASSPATH-THEME-20261125: never use the native pale selection background
+            // together with VS dark-theme white text. Render rows ourselves.
+            var rowStyle = DiffRowStyle();
+            classpathDiffList.ItemContainerStyle = rowStyle;
+            ScrollViewer.SetHorizontalScrollBarVisibility(classpathDiffList,
+                ScrollBarVisibility.Auto);
+            ScrollViewer.SetVerticalScrollBarVisibility(classpathDiffList,
+                ScrollBarVisibility.Auto);
+            VirtualizingPanel.SetIsVirtualizing(classpathDiffList, true);
+            VirtualizingPanel.SetVirtualizationMode(classpathDiffList, VirtualizationMode.Recycling);
+            var columns = new GridView();
+            // Style the trailing/padding header too: otherwise the OS draws a
+            // WHITE rectangle after the last column in Visual Studio dark mode.
+            columns.ColumnHeaderContainerStyle = DiffHeaderStyle();
+            classpathDiffList.Resources[typeof(GridViewColumnHeader)] = DiffHeaderStyle();
+            columns.Columns.Add(DiffColumn("Stato", "StatusLabel", 110));
+            columns.Columns.Add(DiffColumn("Dipendenza", "Coordinate", 215));
+            columns.Columns.Add(DiffColumn("Versione Plain", "InstalledVersion", 155));
+            columns.Columns.Add(DiffColumn("Proposta Maven", "ProposedVersion", 155));
+            columns.Columns.Add(DiffColumn("Scope Plain", "Scope", 105));
+            columns.Columns.Add(DiffColumn("Richiesta da (Plain / Maven)", "RequiredBy", 385));
+            classpathDiffList.View = columns;
+            classpathDiffList.ToolTip = "Confronto in sola lettura. Scorrere in orizzontale per le colonne aggiuntive.";
+            Grid.SetRow(classpathDiffList, 1);
+            diffGrid.Children.Add(classpathDiffList);
+            classpathDiffFrame.Child = diffGrid;
+            Grid.SetRow(classpathDiffFrame, 1);
+            resultArea.Children.Add(classpathDiffFrame);
+            Grid.SetRow(resultArea, 4);
+            root.Children.Add(resultArea);
 
             var bottom = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
             DockPanel.SetDock(recordButton, Dock.Right);
@@ -203,7 +274,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
             refreshButton.Click += (s, e) => Reload();
             mavenPlanButton.Click += (s, e) => { _ = RunMavenPlanAsync(); };
-            Unloaded += (s, e) => CancelMavenPlan();
+            previewModeButton.Click += (s, e) => ShowClasspathComparison(false);
+            diffModeButton.Click += (s, e) => ShowClasspathComparison(true);
+            recordComparisonButton.Click += (s, e) => RecordClasspathComparison();
+            ShowClasspathComparison(false);
+            // JPM-S2D22-TAB-PERSISTENCE-20261125: Maven state survives TabControl Unloaded.
+            // Switching tabs is not a project change; the WPF content presenter
+            // can unload this control while it remains part of the tool window.
+            // SetProject/Reload/ConflictChanged still invalidate stale plans.
             conflictList.SelectionChanged += (s, e) => ConflictChanged();
             strategyPicker.SelectionChanged += (s, e) => UpdatePreview();
             targetVersionPicker.SelectionChanged += (s, e) => UpdatePreview();
@@ -285,6 +363,21 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         internal void SetProject(string selected, bool isPlain)
         {
+            // JPM-S2D22-TAB-PERSISTENCE-20261125: reselecting the same project must not
+            // discard a completed diff or cancel a still-running Maven resolution.
+            // A changed .javaproj, different backend or a rejected candidate DO
+            // require a new audit. Explicit Reload/changes remain authoritative.
+            bool requestedPlain = isPlain && !string.IsNullOrWhiteSpace(selected);
+            bool sameProject = string.Equals(projectFile, selected,
+                StringComparison.OrdinalIgnoreCase);
+            if (!rejectedCandidate && sameProject && validPlain == requestedPlain)
+            {
+                if (!requestedPlain) return;
+                var current = new FileInfo(selected);
+                if (current.Exists && (report == null ||
+                    (current.LastWriteTimeUtc.Ticks == projectStamp &&
+                     current.Length == projectSize))) return;
+            }
             CancelMavenPlan();
             Interlocked.Increment(ref generation);
             projectFile = selected;
@@ -523,6 +616,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 !rejectedCandidate && !mavenPlanRunning;
             recordButton.IsEnabled = validPlain && report != null &&
                 conflictList.SelectedItem is Choice && !string.IsNullOrEmpty(previewText);
+            recordComparisonButton.IsEnabled = validPlain && !rejectedCandidate &&
+                !mavenPlanRunning && lastMavenPlan != null;
         }
 
         private void CancelMavenPlan()
@@ -530,6 +625,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var previous = mavenPlanCts;
             mavenPlanCts = null;
             mavenPlanRunning = false;
+            lastMavenPlan = null;
+            classpathDiffList.ItemsSource = null;
+            classpathDiffSummary.Text = "Analisi Maven non disponibile o da aggiornare.";
+            ShowClasspathComparison(false);
             if (previous != null)
             {
                 try { previous.Cancel(); }
@@ -556,6 +655,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(4));
             mavenPlanCts = cancellation;
             mavenPlanRunning = true;
+            lastMavenPlan = null;
+            classpathDiffList.ItemsSource = null;
+            classpathDiffSummary.Text = "Risoluzione Maven in corso...";
+            ShowClasspathComparison(false);
             RefreshActions();
             preview.Text = "Risoluzione Maven in corso. Il piano non modifica il progetto...";
             note.Text = "Operazione consultiva: Maven puo utilizzare la rete e la propria cache utente.";
@@ -568,11 +671,20 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     stamp != Volatile.Read(ref generation) ||
                     !string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase)) return;
                 preview.Text = plan.Details;
+                lastMavenPlan = plan;
+                classpathDiffList.ItemsSource = plan.ClasspathDiffs;
+                classpathDiffSummary.Text = "Plain installato → Maven proposto | " +
+                    "Aggiunti: " + plan.Added + " · Aggiornati: " + plan.Updated +
+                    " · Rimossi: " + plan.Removed + " · Invariati: " + plan.Unchanged +
+                    (plan.Unverified != 0 ? " · NON verificabili: " + plan.Unverified : "") +
+                    ". La compatibilita binaria non e verificata.";
+                ShowClasspathComparison(true);
                 note.Text = "Piano Maven generato: " + plan.CurrentJarCount +
                     " JAR; variazioni simulate: " + plan.Changes +
                     ". Nessuna modifica applicata.";
                 previewScroller.ScrollToTop();
                 JavaJpmProjectLogger.Info(selected, "JPM S2D.1", plan.Details);
+                RefreshActions();
             }
             catch (OperationCanceledException)
             {
@@ -603,6 +715,126 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     RefreshActions();
                 }
                 cancellation.Dispose();
+            }
+        }
+
+        // JPM-S2D2-CLASSPATH-DIFF-20261124: standard WPF GridView with Visual Studio themed text.
+        // The ListView owns the scrollbars; no duplicate ScrollViewer is nested.
+        private static GridViewColumn DiffColumn(string header, string property, double width)
+        {
+            return new GridViewColumn { Header = header, Width = width,
+                CellTemplate = DiffCell(property),
+                HeaderContainerStyle = DiffHeaderStyle() };
+        }
+
+        // JPM-S2D21-CLASSPATH-THEME-20261125: template only the comparison rows, not the rest of JPM.
+        // A GridViewRowPresenter is required for GridView columns to keep working.
+        // Solid saturated blue + white text is legible on dark AND light themes.
+        private static Style DiffRowStyle()
+        {
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "JpmClasspathDiffRowChrome";
+            chrome.SetResourceReference(Border.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            var presenter = new FrameworkElementFactory(typeof(GridViewRowPresenter));
+            presenter.SetBinding(GridViewRowPresenter.ContentProperty,
+                new System.Windows.Data.Binding("Content") {
+                    RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            presenter.SetBinding(GridViewRowPresenter.ColumnsProperty,
+                new System.Windows.Data.Binding("View.Columns") {
+                    RelativeSource = new System.Windows.Data.RelativeSource(
+                        System.Windows.Data.RelativeSourceMode.FindAncestor, typeof(ListView), 1) });
+            chrome.AppendChild(presenter);
+            var template = new ControlTemplate(typeof(ListViewItem)) { VisualTree = chrome };
+            var selected = new Trigger { Property = ListViewItem.IsSelectedProperty, Value = true };
+            selected.Setters.Add(new Setter(Border.BackgroundProperty,
+                new SolidColorBrush(Color.FromRgb(0, 99, 177)), "JpmClasspathDiffRowChrome"));
+            template.Triggers.Add(selected);
+            var style = new Style(typeof(ListViewItem));
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty,
+                HorizontalAlignment.Stretch));
+            return style;
+        }
+
+        private static Style DiffHeaderStyle()
+        {
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.SetResourceReference(Border.BackgroundProperty,
+                EnvironmentColors.ToolWindowBackgroundBrushKey);
+            chrome.SetValue(Border.BorderBrushProperty,
+                new SolidColorBrush(Color.FromRgb(105, 105, 105)));
+            chrome.SetValue(Border.BorderThicknessProperty, new Thickness(0, 0, 1, 1));
+            chrome.SetValue(Border.PaddingProperty, new Thickness(6, 5, 6, 5));
+            var text = new FrameworkElementFactory(typeof(TextBlock));
+            text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Content") {
+                RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            text.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            chrome.AppendChild(text);
+            var style = new Style(typeof(GridViewColumnHeader));
+            style.Setters.Add(new Setter(Control.TemplateProperty,
+                new ControlTemplate(typeof(GridViewColumnHeader)) { VisualTree = chrome }));
+            return style;
+        }
+
+        private static DataTemplate DiffCell(string property)
+        {
+            var text = new FrameworkElementFactory(typeof(TextBlock));
+            text.Name = "JpmDiffCellText";
+            text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(property));
+            text.SetBinding(FrameworkElement.ToolTipProperty, new System.Windows.Data.Binding(property));
+            // Normal rows track VS light/dark theme dynamically; selected rows
+            // intentionally use white on the opaque blue selected-row chrome.
+            text.SetResourceReference(TextBlock.ForegroundProperty,
+                EnvironmentColors.ToolWindowTextBrushKey);
+            text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+            text.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.None);
+            text.SetValue(FrameworkElement.MarginProperty, new Thickness(4, 3, 4, 3));
+            var template = new DataTemplate { VisualTree = text };
+            var selectedText = new DataTrigger {
+                Binding = new System.Windows.Data.Binding("IsSelected") {
+                    RelativeSource = new System.Windows.Data.RelativeSource(
+                        System.Windows.Data.RelativeSourceMode.FindAncestor, typeof(ListViewItem), 1) },
+                Value = true };
+            selectedText.Setters.Add(new Setter(TextBlock.ForegroundProperty, Brushes.White,
+                "JpmDiffCellText"));
+            template.Triggers.Add(selectedText);
+            return template;
+        }
+
+        private void ShowClasspathComparison(bool visible)
+        {
+            previewFrame.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+            classpathDiffFrame.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            previewModeButton.IsEnabled = visible;
+            diffModeButton.IsEnabled = !visible;
+        }
+
+        private void RecordClasspathComparison()
+        {
+            if (!recordComparisonButton.IsEnabled || lastMavenPlan == null ||
+                string.IsNullOrWhiteSpace(projectFile)) return;
+            string path = projectFile;
+            try
+            {
+                var info = new FileInfo(path);
+                if (!info.Exists || info.LastWriteTimeUtc.Ticks != lastMavenPlan.ProjectStampTicks ||
+                    info.Length != lastMavenPlan.ProjectFileLength)
+                {
+                    note.Text = "Progetto modificato: rieseguire l'analisi Maven.";
+                    Reload();
+                    return;
+                }
+                JavaJpmProjectLogger.Info(path, "JPM S2D.2 - confronto non applicato",
+                    lastMavenPlan.ComparisonDetails);
+                note.Text = "Confronto registrato in Output JPM. Nessun file modificato.";
+            }
+            catch (Exception ex)
+            {
+                note.Text = "Registrazione confronto non riuscita: vedere Output JPM.";
+                try { JavaJpmProjectLogger.Error(path, "JPM S2D.2", ex); }
+                catch (Exception) { /* La diagnostica non deve bloccare la UI. */ }
             }
         }
 
