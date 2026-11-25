@@ -68,6 +68,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private CancellationTokenSource prepareCts;
         private bool prepareRunning;
         private JavaPlainResolutionTransactionPreflight.Validation preparedValidation;
+        // JPM-S2D32-ISOLATED-JAR-STAGING-20261125: isolated TEMP staging, never a project/classpath commit.
+        private readonly Button stageJarsButton = CreateButton("Prepara JAR");
+        private CancellationTokenSource stageCts;
+        private bool stageRunning;
+        private JavaPlainResolutionJarStaging.StageResult stagedJars;
         private readonly ListView classpathDiffList = new ListView();
         private readonly TextBlock classpathDiffSummary = CreateLabel(
             "Esegui Analizza con Maven per generare il confronto.");
@@ -229,6 +234,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 "Riesegui Maven, confronta il piano e valida SHA-256 dei JAR. " +
                 "Solo preflight: nessuna copia, rimozione, modifica o commit.";
             resultButtons.Children.Add(prepareTransactionButton);
+            stageJarsButton.Margin = new Thickness(8, 0, 0, 0);
+            stageJarsButton.ToolTip = "Copia i JAR del piano Maven in TEMP e ne verifica SHA-256; " +
+                "preserva i JAR manuali. Non modifica il progetto.";
+            resultButtons.Children.Add(stageJarsButton);
             resultArea.Children.Add(resultButtons);
             Grid.SetRow(previewFrame, 1);
             resultArea.Children.Add(previewFrame);
@@ -288,6 +297,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             diffModeButton.Click += (s, e) => ShowClasspathComparison(true);
             recordComparisonButton.Click += (s, e) => RecordClasspathComparison();
             prepareTransactionButton.Click += (s, e) => { _ = PrepareTransactionAsync(); };
+            stageJarsButton.Click += (s, e) => { _ = StageJarsAsync(); };
             ShowClasspathComparison(false);
             // JPM-S2D22-TAB-PERSISTENCE-20261125: Maven state survives TabControl Unloaded.
             // Switching tabs is not a project change; the WPF content presenter
@@ -624,13 +634,16 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         {
             refreshButton.IsEnabled = validPlain;
             mavenPlanButton.IsEnabled = validPlain && report != null &&
-                !rejectedCandidate && !mavenPlanRunning && !prepareRunning;
+                !rejectedCandidate && !mavenPlanRunning && !prepareRunning && !stageRunning;
             recordButton.IsEnabled = validPlain && report != null &&
                 conflictList.SelectedItem is Choice && !string.IsNullOrEmpty(previewText);
             recordComparisonButton.IsEnabled = validPlain && !rejectedCandidate &&
-                !mavenPlanRunning && !prepareRunning && lastMavenPlan != null;
+                !mavenPlanRunning && !prepareRunning && !stageRunning && lastMavenPlan != null;
             prepareTransactionButton.IsEnabled = validPlain && !rejectedCandidate &&
-                !mavenPlanRunning && !prepareRunning && lastMavenPlan != null;
+                !mavenPlanRunning && !prepareRunning && !stageRunning && lastMavenPlan != null;
+            stageJarsButton.IsEnabled = validPlain && !rejectedCandidate &&
+                !mavenPlanRunning && !prepareRunning && !stageRunning &&
+                lastMavenPlan != null && preparedValidation != null;
         }
 
         private void CancelMavenPlan()
@@ -655,8 +668,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private async Task RunMavenPlanAsync()
         {
             if (!validPlain || rejectedCandidate || report == null ||
-                mavenPlanRunning || prepareRunning ||
+                mavenPlanRunning || prepareRunning || stageRunning ||
                 string.IsNullOrWhiteSpace(projectFile)) return;
+            CancelPreparation();
             string selected = projectFile;
             int stamp = Volatile.Read(ref generation);
             var selectedConflict = conflictList.SelectedItem as Choice;
@@ -738,6 +752,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         // preflight; the next phase must still revalidate before writing files.
         private void CancelPreparation()
         {
+            CancelStaging();
             var previous = prepareCts;
             prepareCts = null;
             prepareRunning = false;
@@ -752,11 +767,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private async Task PrepareTransactionAsync()
         {
             if (!validPlain || rejectedCandidate || mavenPlanRunning ||
-                prepareRunning || lastMavenPlan == null ||
+                prepareRunning || stageRunning || lastMavenPlan == null ||
                 string.IsNullOrWhiteSpace(projectFile)) return;
             string selected = projectFile;
             int stamp = Volatile.Read(ref generation);
             var original = lastMavenPlan;
+            CancelStaging();
             var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(6));
             prepareCts = cancellation;
             prepareRunning = true;
@@ -809,6 +825,92 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 {
                     prepareCts = null;
                     prepareRunning = false;
+                    RefreshActions();
+                }
+                cancellation.Dispose();
+            }
+        }
+
+        // JPM-S2D32-ISOLATED-JAR-STAGING-20261125: preserve the resolved classpath diff across tab changes.
+        // Invalidate only on project/plan/selection changes, NOT WPF Unloaded.
+        private void CancelStaging()
+        {
+            var previous = stageCts;
+            stageCts = null;
+            stageRunning = false;
+            var old = stagedJars;
+            stagedJars = null;
+            if (previous != null)
+            {
+                try { previous.Cancel(); }
+                catch (ObjectDisposedException) { }
+            }
+            if (old != null && !string.IsNullOrWhiteSpace(old.StageDirectory))
+            {
+                string directory = old.StageDirectory;
+                _ = Task.Run(() => JavaPlainResolutionJarStaging.Discard(directory));
+            }
+        }
+
+        private async Task StageJarsAsync()
+        {
+            if (!validPlain || rejectedCandidate || mavenPlanRunning ||
+                prepareRunning || stageRunning || lastMavenPlan == null ||
+                preparedValidation == null || string.IsNullOrWhiteSpace(projectFile)) return;
+            string selected = projectFile;
+            int stamp = Volatile.Read(ref generation);
+            var original = lastMavenPlan;
+            var prior = preparedValidation;
+            CancelStaging(); // Discard an older isolated stage before replacing it.
+            var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(9));
+            stageCts = cancellation;
+            stageRunning = true;
+            note.Text = "Staging: nuovo preflight, Maven e verifica SHA-256 in corso...";
+            RefreshActions();
+            try
+            {
+                var staged = await Task.Run(() => JavaPlainResolutionJarStaging.PrepareAsync(
+                    selected, original, prior, cancellation.Token));
+                if (!ReferenceEquals(stageCts, cancellation) ||
+                    stamp != Volatile.Read(ref generation) ||
+                    !string.Equals(projectFile, selected, StringComparison.OrdinalIgnoreCase) ||
+                    !ReferenceEquals(lastMavenPlan, original) ||
+                    !ReferenceEquals(preparedValidation, prior))
+                {
+                    JavaPlainResolutionJarStaging.Discard(staged.StageDirectory);
+                    return;
+                }
+                stagedJars = staged;
+                preview.Text = staged.Details + "\n\n" + prior.Details;
+                previewScroller.ScrollToTop();
+                note.Text = staged.NothingToStage ?
+                    "Staging non necessario: il classpath e gia allineato." :
+                    "JAR pronti solo in TEMP (SHA-256 verificato). NESSUN commit eseguito.";
+                JavaJpmProjectLogger.Info(selected, "JPM S2D.3.2", staged.Details);
+            }
+            catch (OperationCanceledException)
+            {
+                if (ReferenceEquals(stageCts, cancellation))
+                {
+                    note.Text = "Staging annullato o scaduto: nessun JAR installato.";
+                    JavaJpmProjectLogger.Warning(selected, "JPM S2D.3.2",
+                        "Preparazione interrotta/scaduta; nessuna modifica al progetto.");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ReferenceEquals(stageCts, cancellation))
+                {
+                    note.Text = "Staging non valido; dettagli in Output JPM. Progetto invariato.";
+                    JavaJpmProjectLogger.Error(selected, "JPM S2D.3.2", ex);
+                }
+            }
+            finally
+            {
+                if (ReferenceEquals(stageCts, cancellation))
+                {
+                    stageCts = null;
+                    stageRunning = false;
                     RefreshActions();
                 }
                 cancellation.Dispose();

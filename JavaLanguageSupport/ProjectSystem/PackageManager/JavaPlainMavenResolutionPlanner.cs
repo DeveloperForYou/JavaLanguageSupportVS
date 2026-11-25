@@ -41,6 +41,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             // fresh independent preflight re-resolution, never infer it from UI.
             internal string SelectedIdentity;
             internal string TargetVersion;
+            // JPM-S2D32-ISOLATED-JAR-STAGING-20261125: persist exact G:A selected by the verified Maven graph.
+            internal string TargetGroup;
+            internal string TargetArtifact;
         }
 
         internal sealed class ClasspathDiff
@@ -212,6 +215,8 @@ try {
                 result.ProjectFileLength = stampInfo.Length;
                 result.SelectedIdentity = selectedIdentity;
                 result.TargetVersion = targetVersion;
+                result.TargetGroup = group;
+                result.TargetArtifact = artifact;
                 return result;
             }
             finally
@@ -220,6 +225,53 @@ try {
                 catch (IOException) { /* Only temporary files. */ }
                 catch (UnauthorizedAccessException) { }
             }
+        }
+
+        // JPM-S2D32-ISOLATED-JAR-STAGING-20261125: generate the SAME POM shape as S2D.1 in a temp directory.
+        // No .javaproj or project repository file is edited by this operation.
+        internal static void WriteStagingPom(string projectFile, Plan plan,
+            string outputPom, CancellationToken token)
+        {
+            if (plan == null) throw new ArgumentNullException("plan");
+            token.ThrowIfCancellationRequested();
+            string full = Path.GetFullPath(projectFile);
+            var installed = JavaPackageManagerInstalledReader.Read(full);
+            if (!string.Equals(installed.Backend, "Plain", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException("Staging previsto solo per progetti Plain.");
+            var declarations = installed.Items.Where(x => x.MavenCoordinate).ToList();
+            if (declarations.Count == 0 || declarations.Count > 128 ||
+                declarations.Count != plan.DirectCount)
+                throw new InvalidDataException("Numero di dipendenze dirette cambiato.");
+            foreach (var dependency in declarations)
+            {
+                RequireCoordinate(dependency.GroupId, "groupId");
+                RequireCoordinate(dependency.ArtifactId, "artifactId");
+                RequireVersion(dependency.Version);
+            }
+            if (declarations.GroupBy(x => x.Coordinate, StringComparer.OrdinalIgnoreCase)
+                .Any(x => x.Count() > 1))
+                throw new InvalidDataException("Coordinate dirette multiple nel progetto Plain.");
+            if (plan.HasOverride != (plan.TargetGroup != null &&
+                plan.TargetArtifact != null && plan.TargetVersion != null))
+                throw new InvalidDataException("Richiesta Maven proposta incoerente.");
+            if (plan.HasOverride && !string.Equals(
+                    plan.TargetGroup + "." + plan.TargetArtifact,
+                    plan.SelectedIdentity, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Identita Maven non corrispondente alla selezione.");
+            if (plan.HasOverride)
+            {
+                RequireCoordinate(plan.TargetGroup, "groupId destinazione");
+                RequireCoordinate(plan.TargetArtifact, "artifactId destinazione");
+                RequireVersion(plan.TargetVersion);
+            }
+            var sources = JavaPackageSourceDiscovery.Discover(full, "Plain", token)
+                .Sources.Where(JavaPackageMultiRepositorySearchService.IsEligible)
+                .GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.First()).Take(12).ToList();
+            if (sources.Count == 0)
+                throw new InvalidOperationException("Nessun repository Maven HTTPS attivo.");
+            WritePom(outputPom, declarations, sources,
+                plan.TargetGroup, plan.TargetArtifact, plan.TargetVersion);
         }
 
         private static void RequireCoordinate(string text, string label)

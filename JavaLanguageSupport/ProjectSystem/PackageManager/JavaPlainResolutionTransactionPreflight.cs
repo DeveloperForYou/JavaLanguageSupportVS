@@ -26,6 +26,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             internal int ChangedCount;
             internal bool ReadyForStaging;
             internal bool HasBlockers;
+            // JPM-S2D32-ISOLATED-JAR-STAGING-20261125: manual jars are a commit-review warning, not a
+            // blocker for copying new artifacts to a disposable TEMP directory.
+            internal int BlockingIssueCount;
+            internal IList<string> ManualPaths;
             internal string Details;
             internal IList<ManifestEntry> Manifest;
         }
@@ -45,6 +49,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             internal long ProjectTicks;
             internal long ProjectLength;
             internal readonly List<ManifestEntry> Files = new List<ManifestEntry>();
+            internal readonly List<string> ManualPaths = new List<string>();
         }
 
         internal static async Task<Validation> PrepareAsync(string projectFile,
@@ -94,15 +99,25 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
             int changes = original.Added + original.Updated + original.Removed;
             var blockers = new List<string>();
+            int criticalCount = 0;
             if (original.Unverified != 0 || audit.UnverifiedCount != 0)
+            {
                 blockers.Add("Sono presenti JAR gestiti non verificabili.");
+                criticalCount++;
+            }
             if (audit.ConflictCount != 0)
+            {
                 blockers.Add("Il classpath Plain contiene gia conflitti di versione.");
+                criticalCount++;
+            }
             if (after.ManualJars != 0)
                 blockers.Add("Sono presenti JAR esterni/manuali: preservarne esplicitamente i riferimenti.");
             bool noChanges = changes == 0;
             if (original.Removed != 0)
+            {
                 blockers.Add("Il piano prevede rimozioni: verificare i consumatori prima di autorizzarle.");
+                criticalCount++;
+            }
 
             var text = new StringBuilder();
             string id = Guid.NewGuid().ToString("N");
@@ -134,6 +149,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 ReferencedJarCount = after.ReferencedJars, ManualJarCount = after.ManualJars,
                 ChangedCount = changes, ReadyForStaging = blockers.Count == 0 && !noChanges,
                 HasBlockers = blockers.Count != 0,
+                BlockingIssueCount = criticalCount,
+                ManualPaths = after.ManualPaths.AsReadOnly(),
                 Manifest = after.Files.AsReadOnly(),
                 Details = text.ToString().TrimEnd()
             };
@@ -153,6 +170,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 oldPlan.Removed != newPlan.Removed || oldPlan.Unchanged != newPlan.Unchanged ||
                 oldPlan.CurrentJarCount != newPlan.CurrentJarCount ||
                 oldPlan.SimulatedJarCount != newPlan.SimulatedJarCount ||
+                !string.Equals(oldPlan.TargetGroup, newPlan.TargetGroup,
+                    StringComparison.Ordinal) ||
+                !string.Equals(oldPlan.TargetArtifact, newPlan.TargetArtifact,
+                    StringComparison.Ordinal) ||
                 !string.Equals(PlanRows(oldPlan), PlanRows(newPlan), StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     "La nuova risoluzione Maven non corrisponde al piano: rieseguire l'analisi.");
@@ -166,6 +187,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 x.Status ?? "", x.Coordinate ?? "", x.InstalledVersion ?? "",
                 x.ProposedVersion ?? "", x.Scope ?? "", x.RequiredBy ?? "" }));
             return string.Join("\n", lines.OrderBy(x => x, StringComparer.Ordinal));
+        }
+
+        // JPM-S2D32-ISOLATED-JAR-STAGING-20261125: independent final check after copy-dependencies.
+        internal static string CaptureFingerprint(string projectFile, CancellationToken token)
+        {
+            return Capture(Path.GetFullPath(projectFile), token).Fingerprint;
         }
 
         private static Snapshot Capture(string projectFile, CancellationToken token)
@@ -192,6 +219,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             if (xml.DocumentElement == null || xml.DocumentElement.LocalName != "Project")
                 throw new InvalidDataException("Il file .javaproj non contiene Project.");
             var unique = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var manualPaths = new List<string>();
             int manual = 0;
             string managedRoot = Path.Combine(root, "lib", "java-packages")
                 .TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
@@ -221,7 +249,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                         x.LocalName == JavaPlainPackageManager.ManagedId);
                     if (owner == null || string.IsNullOrWhiteSpace(owner.InnerText) ||
                         !path.StartsWith(managedRoot, StringComparison.OrdinalIgnoreCase))
+                    {
                         manual++;
+                        manualPaths.Add(path.Substring(root.Length).TrimStart('\\', '/'));
+                    }
                     if (!unique.ContainsKey(path)) unique.Add(path, null);
                 }
             }
@@ -257,6 +288,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 ManualJars = manual, ProjectTicks = stamp, ProjectLength = size
             };
             snapshot.Files.AddRange(manifestEntries);
+            snapshot.ManualPaths.AddRange(manualPaths);
             return snapshot;
         }
 
