@@ -145,11 +145,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             if (!string.Equals(Sha(backup), projectSha, StringComparison.Ordinal))
                 throw new IOException("Backup progetto non verificato: nessuna modifica eseguita.");
             WriteXml(xml, proposed, FileHasBom(project));
+            // JPM-S2D35-CRASH-RECOVERY-20261125: pin both images BEFORE any JAR is copied.
+            string proposedSha = Sha(proposed);
             var addedTargets = new List<string>();
             bool projectReplaced = false;
             try
             {
-                WriteJournal(journal, "PREPARED", project, projectSha, additions);
+                WriteJournal(journal, "PREPARED", project, projectSha, additions, proposedSha);
                 // Stage the entire set of new files in their final directory first.
                 // Never overwrite any existing, even unreferenced, JAR.
                 foreach (var add in additions)
@@ -181,7 +183,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     }
                     finally { if (File.Exists(pending)) File.Delete(pending); }
                 }
-                WriteJournal(journal, "JARS_COPIED", project, projectSha, additions);
+                WriteJournal(journal, "JARS_COPIED", project, projectSha, additions, proposedSha);
                 // An external package operation may have changed the project while
                 // we copied the JARs. Abort instead of overwriting their edits.
                 string now = JavaPlainResolutionTransactionPreflight.CaptureFingerprint(
@@ -204,7 +206,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     projectReplaced = true;
                 }
                 finally { if (File.Exists(replaceFile)) File.Delete(replaceFile); }
-                WriteJournal(journal, "PROJECT_COMMITTED", project, projectSha, additions);
+                WriteJournal(journal, "PROJECT_COMMITTED", project, projectSha, additions, proposedSha);
             }
             catch (Exception cause)
             {
@@ -235,7 +237,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     }
                 }
                 try { WriteJournal(journal, rollbackFailure == null ? "ROLLED_BACK" :
-                    "RECOVERY_REQUIRED", project, projectSha, additions); }
+                    "RECOVERY_REQUIRED", project, projectSha, additions, proposedSha); }
                 catch (Exception) { }
                 if (rollbackFailure != null)
                     throw new IOException("ROLLBACK NON COMPLETATO. Backup: " + backup +
@@ -260,7 +262,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     ". Ricaricare progetto/soluzione.";
                 JavaJpmProjectLogger.Warning(project, VersionTag, syncNote);
             }
-            try { WriteJournal(journal, "DONE", project, projectSha, additions); }
+            try { WriteJournal(journal, "DONE", project, projectSha, additions, proposedSha); }
             catch (Exception ex)
             {
                 JavaJpmProjectLogger.Warning(project, VersionTag,
@@ -524,16 +526,33 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             }
         }
 
+        // JPM-S2D35-CRASH-RECOVERY-20261125: persist original/proposed SHA in an atomic, flushed
+        // write-ahead journal. The old journal remains intact until replacement.
         private static void WriteJournal(string path, string state, string project,
-            string originalSha, IEnumerable<Addition> additions)
+            string originalSha, IEnumerable<Addition> additions, string proposedSha)
         {
             var message = new StringBuilder()
                 .AppendLine(VersionTag + " | " + state)
                 .AppendLine("Progetto: " + project)
-                .AppendLine("SHA256 originale: " + originalSha);
+                .AppendLine("SHA256 originale: " + originalSha)
+                .AppendLine("SHA256 proposto: " + proposedSha);
             foreach (var add in additions)
                 message.AppendLine("+ " + add.Target + " SHA256 " + add.Sha256);
-            File.WriteAllText(path, message.ToString(), new UTF8Encoding(false));
+            string temporary = Path.Combine(Path.GetDirectoryName(path),
+                ".jpm-journal-" + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                byte[] bytes = new UTF8Encoding(false).GetBytes(message.ToString());
+                using (var stream = new FileStream(temporary, FileMode.CreateNew,
+                    FileAccess.Write, FileShare.None))
+                {
+                    stream.Write(bytes, 0, bytes.Length);
+                    stream.Flush(true);
+                }
+                if (File.Exists(path)) File.Replace(temporary, path, null, true);
+                else File.Move(temporary, path);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
 
         private static string Sha(string path)

@@ -76,6 +76,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         // JPM-S2D33-ADDITIVE-TRANSACTION-20261125: explicit, opt-in, additive-only disk commit.
         private readonly Button commitButton = CreateButton("Applica aggiunte");
         private bool commitRunning;
+        // JPM-S2D35-CRASH-RECOVERY-20261125: automatic read-only detection, opt-in verified recovery.
+        private readonly Button crashRecoveryButton = CreateButton("Recupera interrotto");
+        private readonly Button crashScanButton = CreateButton("Verifica recovery");
+        private int crashScanRevision;
+        private JavaPlainResolutionCrashRecovery.Report crashReport;
+        private bool crashRecoveryRunning;
         private readonly ListView classpathDiffList = new ListView();
         private readonly TextBlock classpathDiffSummary = CreateLabel(
             "Esegui Analizza con Maven per generare il confronto.");
@@ -246,6 +252,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 "Backup .javaproj, rollback e sincronizzazione JDT LS. " +
                 "Aggiornamenti e rimozioni NON sono autorizzati.";
             resultButtons.Children.Add(commitButton);
+            crashRecoveryButton.Margin = new Thickness(8, 0, 0, 0);
+            crashRecoveryButton.ToolTip = "Rileva automaticamente commit interrotti. " +
+                "Ripristino solo dopo conferma e verifiche SHA-256; nessun overwrite di modifiche esterne.";
+            crashScanButton.Margin = new Thickness(8, 0, 0, 0);
+            crashScanButton.ToolTip = "Rileggi il journal JPM del progetto Plain, anche se " +
+                "il .javaproj non e cambiato. Nessuna modifica su disco.";
+            resultButtons.Children.Add(crashScanButton);
+            resultButtons.Children.Add(crashRecoveryButton);
             resultArea.Children.Add(resultButtons);
             Grid.SetRow(previewFrame, 1);
             resultArea.Children.Add(previewFrame);
@@ -307,6 +321,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             prepareTransactionButton.Click += (s, e) => { _ = PrepareTransactionAsync(); };
             stageJarsButton.Click += (s, e) => { _ = StageJarsAsync(); };
             commitButton.Click += (s, e) => { _ = CommitAdditionsAsync(); };
+            crashRecoveryButton.Click += (s, e) => { _ = RecoverCrashAsync(); };
+            crashScanButton.Click += (s, e) => {
+                if (validPlain && !string.IsNullOrWhiteSpace(projectFile))
+                    _ = ScanCrashRecoveryAsync(projectFile, Volatile.Read(ref generation), true);
+            };
             ShowClasspathComparison(false);
             // JPM-S2D22-TAB-PERSISTENCE-20261125: Maven state survives TabControl Unloaded.
             // Switching tabs is not a project change; the WPF content presenter
@@ -406,11 +425,18 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 var current = new FileInfo(selected);
                 if (current.Exists && (report == null ||
                     (current.LastWriteTimeUtc.Ticks == projectStamp &&
-                     current.Length == projectSize))) return;
+                     current.Length == projectSize)))
+                {
+                    // reload cache non aggiornato: JARS_COPIED changes only journal/JAR.
+                    _ = ScanCrashRecoveryAsync(selected, Volatile.Read(ref generation));
+                    return;
+                }
             }
             CancelMavenPlan();
             Interlocked.Increment(ref generation);
             projectFile = selected;
+            Interlocked.Increment(ref crashScanRevision);
+            crashReport = null; // Never display a previous project's recovery state.
             validPlain = isPlain && !string.IsNullOrWhiteSpace(selected);
             rejectedCandidate = false;
             candidateOperation = null;
@@ -453,10 +479,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         {
             CancelMavenPlan();
             int stamp = Interlocked.Increment(ref generation);
+            Interlocked.Increment(ref crashScanRevision);
+            crashReport = null;
             rejectedCandidate = false;
             candidateOperation = null;
             if (!validPlain || string.IsNullOrWhiteSpace(projectFile)) return;
             string selected = projectFile;
+            crashReport = null;
+            _ = ScanCrashRecoveryAsync(selected, stamp);
             report = null;
             conflictList.ItemsSource = null;
             ownerTree.Items.Clear();
@@ -660,6 +690,20 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 !stagedJars.NothingToStage && lastMavenPlan.Added > 0 &&
                 lastMavenPlan.Updated == 0 && lastMavenPlan.Removed == 0 &&
                 !lastMavenPlan.HasOverride;
+            bool requiresRecovery = crashReport != null && crashReport.PendingCount != 0;
+            if (requiresRecovery || crashRecoveryRunning)
+            {
+                mavenPlanButton.IsEnabled = false;
+                recordComparisonButton.IsEnabled = false;
+                prepareTransactionButton.IsEnabled = false;
+                stageJarsButton.IsEnabled = false;
+                commitButton.IsEnabled = false;
+            }
+            crashRecoveryButton.IsEnabled = validPlain && requiresRecovery &&
+                !crashRecoveryRunning && !commitRunning &&
+                !mavenPlanRunning && !prepareRunning && !stageRunning;
+            crashScanButton.IsEnabled = validPlain && !crashRecoveryRunning &&
+                !commitRunning && !mavenPlanRunning && !prepareRunning && !stageRunning;
         }
 
         private void CancelMavenPlan()
@@ -1001,6 +1045,124 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             {
                 commitRunning = false;
                 RefreshActions();
+            }
+        }
+
+        // JPM-S2D35-CRASH-RECOVERY-20261125: the scan is read-only and runs whenever the Plain
+        // project is selected/refreshed; a crash never triggers silent writes.
+        // JPM-S2D351-EXTERNAL-JOURNAL-RESCAN-20261125:
+        // S2D3.5 journals can be created without touching the .javaproj
+        // (JARS_COPIED): the cached CPS project stamp cannot prove recovery state.
+        // One read-only scan per user action/reselection, with stale async results ignored.
+        private async Task ScanCrashRecoveryAsync(string selected, int stamp,
+            bool explicitRequest = false)
+        {
+            int revision = Interlocked.Increment(ref crashScanRevision);
+            if (!validPlain || string.IsNullOrWhiteSpace(selected)) return;
+            if (explicitRequest)
+            {
+                // JPM-S2D352-SCAN-ROOT-DIAGNOSTICS-20261125: a .javaproj
+                // opened in the solution is not necessarily the project selected
+                // by the JPM project combo. Log the ACTUAL target being scanned.
+                string absolute = Path.GetFullPath(selected);
+                string journalRoot = Path.Combine(Path.GetDirectoryName(absolute),
+                    ".java-vs", "plain-resolution-transactions");
+                note.Text = "Verifica recovery: " + Path.GetFileName(absolute) + "...";
+                JavaJpmProjectLogger.Info(selected, "JPM S2D.3.5",
+                    "Progetto selezionato JPM: " + absolute +
+                    "Cartella journal ricercata: " + journalRoot);
+                RefreshActions();
+            }
+            try
+            {
+                var result = await Task.Run(() =>
+                    JavaPlainResolutionCrashRecovery.Inspect(selected));
+                if (revision != Volatile.Read(ref crashScanRevision) ||
+                    stamp != Volatile.Read(ref generation) ||
+                    !string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase)) return;
+                crashReport = result;
+                if (result.PendingCount != 0)
+                {
+                    note.Text = result.CanRecover ?
+                        "Commit interrotto rilevato: usa Recupera interrotto." :
+                        "RECUPERO BLOCCATO: controllare Output JPM.";
+                    JavaJpmProjectLogger.Warning(selected, "JPM S2D.3.5",
+                        "Scansione recovery: incomplete=" + result.PendingCount +
+                        "; ripristinabile=" + result.CanRecover + ". " + result.Details);
+                }
+                else if (explicitRequest)
+                {
+                    note.Text = "Nessuna transazione Plain interrotta rilevata.";
+                    JavaJpmProjectLogger.Info(selected, "JPM S2D.3.5",
+                        "Scansione recovery: incomplete=0. " + result.Details);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (revision == Volatile.Read(ref crashScanRevision) &&
+                    stamp == Volatile.Read(ref generation) &&
+                    string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    crashReport = new JavaPlainResolutionCrashRecovery.Report {
+                        PendingCount = 1, CanRecover = false,
+                        Details = "Scansione recovery non riuscita: " + ex.Message };
+                    JavaJpmProjectLogger.Error(selected, "JPM S2D.3.5", ex);
+                    note.Text = "Recovery non verificabile. Consultare Output JPM.";
+                }
+            }
+            finally
+            {
+                if (revision == Volatile.Read(ref crashScanRevision) &&
+                    stamp == Volatile.Read(ref generation) &&
+                    string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase))
+                    RefreshActions();
+            }
+        }
+
+        private async Task RecoverCrashAsync()
+        {
+            if (!validPlain || crashRecoveryRunning || commitRunning ||
+                mavenPlanRunning || prepareRunning || stageRunning ||
+                crashReport == null || crashReport.PendingCount == 0) return;
+            string selected = projectFile;
+            if (!crashReport.CanRecover)
+            {
+                MessageBox.Show(crashReport.Details,
+                    "Java Package Manager - Recupero bloccato",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            string transaction = crashReport.TransactionDirectory;
+            if (MessageBox.Show(crashReport.Details +
+                    "\n\nConfermi il RIPRISTINO del progetto allo stato precedente al commit?",
+                    "Java Package Manager - Conferma recupero crash",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                    MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            crashRecoveryRunning = true;
+            note.Text = "Recupero in corso: verifica e ripristino transazionale...";
+            RefreshActions();
+            try
+            {
+                string result = await JavaPlainResolutionCrashRecovery.RecoverAsync(
+                    selected, transaction);
+                JavaJpmProjectLogger.Info(selected, "JPM S2D.3.5", result);
+                note.Text = "Recupero concluso: ROLLED_BACK. Rieseguire analisi Maven.";
+            }
+            catch (Exception ex)
+            {
+                JavaJpmProjectLogger.Error(selected, "JPM S2D.3.5", ex);
+                note.Text = "Recupero non concluso: nessuna nuova transazione consentita.";
+                MessageBox.Show("Impossibile completare il recupero.\n" + ex.Message +
+                    "\nVerificare i file e il journal prima di altri commit.",
+                    "Java Package Manager - Recupero non concluso",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                crashRecoveryRunning = false;
+                if (string.Equals(projectFile, selected, StringComparison.OrdinalIgnoreCase))
+                    Reload();
+                else RefreshActions();
             }
         }
 
