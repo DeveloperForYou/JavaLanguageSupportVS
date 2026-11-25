@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" DefaultTargets="Build">
+	<Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.props" />
+	<Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.targets" />
+	<PropertyGroup Label="Globals">
+		<ProjectGuid>21202300-7e9a-58c0-b195-06af47b981d8</ProjectGuid>
+	</PropertyGroup>
+	<PropertyGroup>
+		<JavaBuildSystem>Plain</JavaBuildSystem>
+	</PropertyGroup>
+	<ItemGroup>
+		<!-- F4.D.2: only explicitly referenced JAR files join javac classpath. -->
+		<JavaJarReference Include="libs\demo-utils.jar" />
+	</ItemGroup>
+	<ItemGroup Label="JavaPackageManager">
+		<JavaJarReference Include="lib\java-packages\org.json\json\20260814\org.json.json-20260814.jar">
+			<JavaPackageManagerId>org.json:json</JavaPackageManagerId>
+			<JavaPackageManagerVersion>20260814</JavaPackageManagerVersion>
+		</JavaJarReference>
+	</ItemGroup>
+
+	<ItemGroup>
+		<Folder Include="src\test\" />
+	</ItemGroup>
+	<ItemGroup>
+		<Folder Include="src\test\java\" />
+	</ItemGroup>
+	
+	
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  <ItemGroup Label="JavaPackageManager">
+    <JavaJarReference Include="lib\java-packages\junit\junit\4.13.2\junit.junit-4.13.2.jar"><JavaPackageManagerId>junit:junit</JavaPackageManagerId><JavaPackageManagerVersion>4.13.2</JavaPackageManagerVersion><JavaPackageManagerScope>test</JavaPackageManagerScope></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\junit\junit\4.13.2\org.hamcrest.hamcrest-core-1.2.jar"><JavaPackageManagerId>junit:junit</JavaPackageManagerId><JavaPackageManagerVersion>4.13.2</JavaPackageManagerVersion><JavaPackageManagerScope>test</JavaPackageManagerScope></JavaJarReference>
+  </ItemGroup>
+
+  
+
+  <ItemGroup Label="JavaPackageManager">
+    <JavaJarReference Include="lib\java-packages\com.fasterxml.jackson.dataformat\jackson-dataformat-yaml\2.23.0\com.fasterxml.jackson.core.jackson-annotations-2.23.jar"><JavaPackageManagerId>com.fasterxml.jackson.dataformat:jackson-dataformat-yaml</JavaPackageManagerId><JavaPackageManagerVersion>2.23.0</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\com.fasterxml.jackson.dataformat\jackson-dataformat-yaml\2.23.0\com.fasterxml.jackson.core.jackson-core-2.23.0.jar"><JavaPackageManagerId>com.fasterxml.jackson.dataformat:jackson-dataformat-yaml</JavaPackageManagerId><JavaPackageManagerVersion>2.23.0</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\com.fasterxml.jackson.dataformat\jackson-dataformat-yaml\2.23.0\com.fasterxml.jackson.core.jackson-databind-2.23.0.jar"><JavaPackageManagerId>com.fasterxml.jackson.dataformat:jackson-dataformat-yaml</JavaPackageManagerId><JavaPackageManagerVersion>2.23.0</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\com.fasterxml.jackson.dataformat\jackson-dataformat-yaml\2.23.0\com.fasterxml.jackson.dataformat.jackson-dataformat-yaml-2.23.0.jar"><JavaPackageManagerId>com.fasterxml.jackson.dataformat:jackson-dataformat-yaml</JavaPackageManagerId><JavaPackageManagerVersion>2.23.0</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\com.fasterxml.jackson.dataformat\jackson-dataformat-yaml\2.23.0\org.yaml.snakeyaml-2.5.jar"><JavaPackageManagerId>com.fasterxml.jackson.dataformat:jackson-dataformat-yaml</JavaPackageManagerId><JavaPackageManagerVersion>2.23.0</JavaPackageManagerVersion></JavaJarReference>
+  </ItemGroup>
+
+  <ItemGroup Label="JavaPackageManager">
+    <JavaJarReference Include="lib\java-packages\com.google.guava\guava\33.8.0-jre\com.google.errorprone.error_prone_annotations-2.52.0.jar"><JavaPackageManagerId>com.google.guava:guava</JavaPackageManagerId><JavaPackageManagerVersion>33.8.0-jre</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\com.google.guava\guava\33.8.0-jre\com.google.guava.failureaccess-1.0.3.jar"><JavaPackageManagerId>com.google.guava:guava</JavaPackageManagerId><JavaPackageManagerVersion>33.8.0-jre</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\com.google.guava\guava\33.8.0-jre\com.google.guava.guava-33.8.0-jre.jar"><JavaPackageManagerId>com.google.guava:guava</JavaPackageManagerId><JavaPackageManagerVersion>33.8.0-jre</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\com.google.guava\guava\33.8.0-jre\com.google.guava.listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar"><JavaPackageManagerId>com.google.guava:guava</JavaPackageManagerId><JavaPackageManagerVersion>33.8.0-jre</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\com.google.guava\guava\33.8.0-jre\com.google.j2objc.j2objc-annotations-3.1.jar"><JavaPackageManagerId>com.google.guava:guava</JavaPackageManagerId><JavaPackageManagerVersion>33.8.0-jre</JavaPackageManagerVersion></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\com.google.guava\guava\33.8.0-jre\org.jspecify.jspecify-1.0.1.jar"><JavaPackageManagerId>com.google.guava:guava</JavaPackageManagerId><JavaPackageManagerVersion>33.8.0-jre</JavaPackageManagerVersion></JavaJarReference>
+  </ItemGroup>
+</Project>

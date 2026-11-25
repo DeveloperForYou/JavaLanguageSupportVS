@@ -75,6 +75,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private JavaPlainResolutionJarStaging.StageResult stagedJars;
         // JPM-S2D33-ADDITIVE-TRANSACTION-20261125: explicit, opt-in, additive-only disk commit.
         private readonly Button commitButton = CreateButton("Applica aggiunte");
+        // JPM-S2D411-UPDATE-READONLY-20261125: update safety preflight; NO mutation is authorized.
+        private readonly Button updatePreviewButton = CreateButton("Verifica aggiornamento");
+        private bool updatePreviewRunning;
         private bool commitRunning;
         // JPM-S2D35-CRASH-RECOVERY-20261125: automatic read-only detection, opt-in verified recovery.
         private readonly Button crashRecoveryButton = CreateButton("Recupera interrotto");
@@ -252,6 +255,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 "Backup .javaproj, rollback e sincronizzazione JDT LS. " +
                 "Aggiornamenti e rimozioni NON sono autorizzati.";
             resultButtons.Children.Add(commitButton);
+            updatePreviewButton.Margin = new Thickness(8, 0, 0, 0);
+            updatePreviewButton.ToolTip = "Anteprima SOLO LETTURA di un aggiornamento " +
+                "transitivo: controlla proprietario, scope, JAR precedente e staging SHA-256.";
+            resultButtons.Children.Add(updatePreviewButton);
             crashRecoveryButton.Margin = new Thickness(8, 0, 0, 0);
             crashRecoveryButton.ToolTip = "Rileva automaticamente commit interrotti. " +
                 "Ripristino solo dopo conferma e verifiche SHA-256; nessun overwrite di modifiche esterne.";
@@ -321,6 +328,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             prepareTransactionButton.Click += (s, e) => { _ = PrepareTransactionAsync(); };
             stageJarsButton.Click += (s, e) => { _ = StageJarsAsync(); };
             commitButton.Click += (s, e) => { _ = CommitAdditionsAsync(); };
+            updatePreviewButton.Click += (s, e) => { _ = VerifyUpdatePreviewAsync(); };
             crashRecoveryButton.Click += (s, e) => { _ = RecoverCrashAsync(); };
             crashScanButton.Click += (s, e) => {
                 if (validPlain && !string.IsNullOrWhiteSpace(projectFile))
@@ -690,6 +698,15 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 !stagedJars.NothingToStage && lastMavenPlan.Added > 0 &&
                 lastMavenPlan.Updated == 0 && lastMavenPlan.Removed == 0 &&
                 !lastMavenPlan.HasOverride;
+
+            updatePreviewButton.IsEnabled = validPlain && !rejectedCandidate &&
+                !updatePreviewRunning && !commitRunning && !mavenPlanRunning &&
+                !prepareRunning && !stageRunning &&
+                lastMavenPlan != null && preparedValidation != null && stagedJars != null &&
+                !stagedJars.NothingToStage && lastMavenPlan.Updated == 1 &&
+                lastMavenPlan.Added == 0 && lastMavenPlan.Removed == 0 &&
+                lastMavenPlan.Unverified == 0 && !lastMavenPlan.HasOverride &&
+                (crashReport == null || crashReport.PendingCount == 0);
             bool requiresRecovery = crashReport != null && crashReport.PendingCount != 0;
             if (requiresRecovery || crashRecoveryRunning)
             {
@@ -974,6 +991,50 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     RefreshActions();
                 }
                 cancellation.Dispose();
+            }
+        }
+
+        // JPM-S2D411-UPDATE-READONLY-20261125: read-only, cannot authorize an update commit.
+        // No journal, JAR, project file, or JDT LS calls from this UI action.
+        private async Task VerifyUpdatePreviewAsync()
+        {
+            if (!updatePreviewButton.IsEnabled || updatePreviewRunning) return;
+            string selected = projectFile;
+            int stamp = Volatile.Read(ref generation);
+            var plan = lastMavenPlan;
+            var validation = preparedValidation;
+            var stage = stagedJars;
+            updatePreviewRunning = true;
+            note.Text = "Verifica aggiornamento: controllo SHA-256 senza modifiche...";
+            RefreshActions();
+            try
+            {
+                var report = await Task.Run(() =>
+                    JavaPlainResolutionUpdatePreview.Inspect(selected, plan, validation, stage));
+                if (stamp != Volatile.Read(ref generation) ||
+                    !string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase) ||
+                    !ReferenceEquals(plan, lastMavenPlan) ||
+                    !ReferenceEquals(stage, stagedJars)) return;
+                preview.Text = report.Details + "\n\n" + plan.ComparisonDetails;
+                ShowClasspathComparison(false);
+                previewScroller.ScrollToTop();
+                note.Text = "Aggiornamento transitivo verificato in sola lettura; " +
+                    "commit disabilitato. Dettagli in Anteprima/Output JPM.";
+                JavaJpmProjectLogger.Info(selected, "JPM S2D.4.1.1", report.Details);
+            }
+            catch (Exception ex)
+            {
+                if (stamp == Volatile.Read(ref generation) &&
+                    string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    note.Text = "Verifica aggiornamento non superata; nessun file modificato.";
+                    JavaJpmProjectLogger.Error(selected, "JPM S2D.4.1.1", ex);
+                }
+            }
+            finally
+            {
+                updatePreviewRunning = false;
+                RefreshActions();
             }
         }
 
