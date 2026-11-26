@@ -104,6 +104,26 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 string directoryToRecover = pending[0];
                 try
                 {
+                    // JPM-S2D412-UPDATE-TRANSACTION-20261125: updates have a
+                    // separate immutable two-JAR journal. Do not parse it as
+                    // an additive-only S2D3.3 transaction.
+                    string updateJournal = Path.Combine(directoryToRecover,
+                        "transaction-state.txt");
+                    string updateHeader = File.Exists(Io(updateJournal)) ?
+                        File.ReadLines(Io(updateJournal)).FirstOrDefault() : null;
+                    if (updateHeader != null && updateHeader.StartsWith(
+                        JavaPlainResolutionUpdateCommit.Version + " | ", StringComparison.Ordinal))
+                    {
+                        var update = JavaPlainResolutionUpdateCommit.InspectInterrupted(
+                            project, directoryToRecover);
+                        if (!update.CanRecover)
+                            return Blocked(1, directoryToRecover, update.Details);
+                        return new Report {
+                            PendingCount = 1, CanRecover = true,
+                            TransactionDirectory = directoryToRecover,
+                            Details = update.Details
+                        };
+                    }
                     var snapshot = LoadAndVerify(project, directoryToRecover);
                     return new Report {
                         PendingCount = 1, CanRecover = true,
@@ -172,6 +192,28 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                         !Paths.Equals(Path.GetFullPath(expectedDirectory), report.TransactionDirectory))
                         throw new InvalidOperationException("Lo stato transazionale e cambiato: " +
                             report.Details);
+                    // JPM-S2D412-UPDATE-TRANSACTION-20261125: shared mutex is
+                    // already held here. The update recovery restores the old
+                    // .javaproj and deletes ONLY the new SHA-pinned JAR.
+                    string selectedJournal = Path.Combine(report.TransactionDirectory,
+                        "transaction-state.txt");
+                    string selectedHeader = File.ReadLines(Io(selectedJournal)).FirstOrDefault();
+                    if (selectedHeader != null && selectedHeader.StartsWith(
+                        JavaPlainResolutionUpdateCommit.Version + " | ", StringComparison.Ordinal))
+                    {
+                        string recovered = JavaPlainResolutionUpdateCommit.RecoverInterruptedUnderLock(
+                            project, report.TransactionDirectory);
+                        try
+                        {
+                            JavaDependencyLanguageSync.RefreshPlainProjectNow(project);
+                            JavaDependencyLanguageSync.RefreshAll();
+                        }
+                        catch (Exception ex)
+                        {
+                            recovered += "\nAVVISO JDT LS: " + ex.Message;
+                        }
+                        return recovered;
+                    }
                     Pending tx = LoadAndVerify(project, report.TransactionDirectory);
                     string root = Path.GetDirectoryName(project);
                     string backup = Path.Combine(tx.Directory, "project-original.javaproj");

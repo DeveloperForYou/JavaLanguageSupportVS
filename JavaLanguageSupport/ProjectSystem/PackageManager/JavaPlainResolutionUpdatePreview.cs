@@ -159,7 +159,9 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             string scope = JavaPackageScopes.Require(owner.Scope);
             var details = new StringBuilder();
             details.AppendLine("JPM-S2D.4.1.1 | ANTEPRIMA AGGIORNAMENTO (SOLO LETTURA)");
-            details.AppendLine("Stato: VERIFICATO; COMMIT NON ABILITATO");
+            // JPM-S2D412-UPDATE-TRANSACTION-20261125: preview stays read-only,
+            // but the separately confirmed update-commit flow is available.
+            details.AppendLine("Stato: VERIFICATO; commit tramite conferma separata");
             details.AppendLine("Dipendenza: " + diff.Coordinate + ":" +
                 diff.InstalledVersion + " -> " + diff.ProposedVersion);
             details.AppendLine("Proprietario: " + owner.Coordinate + ":" + owner.Version +
@@ -172,8 +174,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             details.AppendLine("JAR manuali conservati nel piano: " + prior.ManualJarCount);
             details.AppendLine("La versione precedente resta intatta sul disco.");
             details.AppendLine("La proposta non cambia file, riferimenti, JDT LS o journal.");
-            details.AppendLine("Prima del commit serve estendere journal/Crash Recovery a " +
-                "sostituzioni di riferimenti, non solo aggiunte.");
+            details.AppendLine("Il commit S2D4.1.2 usa journal/Crash Recovery " +
+                "dedicati alla sostituzione di riferimenti.");
             return new Result { Details = details.ToString().TrimEnd(),
                 PreviousJar = old[0].Path, ProposedJar = target,
                 PreviousSha256 = oldSha, ProposedSha256 = file.Sha256,

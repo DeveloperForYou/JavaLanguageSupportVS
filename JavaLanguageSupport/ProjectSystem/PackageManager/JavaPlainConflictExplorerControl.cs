@@ -78,6 +78,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         // JPM-S2D411-UPDATE-READONLY-20261125: update safety preflight; NO mutation is authorized.
         private readonly Button updatePreviewButton = CreateButton("Verifica aggiornamento");
         private bool updatePreviewRunning;
+        // JPM-S2D412-UPDATE-TRANSACTION-20261125: update only after verified preview.
+        private readonly Button updateCommitButton = CreateButton("Applica aggiornamento");
+        private JavaPlainMavenResolutionPlanner.Plan updateVerifiedPlan;
+        private JavaPlainResolutionTransactionPreflight.Validation updateVerifiedValidation;
+        private JavaPlainResolutionJarStaging.StageResult updateVerifiedStage;
+        private string updateVerifiedProject;
         private bool commitRunning;
         // JPM-S2D35-CRASH-RECOVERY-20261125: automatic read-only detection, opt-in verified recovery.
         private readonly Button crashRecoveryButton = CreateButton("Recupera interrotto");
@@ -259,6 +265,11 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             updatePreviewButton.ToolTip = "Anteprima SOLO LETTURA di un aggiornamento " +
                 "transitivo: controlla proprietario, scope, JAR precedente e staging SHA-256.";
             resultButtons.Children.Add(updatePreviewButton);
+            updateCommitButton.Margin = new Thickness(8, 0, 0, 0);
+            updateCommitButton.ToolTip = "Conferma un solo aggiornamento transitivo verificato. " +
+                "Commit con backup, journal SHA-256, rollback e crash recovery. " +
+                "La vecchia versione del JAR resta intatta.";
+            resultButtons.Children.Add(updateCommitButton);
             crashRecoveryButton.Margin = new Thickness(8, 0, 0, 0);
             crashRecoveryButton.ToolTip = "Rileva automaticamente commit interrotti. " +
                 "Ripristino solo dopo conferma e verifiche SHA-256; nessun overwrite di modifiche esterne.";
@@ -329,6 +340,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             stageJarsButton.Click += (s, e) => { _ = StageJarsAsync(); };
             commitButton.Click += (s, e) => { _ = CommitAdditionsAsync(); };
             updatePreviewButton.Click += (s, e) => { _ = VerifyUpdatePreviewAsync(); };
+            updateCommitButton.Click += (s, e) => { _ = CommitUpdateAsync(); };
             crashRecoveryButton.Click += (s, e) => { _ = RecoverCrashAsync(); };
             crashScanButton.Click += (s, e) => {
                 if (validPlain && !string.IsNullOrWhiteSpace(projectFile))
@@ -707,6 +719,17 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 lastMavenPlan.Added == 0 && lastMavenPlan.Removed == 0 &&
                 lastMavenPlan.Unverified == 0 && !lastMavenPlan.HasOverride &&
                 (crashReport == null || crashReport.PendingCount == 0);
+            // JPM-S2D412-UPDATE-TRANSACTION-20261125: require a successful
+            // preview of the SAME plan, preflight and stage, not a stale UI state.
+            updateCommitButton.IsEnabled = updatePreviewButton.IsEnabled &&
+                ReferenceEquals(updateVerifiedPlan, lastMavenPlan) &&
+                ReferenceEquals(updateVerifiedValidation, preparedValidation) &&
+                ReferenceEquals(updateVerifiedStage, stagedJars) &&
+                string.Equals(updateVerifiedProject, projectFile,
+                    StringComparison.OrdinalIgnoreCase) &&
+                updateVerifiedPlan != null &&
+                (crashReport == null || crashReport.PendingCount == 0) &&
+                !crashRecoveryRunning;
             bool requiresRecovery = crashReport != null && crashReport.PendingCount != 0;
             if (requiresRecovery || crashRecoveryRunning)
             {
@@ -1004,6 +1027,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             var plan = lastMavenPlan;
             var validation = preparedValidation;
             var stage = stagedJars;
+            updateVerifiedPlan = null;
+            updateVerifiedValidation = null;
+            updateVerifiedStage = null;
+            updateVerifiedProject = null;
             updatePreviewRunning = true;
             note.Text = "Verifica aggiornamento: controllo SHA-256 senza modifiche...";
             RefreshActions();
@@ -1018,8 +1045,12 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 preview.Text = report.Details + "\n\n" + plan.ComparisonDetails;
                 ShowClasspathComparison(false);
                 previewScroller.ScrollToTop();
-                note.Text = "Aggiornamento transitivo verificato in sola lettura; " +
-                    "commit disabilitato. Dettagli in Anteprima/Output JPM.";
+                updateVerifiedPlan = plan;
+                updateVerifiedValidation = validation;
+                updateVerifiedStage = stage;
+                updateVerifiedProject = selected;
+                note.Text = "Anteprima verificata: Applica aggiornamento disponibile " +
+                    "dopo conferma. Dettagli in Anteprima/Output JPM.";
                 JavaJpmProjectLogger.Info(selected, "JPM S2D.4.1.1", report.Details);
             }
             catch (Exception ex)
@@ -1034,6 +1065,72 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             finally
             {
                 updatePreviewRunning = false;
+                RefreshActions();
+            }
+        }
+
+        // JPM-S2D412-UPDATE-TRANSACTION-20261125: explicit opt-in commit.
+        // The stage is detached from the WPF control while the transaction runs.
+        private async Task CommitUpdateAsync()
+        {
+            if (!updateCommitButton.IsEnabled || commitRunning) return;
+            string selected = projectFile;
+            int stamp = Volatile.Read(ref generation);
+            var plan = lastMavenPlan;
+            var prior = preparedValidation;
+            var stage = stagedJars;
+            string proposal;
+            try { proposal = JavaPlainResolutionUpdateCommit.Preview(selected, plan, prior, stage); }
+            catch (Exception ex)
+            {
+                JavaJpmProjectLogger.Error(selected, "JPM S2D.4.1.2", ex);
+                note.Text = "Aggiornamento non sicuro: nessun file modificato.";
+                return;
+            }
+            var choice = MessageBox.Show(proposal +
+                "\n\nConfermi l'aggiornamento della dipendenza Plain?",
+                "Java Package Manager - Aggiornamento transazionale",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (choice != MessageBoxResult.Yes) return;
+            if (stamp != Volatile.Read(ref generation) ||
+                !string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase) ||
+                !ReferenceEquals(plan, lastMavenPlan) ||
+                !ReferenceEquals(prior, preparedValidation) ||
+                !ReferenceEquals(stage, stagedJars)) return;
+            commitRunning = true;
+            stagedJars = null; // The engine owns the stage until it terminates.
+            updateVerifiedPlan = null;
+            updateVerifiedValidation = null;
+            updateVerifiedStage = null;
+            updateVerifiedProject = null;
+            note.Text = "Aggiornamento: verifica, backup, journal e swap in corso...";
+            RefreshActions();
+            try
+            {
+                var result = await JavaPlainResolutionUpdateCommit.ApplyAsync(
+                    selected, plan, prior, stage);
+                JavaJpmProjectLogger.Info(selected, "JPM S2D.4.1.2", result.Details);
+                JavaPlainResolutionJarStaging.Discard(stage.StageDirectory);
+                if (stamp == Volatile.Read(ref generation) &&
+                    string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    Reload();
+                    note.Text = "Aggiornamento completato. Analizza con Maven: attese 0 differenze.";
+                }
+            }
+            catch (Exception ex)
+            {
+                JavaJpmProjectLogger.Error(selected, "JPM S2D.4.1.2", ex);
+                if (stamp == Volatile.Read(ref generation) &&
+                    string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    Reload(); // Also rescan an unfinished journal after a failed rollback.
+                    note.Text = "Aggiornamento fallito. Controllare rollback/recovery in Output JPM.";
+                }
+            }
+            finally
+            {
+                commitRunning = false;
                 RefreshActions();
             }
         }

@@ -58,7 +58,7 @@
 
   <ItemGroup Label="JavaPackageManager">
     <JavaJarReference Include="lib\java-packages\junit\junit\4.13.2\junit.junit-4.13.2.jar"><JavaPackageManagerId>junit:junit</JavaPackageManagerId><JavaPackageManagerVersion>4.13.2</JavaPackageManagerVersion><JavaPackageManagerScope>test</JavaPackageManagerScope></JavaJarReference>
-    <JavaJarReference Include="lib\java-packages\junit\junit\4.13.2\org.hamcrest.hamcrest-core-1.2.jar"><JavaPackageManagerId>junit:junit</JavaPackageManagerId><JavaPackageManagerVersion>4.13.2</JavaPackageManagerVersion><JavaPackageManagerScope>test</JavaPackageManagerScope></JavaJarReference>
+    <JavaJarReference Include="lib\java-packages\junit\junit\4.13.2\org.hamcrest.hamcrest-core-1.3.jar"><JavaPackageManagerId>junit:junit</JavaPackageManagerId><JavaPackageManagerVersion>4.13.2</JavaPackageManagerVersion><JavaPackageManagerScope>test</JavaPackageManagerScope></JavaJarReference>
   </ItemGroup>
 
   

@@ -26,7 +26,7 @@
       <attribute name="test" value="true" />
     </attributes>
   </classpathentry>
-  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJars_UpdateS2D411_Test/lib/java-packages/junit/junit/4.13.2/org.hamcrest.hamcrest-core-1.2.jar">
+  <classpathentry kind="lib" path="C:/Users/alber/Documents/Progetti/JavaLanguageSupportVS/Examples/JavaProjectSystemPlainJars_UpdateS2D411_Test/lib/java-packages/junit/junit/4.13.2/org.hamcrest.hamcrest-core-1.3.jar">
     <attributes>
       <attribute name="test" value="true" />
     </attributes>
