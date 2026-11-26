@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JPM S2D.4.2.1: test per backend Maven SENZA sorgenti Java. -->
+<Project ToolsVersion="Current" DefaultTargets="Build">
+  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.props" />
+  <Import Project="..\..\JavaLanguageSupport\ProjectSystem\BuildSystem\JavaProject.targets" />
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>4580d7a5-e0f5-5bd6-a3d6-bb138fd3988d</ProjectGuid>
+  </PropertyGroup>
+  <PropertyGroup>
+    <JavaBuildSystem>Maven</JavaBuildSystem>
+  </PropertyGroup>
+</Project>
