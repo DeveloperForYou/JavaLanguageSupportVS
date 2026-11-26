@@ -683,6 +683,16 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
             }
             if (!string.IsNullOrWhiteSpace(home) && IsCurrent(file, version, connection))
             {
+                // JPM-S2D421-JDT-JARONLY-20261126: the fallback import is async.
+                // Never send updateJdk for an URI absent from JDT's Java model.
+                // The scoped Eclipse path already has its own model-ready check.
+                bool modelReady = await WaitForJdtEclipseProjectAsync(
+                    rootUri, file, version, connection).ConfigureAwait(false);
+                if (!modelReady)
+                {
+                    Log("Plain: java.project.updateJdk rinviato; progetto Java non importato: " + rootUri);
+                    return;
+                }
                 using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45)))
                 {
                     JToken result = await JavaLspRpc.CommandForConnectionAsync(connection, "java.project.updateJdk",

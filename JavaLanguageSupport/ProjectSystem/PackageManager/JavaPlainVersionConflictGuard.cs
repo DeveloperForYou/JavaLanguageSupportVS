@@ -18,6 +18,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         // Data is a snapshot only; no mutation or version mediation occurs here.
         internal sealed class Library
         {
+            internal string Coordinate;
             internal string Identity;
             internal string Version;
             internal string Owner;
@@ -52,6 +53,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private sealed class Entry
         {
+            internal string Coordinate;
             internal string Identity;
             internal string Version;
             internal string Owner;
@@ -182,7 +184,7 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             if (string.IsNullOrWhiteSpace(name) ||
                 !name.EndsWith(".jar", StringComparison.OrdinalIgnoreCase)) return null;
             string stem = name.Substring(0, name.Length - 4);
-            string identity = null, version = null;
+            string identity = null, version = null, coordinate = null;
             // Maven's copy-dependencies -Dmdep.prependGroupId=true creates
             // group.artifact-version.jar. Match embedded Maven metadata against
             // that filename to avoid trusting a shaded/foreign pom.properties.
@@ -214,6 +216,10 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                     if (g.Length == 0 || a.Length == 0 || v.Length == 0) continue;
                     if (!string.Equals(stem, g + "." + a + "-" + v,
                         StringComparison.OrdinalIgnoreCase)) continue;
+                    // JPM-S2D421-VERIFIED-REMOVED-COORDINATE-20261126
+                    // Only embedded pom.properties matching the JAR filename can
+                    // disambiguate a dotted alias into groupId:artifactId.
+                    coordinate = g + ":" + a;
                     identity = g + "." + a;
                     version = v;
                     break;
@@ -229,8 +235,79 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 identity = stem.Substring(0, separator);
                 version = stem.Substring(separator + 1);
             }
-            return new Entry { Identity = identity, Version = version,
+            // JPM-S2D421-CACHE-VERIFIED-REMOVED-IDENTITY-20261126
+            // Filename-only aliases are ambiguous when groupId and artifactId contain dots.
+            // Recover G:A only from a BYTE-IDENTICAL local Maven repository JAR.
+            if (coordinate == null)
+                coordinate = FindCacheVerifiedMavenCoordinate(path, identity, version);
+            return new Entry { Coordinate = coordinate, Identity = identity, Version = version,
                 Owner = owner, Scope = scope, Name = name };
+        }
+
+        // A filename prefixed by copy-dependencies is groupId.artifactId-version.jar.
+        // Dots alone cannot identify where groupId ends. Try EACH legal split in
+        // the DEFAULT local Maven repository. No network access or file writes.
+        // The exact artifact-version filename AND SHA-256 must match the installed
+        // JAR. Zero or multiple distinct matching coordinates stay UNRESOLVED.
+        private static string FindCacheVerifiedMavenCoordinate(string path,
+            string dottedIdentity, string version)
+        {
+            if (string.IsNullOrWhiteSpace(dottedIdentity) ||
+                string.IsNullOrWhiteSpace(version)) return null;
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(home)) return null;
+            string repository = Path.Combine(home, ".m2", "repository");
+            if (!Directory.Exists(repository)) return null;
+
+            string sourceSha = null;
+            string verified = null;
+            for (int i = 1; i < dottedIdentity.Length - 1; i++)
+            {
+                if (dottedIdentity[i] != '.') continue;
+                string group = dottedIdentity.Substring(0, i);
+                string artifact = dottedIdentity.Substring(i + 1);
+                // No traversal or separators in tokens derived from a JAR name.
+                if (group.Length > 160 || artifact.Length > 160 ||
+                    group.StartsWith(".", StringComparison.Ordinal) ||
+                    group.EndsWith(".", StringComparison.Ordinal) ||
+                    artifact.StartsWith(".", StringComparison.Ordinal) ||
+                    artifact.EndsWith(".", StringComparison.Ordinal) ||
+                    !group.All(c => char.IsLetterOrDigit(c) || c == '.' ||
+                        c == '-' || c == '_') ||
+                    !artifact.All(c => char.IsLetterOrDigit(c) || c == '.' ||
+                        c == '-' || c == '_') ||
+                    version.Length > 120 ||
+                    !version.All(c => char.IsLetterOrDigit(c) || c == '.' ||
+                        c == '-' || c == '_' || c == '+')) continue;
+                string candidate = Path.Combine(repository,
+                    group.Replace('.', Path.DirectorySeparatorChar), artifact,
+                    version, artifact + "-" + version + ".jar");
+                try
+                {
+                    if (!File.Exists(ForJarIo(candidate))) continue;
+                    if (sourceSha == null) sourceSha = CacheIdentitySha256(path);
+                    if (!string.Equals(sourceSha, CacheIdentitySha256(candidate),
+                            StringComparison.Ordinal)) continue;
+                    string result = group + ":" + artifact;
+                    if (verified != null && !string.Equals(verified, result,
+                            StringComparison.OrdinalIgnoreCase)) return null;
+                    verified = result;
+                }
+                catch (IOException) { /* Cache not trustworthy/accessible. Fail closed. */ }
+                catch (UnauthorizedAccessException) { /* Fail closed. */ }
+                catch (ArgumentException) { /* Invalid candidate. Fail closed. */ }
+                catch (NotSupportedException) { /* Invalid path. Fail closed. */ }
+            }
+            return verified;
+        }
+
+        private static string CacheIdentitySha256(string path)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            using (var stream = new FileStream(ForJarIo(path), FileMode.Open,
+                FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                return BitConverter.ToString(sha.ComputeHash(stream))
+                    .Replace("-", "").ToLowerInvariant();
         }
 
         private static int FindVersionBoundary(string stem)
@@ -297,8 +374,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
 
         private static Library ToLibrary(Entry value)
         {
-            return new Library { Identity = value.Identity, Version = value.Version,
-                Owner = value.Owner, Scope = value.Scope, Name = value.Name };
+            return new Library { Coordinate = value.Coordinate, Identity = value.Identity,
+                Version = value.Version, Owner = value.Owner, Scope = value.Scope, Name = value.Name };
         }
     }
 }

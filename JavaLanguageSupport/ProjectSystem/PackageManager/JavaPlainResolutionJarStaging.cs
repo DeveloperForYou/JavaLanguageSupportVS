@@ -92,7 +92,20 @@ try {
                 StringComparison.Ordinal) || prior.ChangedCount != current.ChangedCount)
                 throw new InvalidOperationException(
                     "Manifest del progetto diverso dall'ultima validazione: ripetere Valida transazione.");
-            if (current.BlockingIssueCount != 0)
+            // JPM-S2D421-REMOVAL-ONLY-STAGING-GATE-20261126
+            // The one removal flagged by S2D.3.1 is still a COMMIT review.
+            // It must not prohibit disposable TEMP staging needed by the
+            // independent S2D.4.2.1 removal verification. No writes to the
+            // Plain project, classpath, JAR binaries, or JDT LS are authorized.
+            // Every other preflight blocker (unverified jars/conflicts) fails closed.
+            bool removalOnlyStaging = original.Removed == 1 &&
+                original.Added == 0 && original.Updated == 0 &&
+                original.Unverified == 0 && !original.HasOverride &&
+                current.BlockingIssueCount == 1 && prior.BlockingIssueCount == 1 &&
+                original.ClasspathDiffs.Count(x => x.Status == "Rimosso") == 1 &&
+                original.ClasspathDiffs.All(x => x.Status == "Rimosso" ||
+                    x.Status == "Invariato");
+            if (current.BlockingIssueCount != 0 && !removalOnlyStaging)
                 throw new InvalidOperationException(
                     "Il piano contiene blocchi non risolti: nessuno staging consentito. " +
                     "Consultare il preflight JPM-S2D.3.1.");

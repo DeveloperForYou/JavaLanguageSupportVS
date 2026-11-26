@@ -600,6 +600,25 @@ try {
                 ids[alias] = resolved.Key;
                 future[alias] = resolved.Value;
             }
+            // JPM-S2D421-REMOVED-COORDINATE-DIFF-20261126
+            // The proposed Maven graph excludes removed artifacts. Its ids map
+            // therefore cannot recover their exact groupId:artifactId. Use only
+            // verified embedded Maven metadata from *all* installed matches;
+            // if metadata is absent/inconsistent, KEEP the ambiguous dotted
+            // alias so the downstream removal safety guard refuses to commit.
+            foreach (var installed in current)
+            {
+                if (ids.ContainsKey(installed.Key)) continue;
+                var coordinates = installed.Value.Select(x => x.Coordinate)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (coordinates.Count != 1 || string.IsNullOrWhiteSpace(coordinates[0]))
+                    continue;
+                string coordinate = coordinates[0];
+                if (!string.Equals(coordinate.Replace(':', '.'), installed.Key,
+                    StringComparison.OrdinalIgnoreCase)) continue;
+                if (coordinate.Count(x => x == ':') != 1) continue;
+                ids.Add(installed.Key, coordinate);
+            }
             var owners = MavenOwners(graph);
             var all = new HashSet<string>(current.Keys, StringComparer.OrdinalIgnoreCase);
             all.UnionWith(future.Keys);

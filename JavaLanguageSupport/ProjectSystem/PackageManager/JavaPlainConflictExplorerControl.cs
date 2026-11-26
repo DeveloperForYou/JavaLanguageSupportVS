@@ -85,6 +85,14 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
         private JavaPlainResolutionJarStaging.StageResult updateVerifiedStage;
         private string updateVerifiedProject;
         private bool commitRunning;
+        // JPM-S2D421-REMOVAL-TRANSACTION-20261126: unlink-only; JAR remains on disk.
+        private readonly Button removalPreviewButton = CreateButton("Verifica rimozione");
+        private readonly Button removalCommitButton = CreateButton("Applica rimozione");
+        private bool removalPreviewRunning;
+        private JavaPlainMavenResolutionPlanner.Plan removalVerifiedPlan;
+        private JavaPlainResolutionTransactionPreflight.Validation removalVerifiedValidation;
+        private JavaPlainResolutionJarStaging.StageResult removalVerifiedStage;
+        private string removalVerifiedProject;
         // JPM-S2D35-CRASH-RECOVERY-20261125: automatic read-only detection, opt-in verified recovery.
         private readonly Button crashRecoveryButton = CreateButton("Recupera interrotto");
         private readonly Button crashScanButton = CreateButton("Verifica recovery");
@@ -270,6 +278,13 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 "Commit con backup, journal SHA-256, rollback e crash recovery. " +
                 "La vecchia versione del JAR resta intatta.";
             resultButtons.Children.Add(updateCommitButton);
+            removalPreviewButton.Margin = new Thickness(8, 0, 0, 0);
+            removalPreviewButton.ToolTip = "Anteprima SHA-256: un solo JAR transitivo non piu richiesto.";
+            resultButtons.Children.Add(removalPreviewButton);
+            removalCommitButton.Margin = new Thickness(8, 0, 0, 0);
+            removalCommitButton.ToolTip = "Conferma e rimuove SOLO il riferimento dal .javaproj; " +
+                "il JAR rimane sul disco e il Crash Recovery puo ripristinare il riferimento.";
+            resultButtons.Children.Add(removalCommitButton);
             crashRecoveryButton.Margin = new Thickness(8, 0, 0, 0);
             crashRecoveryButton.ToolTip = "Rileva automaticamente commit interrotti. " +
                 "Ripristino solo dopo conferma e verifiche SHA-256; nessun overwrite di modifiche esterne.";
@@ -341,6 +356,8 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
             commitButton.Click += (s, e) => { _ = CommitAdditionsAsync(); };
             updatePreviewButton.Click += (s, e) => { _ = VerifyUpdatePreviewAsync(); };
             updateCommitButton.Click += (s, e) => { _ = CommitUpdateAsync(); };
+            removalPreviewButton.Click += (s, e) => { _ = VerifyRemovalPreviewAsync(); };
+            removalCommitButton.Click += (s, e) => { _ = CommitRemovalAsync(); };
             crashRecoveryButton.Click += (s, e) => { _ = RecoverCrashAsync(); };
             crashScanButton.Click += (s, e) => {
                 if (validPlain && !string.IsNullOrWhiteSpace(projectFile))
@@ -730,6 +747,21 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 updateVerifiedPlan != null &&
                 (crashReport == null || crashReport.PendingCount == 0) &&
                 !crashRecoveryRunning;
+            // JPM-S2D421-REMOVAL-TRANSACTION-20261126: plan and staging must be identical.
+            removalPreviewButton.IsEnabled = validPlain && !rejectedCandidate &&
+                !removalPreviewRunning && !commitRunning && !mavenPlanRunning &&
+                !prepareRunning && !stageRunning &&
+                lastMavenPlan != null && preparedValidation != null && stagedJars != null &&
+                !stagedJars.NothingToStage && lastMavenPlan.Removed == 1 &&
+                lastMavenPlan.Added == 0 && lastMavenPlan.Updated == 0 &&
+                lastMavenPlan.Unverified == 0 && !lastMavenPlan.HasOverride &&
+                !crashRecoveryRunning && (crashReport == null || crashReport.PendingCount == 0);
+            removalCommitButton.IsEnabled = removalPreviewButton.IsEnabled &&
+                ReferenceEquals(removalVerifiedPlan, lastMavenPlan) &&
+                ReferenceEquals(removalVerifiedValidation, preparedValidation) &&
+                ReferenceEquals(removalVerifiedStage, stagedJars) &&
+                string.Equals(removalVerifiedProject, projectFile,
+                    StringComparison.OrdinalIgnoreCase) && removalVerifiedPlan != null;
             bool requiresRecovery = crashReport != null && crashReport.PendingCount != 0;
             if (requiresRecovery || crashRecoveryRunning)
             {
@@ -1067,6 +1099,114 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                 updatePreviewRunning = false;
                 RefreshActions();
             }
+        }
+
+        // JPM-S2D421-REMOVAL-TRANSACTION-20261126: no write during preview.
+        private async Task VerifyRemovalPreviewAsync()
+        {
+            if (!removalPreviewButton.IsEnabled || removalPreviewRunning) return;
+            string selected = projectFile;
+            int stamp = Volatile.Read(ref generation);
+            var plan = lastMavenPlan;
+            var prior = preparedValidation;
+            var stage = stagedJars;
+            removalVerifiedPlan = null;
+            removalVerifiedValidation = null;
+            removalVerifiedStage = null;
+            removalVerifiedProject = null;
+            removalPreviewRunning = true;
+            RefreshActions();
+            note.Text = "Verifica rimozione in sola lettura (SHA-256)...";
+            try
+            {
+                var report = await Task.Run(() =>
+                    JavaPlainResolutionRemovalCommit.Inspect(selected, plan, prior, stage));
+                if (stamp != Volatile.Read(ref generation) ||
+                    !string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase) ||
+                    !ReferenceEquals(plan, lastMavenPlan) ||
+                    !ReferenceEquals(prior, preparedValidation) ||
+                    !ReferenceEquals(stage, stagedJars)) return;
+                preview.Text = report.Details + "\n\n" + plan.ComparisonDetails;
+                ShowClasspathComparison(false);
+                previewScroller.ScrollToTop();
+                removalVerifiedPlan = plan;
+                removalVerifiedValidation = prior;
+                removalVerifiedStage = stage;
+                removalVerifiedProject = selected;
+                note.Text = "Rimozione verificata: Applica rimozione dopo conferma esplicita.";
+                JavaJpmProjectLogger.Info(selected, "JPM S2D.4.2.1", report.Details);
+            }
+            catch (Exception ex)
+            {
+                if (stamp == Volatile.Read(ref generation) &&
+                    string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    note.Text = "Rimozione non autorizzata; file invariati. Vedi Output JPM.";
+                    JavaJpmProjectLogger.Error(selected, "JPM S2D.4.2.1", ex);
+                }
+            }
+            finally { removalPreviewRunning = false; RefreshActions(); }
+        }
+
+        private async Task CommitRemovalAsync()
+        {
+            if (!removalCommitButton.IsEnabled || commitRunning) return;
+            string selected = projectFile;
+            int stamp = Volatile.Read(ref generation);
+            var plan = lastMavenPlan;
+            var prior = preparedValidation;
+            var stage = stagedJars;
+            JavaPlainResolutionRemovalCommit.Candidate candidate;
+            try { candidate = JavaPlainResolutionRemovalCommit.Inspect(selected, plan, prior, stage); }
+            catch (Exception ex)
+            {
+                JavaJpmProjectLogger.Error(selected, "JPM S2D.4.2.1", ex);
+                note.Text = "Rimozione non sicura: nessun file modificato.";
+                return;
+            }
+            var confirmation = MessageBox.Show(candidate.Details +
+                "\n\nConfermi la rimozione SOLO del riferimento dal .javaproj? " +
+                "Il JAR non sara cancellato.",
+                "Java Package Manager - Rimozione transazionale",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (confirmation != MessageBoxResult.Yes) return;
+            if (stamp != Volatile.Read(ref generation) ||
+                !string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase) ||
+                !ReferenceEquals(plan, lastMavenPlan) ||
+                !ReferenceEquals(prior, preparedValidation) ||
+                !ReferenceEquals(stage, stagedJars)) return;
+            commitRunning = true;
+            stagedJars = null;
+            removalVerifiedPlan = null;
+            removalVerifiedValidation = null;
+            removalVerifiedStage = null;
+            removalVerifiedProject = null;
+            note.Text = "Rimozione: backup, journal e aggiornamento riferimenti...";
+            RefreshActions();
+            try
+            {
+                var result = await JavaPlainResolutionRemovalCommit.ApplyAsync(
+                    selected, plan, prior, stage);
+                JavaJpmProjectLogger.Info(selected, "JPM S2D.4.2.1", result.Details);
+                JavaPlainResolutionJarStaging.Discard(stage.StageDirectory);
+                if (stamp == Volatile.Read(ref generation) &&
+                    string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    Reload();
+                    note.Text = "Rimozione completata. JAR fisico conservato: nuova analisi Maven.";
+                }
+            }
+            catch (Exception ex)
+            {
+                JavaJpmProjectLogger.Error(selected, "JPM S2D.4.2.1", ex);
+                if (stamp == Volatile.Read(ref generation) &&
+                    string.Equals(selected, projectFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    Reload();
+                    note.Text = "Rimozione fallita: verificare rollback/recovery in Output JPM.";
+                }
+            }
+            finally { commitRunning = false; RefreshActions(); }
         }
 
         // JPM-S2D412-UPDATE-TRANSACTION-20261125: explicit opt-in commit.

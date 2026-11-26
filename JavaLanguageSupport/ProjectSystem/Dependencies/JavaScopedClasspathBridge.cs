@@ -191,11 +191,11 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                         new XAttribute("name", "test"), new XAttribute("value", "true"))));
                     sources.Add(source);
                 }
-                if (sources.Count == 0)
-                {
-                    result.Note = "Scoped classpath: nessuna source root valida; modello Eclipse non generato.";
-                    return result;
-                }
+                // JPM-S2D421-JDT-JARONLY-20261126
+                // A valid Plain project can be JAR-only (zero existing source roots).
+                // Keep its actual JARs, JRE container and output in the Eclipse
+                // model instead of preventing .project/.classpath creation.
+                // No synthetic source directory is created.
                 // Eclipse test-only library attribute makes the library visible to
                 // test source roots only. Plain runtime is test-compile-visible.
                 var entries = parsed.Values.OrderBy(e => e.TestOnly ? 1 : 0)
@@ -245,6 +245,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                         : "Scoped Eclipse classpath riconosciuto: JDT ha rimosso il marker, dati gia' allineati.")
                     : (changed ? "Scoped Eclipse classpath aggiornato."
                         : "Scoped Eclipse classpath invariato.");
+                if (sources.Count == 0)
+                    result.Note += " Progetto JAR-only: nessuna source root esistente.";
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException ||
                 ex is XmlException || ex is ArgumentException || ex is NotSupportedException)
@@ -344,7 +346,8 @@ namespace JavaLanguageSupport.ProjectSystem.Dependencies
                 if (outputs.Count != 1 ||
                     (string)outputs[0].Attribute("path") != ".java-vs/jdtls-classes") return false;
                 var sources = entries.Where(e => (string)e.Attribute("kind") == "src").ToList();
-                if (sources.Count == 0 || sources.Any(e => {
+                // A structurally verified VSIX classpath can have zero source entries.
+                if (sources.Any(e => {
                     string output = (string)e.Attribute("output");
                     return output != ".java-vs/jdtls-classes" &&
                         output != ".java-vs/jdtls-test-classes";

@@ -124,6 +124,17 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                             Details = update.Details
                         };
                     }
+                    // JPM-S2D421-REMOVAL-TRANSACTION-20261126: separate unlink-only journal.
+                    if (updateHeader != null && updateHeader.StartsWith(
+                        JavaPlainResolutionRemovalCommit.Version + " | ", StringComparison.Ordinal))
+                    {
+                        var removed = JavaPlainResolutionRemovalCommit.InspectInterrupted(
+                            project, directoryToRecover);
+                        if (!removed.CanRecover)
+                            return Blocked(1, directoryToRecover, removed.Details);
+                        return new Report { PendingCount = 1, CanRecover = true,
+                            TransactionDirectory = directoryToRecover, Details = removed.Details };
+                    }
                     var snapshot = LoadAndVerify(project, directoryToRecover);
                     return new Report {
                         PendingCount = 1, CanRecover = true,
@@ -213,6 +224,20 @@ namespace JavaLanguageSupport.ProjectSystem.PackageManager
                             recovered += "\nAVVISO JDT LS: " + ex.Message;
                         }
                         return recovered;
+                    }
+                    // JPM-S2D421-REMOVAL-TRANSACTION-20261126: same mutex as S2D3.3.
+                    if (selectedHeader != null && selectedHeader.StartsWith(
+                        JavaPlainResolutionRemovalCommit.Version + " | ", StringComparison.Ordinal))
+                    {
+                        string restored = JavaPlainResolutionRemovalCommit.RecoverInterruptedUnderLock(
+                            project, report.TransactionDirectory);
+                        try
+                        {
+                            JavaDependencyLanguageSync.RefreshPlainProjectNow(project);
+                            JavaDependencyLanguageSync.RefreshAll();
+                        }
+                        catch (Exception ex) { restored += "\nAVVISO JDT LS: " + ex.Message; }
+                        return restored;
                     }
                     Pending tx = LoadAndVerify(project, report.TransactionDirectory);
                     string root = Path.GetDirectoryName(project);
